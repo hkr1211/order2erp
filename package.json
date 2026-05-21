@@ -1,0 +1,13 @@
+{
+  "name": "erp-query-hub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "check": "node --check src/server.js && node --check src/erpClient.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
