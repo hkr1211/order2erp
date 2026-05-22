@@ -125,6 +125,9 @@ function agentToolSchema() {
             "stock_in_records",
             "stock_in_details",
             "production_progress",
+            "material_orders",
+            "production_boms",
+            "procedure_plans",
             "receivables",
             "payables",
             "pmc_exceptions",
@@ -158,6 +161,14 @@ function agentToolSchema() {
       {
         user: "查最近已入库的物料",
         call: { view: "stock_in_records", filters: { rkzt: "3", pageindex: 1, pagesize: 10 } }
+      },
+      {
+        user: "查一下领料记录",
+        call: { view: "material_orders", filters: { pageindex: 1, pagesize: 10 } }
+      },
+      {
+        user: "查一下工序计划",
+        call: { view: "procedure_plans", filters: { pageindex: 1, pagesize: 10 } }
       },
       {
         user: "查一下库存异常",
