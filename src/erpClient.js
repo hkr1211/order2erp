@@ -464,17 +464,32 @@ function mapSalesOrder(row) {
 function mapInventoryRow(row) {
   return {
     product_name: row["产品名称"] || row.Title,
-    product_code: row["产品编号"] || row.Order1,
-    product_model: row["产品型号"] || row.Type1,
+    product_code: row["产品编号"] || row["编号"] || row.Order1,
+    product_model: row["产品型号"] || row["型号"] || row.Type1,
     product_category: row["产品分类"] || row.ProductSort,
-    unit: row["单位"] || row.UnitName || row.Unit,
-    stock_qty: parseNumber(row["库存数量"] || row.Num2),
-    available_qty: parseNumber(row["可用数量"] || row.KYNum),
-    frozen_qty: parseNumber(row["冻结数量"] || row.DJNum),
-    reserved_qty: parseNumber(row["预定数量"] || row.YDNum),
-    in_transit_qty: parseNumber(row["在途数量"] || row.ZTNum),
+    unit: row["基本单位"] || row["单位"] || row.UnitName || row.Unit,
+    stock_qty: parseNumber(firstValue(row["库存数量"], row.Num2)),
+    available_qty: parseNumber(firstValue(row["可用数量"], row.KYNum)),
+    frozen_qty: parseNumber(firstValue(row["冻结数量"], row.DJNum)),
+    reserved_qty: parseNumber(firstValue(row["预定数量"], row.YDNum)),
+    in_transit_qty: parseNumber(firstValue(row["在途数量"], row.ZTNum)),
     warehouse: row["仓库"] || row.Ku,
     batch_no: row["批号"] || row.Ph,
+    serial_no: row["序列号"] || row.Xlh,
+    production_date: row["生产日期"] || null,
+    expiry_date: row["有效日期"] || null,
+    package: row["包装"] || null,
+    pieces: parseNumber(row["件数"]),
+    spec: row["规格/型号"] || null,
+    finished_weight: parseNumber(row["成品重量"]),
+    process: row["工段"] || null,
+    location: row["库位"] || null,
+    stock_age_days: parseNumber(row["库龄（天）"]),
+    remark: row["备注"] || null,
+    supplier: row["关联供应商"] || null,
+    inbound_order: row["关联入库单"] || null,
+    initial_inbound_time: row["初始入库时间"] || null,
+    inbound_confirmed_time: row["入库确认时间"] || null,
     raw: row
   };
 }
@@ -553,6 +568,10 @@ function parseNumber(value) {
   }
   const number = Number(String(value).replace(/,/g, ""));
   return Number.isFinite(number) ? number : null;
+}
+
+function firstValue(...values) {
+  return values.find((value) => value !== undefined && value !== null && value !== "");
 }
 
 function filterParams(params, allowedParams = []) {
