@@ -55,7 +55,7 @@ curl 'http://localhost:3000/agent/tool-schema'
 curl 'http://localhost:3000/api/sales_orders?searchKey=客户名&pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/contract_detail?ord=合同ord'
 curl 'http://localhost:3000/api/contract_lines?ord=合同ord'
-curl 'http://localhost:3000/api/contract_shortages?ord=合同ord&scan_pages=5&scan_size=100'
+curl 'http://localhost:3000/api/contract_shortages?ord=合同ord&scan_size=100'
 curl 'http://localhost:3000/api/inventory?searchKey=物料编码&pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/warehouses?pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/products?searchKey=钼&pageindex=1&pagesize=20'
@@ -120,7 +120,7 @@ curl 'http://localhost:3000/agent/tool-schema'
 - `sales_orders`：销售合同/订单查询，基于 `/webapi/v3/ov1/salesmanage/contract/billlist`
 - `contract_detail`：销售合同详情，基于 `/webapi/v3/sales/contract/detail`
 - `contract_lines`：销售合同产品明细，从合同详情的 `contractlist` 提取
-- `contract_shortages`：合同缺料分析，按合同明细需求量匹配库存可用量
+- `contract_shortages`：合同缺料分析，按合同明细产品编号逐项查询并匹配库存可用量
 - `inventory`：库存查询，基于新版 `/webapi/v3/store/inventory/InventorySummary`
 - `inventory_details`：库存明细，基于新版 `/webapi/v3/store/inventory/InventoryDetails`
 - `warehouses`：仓库列表，基于 `/webapi/v3/store/WareHouseStructList`
@@ -177,7 +177,7 @@ PMC 数据源继续补充：
 - `production_boms`、`procedure_plans` 可通过新版接口调用，当前账号下返回 0 条记录
 - `pmc_dashboard` 已接入第一版综合看板：低库存、冻结库存、长库龄库存、延期工序计划、数据源状态
 - `contract_detail` 已确认可用 Token 方式访问；`ord=0` 返回空合同模板，拿到真实合同 `ord` 后可读取 `contractlist` 产品明细，用于后续缺料订单规则
-- `contract_shortages` 已完成第一版规则：合同明细产品编号优先匹配库存汇总，输出需求量、可用量和缺口量
+- `contract_shortages` 已完成第一版规则：按合同明细产品编号逐项查询库存汇总，输出需求量、可用量和缺口量
 
 已验证入库流水可查询：
 
