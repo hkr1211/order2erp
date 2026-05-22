@@ -15,6 +15,10 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
 
+    if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/") {
+      return sendHtml(res, 200, homePage());
+    }
+
     if (req.method === "GET" && url.pathname === "/health") {
       return sendJson(res, 200, { ok: true, service: "erp-query-hub" });
     }
@@ -170,6 +174,156 @@ function readJson(req) {
 function sendJson(res, status, payload) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(payload, null, 2));
+}
+
+function sendHtml(res, status, html) {
+  res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
+  res.end(html);
+}
+
+function homePage() {
+  const links = [
+    ["健康检查", "/health", "确认本地中台是否正在运行"],
+    ["全部视图", "/views", "查看可调用的 ERP 查询视图"],
+    ["Agent 工具定义", "/agent/tool-schema", "给 OpenClaw 或 Hermes 注册工具时使用"],
+    ["PMC 综合看板", "/api/pmc_dashboard?scan_pages=1&scan_size=20&contract_limit=3&alert_limit=10&low_stock_threshold=5&old_stock_days=180&due_soon_days=7&quote_limit=10", "库存、缺料、交期、待报价项目汇总"],
+    ["销售订单", "/api/sales_orders?pageindex=1&pagesize=10", "查询最近销售合同/订单"],
+    ["订单缺料", "/api/order_shortages?pageindex=1&pagesize=10&contract_limit=3&scan_size=100", "扫描最近未发货订单缺料情况"],
+    ["订单交期风险", "/api/order_delivery_risks?pageindex=1&pagesize=10&contract_limit=5&due_soon_days=7", "查看延期和 7 天内临期交付明细"],
+    ["待报价项目", "/api/pending_quotes?pageindex=1&pagesize=20&limit=20", "查看项目/商机中的待报价项目"],
+    ["库存查询", "/api/inventory?pageindex=1&pagesize=20", "查询库存余额汇总"],
+    ["库存异常", "/api/inventory_alerts?scan_pages=1&scan_size=20&alert_limit=10&low_stock_threshold=5&old_stock_days=180", "低库存、冻结库存、长库龄库存"]
+  ];
+
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ERP 查询中台</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #172033;
+      --muted: #647083;
+      --border: #d9dee7;
+      --accent: #176b58;
+      --accent-soft: #e8f3ef;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    main {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 40px 0;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      align-items: flex-end;
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    h1 {
+      margin: 0;
+      font-size: 32px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+    p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+    .status {
+      flex: 0 0 auto;
+      padding: 8px 12px;
+      border-radius: 6px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 12px;
+      margin-top: 24px;
+    }
+    a.card {
+      display: block;
+      min-height: 116px;
+      padding: 18px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      color: inherit;
+      text-decoration: none;
+    }
+    a.card:hover {
+      border-color: var(--accent);
+      box-shadow: 0 8px 24px rgba(23, 32, 51, 0.08);
+    }
+    .card strong {
+      display: block;
+      font-size: 17px;
+      margin-bottom: 8px;
+    }
+    code {
+      display: block;
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 12px;
+      word-break: break-all;
+    }
+    @media (max-width: 720px) {
+      main { width: min(100% - 24px, 1120px); padding: 24px 0; }
+      header { display: block; }
+      .status { display: inline-block; margin-top: 16px; }
+      h1 { font-size: 26px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>ERP 查询中台</h1>
+        <p>本地只读 API 入口，用于连接智邦 ERP，并提供给 OpenClaw、Hermes 或对话系统调用。</p>
+      </div>
+      <div class="status">Running on ${HOST}:${PORT}</div>
+    </header>
+    <section class="grid">
+      ${links
+        .map(
+          ([title, href, description]) => `<a class="card" href="${escapeHtml(href)}">
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(description)}</span>
+        <code>${escapeHtml(href)}</code>
+      </a>`
+        )
+        .join("\n")}
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 async function queryPmcDashboard(params) {
