@@ -1422,7 +1422,7 @@ function collectPoCandidates(value, candidates, depth) {
 }
 
 async function queryMaterialControl(params = {}) {
-  const [shortages, inventoryAlerts] = await Promise.all([
+  const [shortageResult, inventoryResult] = await Promise.allSettled([
     queryOrderShortages(client, {
       pageindex: params.pageindex || 1,
       pagesize: params.pagesize || 10,
@@ -1439,30 +1439,59 @@ async function queryMaterialControl(params = {}) {
       cks: params.cks || ""
     })
   ]);
+  const shortages = shortageResult.status === "fulfilled" ? shortageResult.value : null;
+  const inventoryAlerts = inventoryResult.status === "fulfilled" ? inventoryResult.value : null;
+  const sourceStatus = {
+    order_shortages: {
+      ok: Boolean(shortages),
+      message: shortageResult.status === "rejected" ? summarizeDataSourceError(shortageResult.reason) : null
+    },
+    inventory_alerts: {
+      ok: Boolean(inventoryAlerts),
+      message: inventoryResult.status === "rejected" ? summarizeDataSourceError(inventoryResult.reason) : null
+    }
+  };
+  const sourceNotes = Object.entries(sourceStatus)
+    .filter(([, status]) => !status.ok)
+    .map(([name, status]) => `${name} 数据源暂不可用：${status.message}`);
   return {
     header: { status: 0, message: "ok" },
     body: {
       model: "material_control",
       generated_at: new Date().toISOString(),
       summary: {
-        shortage_orders: shortages.body.summary.orders_with_shortage,
-        shortage_rows: shortages.body.summary.shortage_rows,
-        low_stock: inventoryAlerts.body.counts.low_stock,
-        frozen_stock: inventoryAlerts.body.counts.frozen_stock,
-        old_stock: inventoryAlerts.body.counts.old_stock
+        shortage_orders: shortages?.body?.summary?.orders_with_shortage ?? 0,
+        shortage_rows: shortages?.body?.summary?.shortage_rows ?? 0,
+        low_stock: inventoryAlerts?.body?.counts?.low_stock ?? 0,
+        frozen_stock: inventoryAlerts?.body?.counts?.frozen_stock ?? 0,
+        old_stock: inventoryAlerts?.body?.counts?.old_stock ?? 0,
+        source_errors: sourceNotes.length
       },
       sections: {
-        shortage_rows: shortages.body.rows,
-        low_stock: inventoryAlerts.body.sections.low_stock,
-        frozen_stock: inventoryAlerts.body.sections.frozen_stock,
-        old_stock: inventoryAlerts.body.sections.old_stock
+        shortage_rows: shortages?.body?.rows || [],
+        low_stock: inventoryAlerts?.body?.sections?.low_stock || [],
+        frozen_stock: inventoryAlerts?.body?.sections?.frozen_stock || [],
+        old_stock: inventoryAlerts?.body?.sections?.old_stock || []
       },
+      source_status: sourceStatus,
       notes: [
+        ...sourceNotes,
         "物料控制中心第一版聚焦缺料订单和库存异常。",
         "齐套口径沿用销售订单产品库存，后续可接 BOM 展开和采购在途。"
       ]
     }
   };
+}
+
+function summarizeDataSourceError(error) {
+  const message = error?.message || String(error || "未知错误");
+  if (/Service Unavailable|HTTP Error 503|503/.test(message)) {
+    return "ERP 服务临时不可用，请稍后刷新。";
+  }
+  if (/non-JSON response/i.test(message)) {
+    return "ERP 返回了非标准数据，请稍后刷新或检查接口状态。";
+  }
+  return message.length > 120 ? `${message.slice(0, 120)}...` : message;
 }
 
 async function queryQuoteCenter(params = {}) {
@@ -1687,7 +1716,8 @@ function materialControlPage(body) {
       ["缺料明细", body.summary.shortage_rows],
       ["低库存", body.summary.low_stock],
       ["冻结库存", body.summary.frozen_stock],
-      ["长库龄", body.summary.old_stock]
+      ["长库龄", body.summary.old_stock],
+      ["数据源异常", body.summary.source_errors]
     ],
     panels: [
       modulePanel("缺料明细", body.sections.shortage_rows, ["order_no", "customer", "product_name", "product_code", "demand_qty", "available_qty", "shortage_qty"]),
