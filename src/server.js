@@ -730,6 +730,18 @@ function labelFor(key) {
     unpaid_amount: "未收/未付",
     bill_date: "单据日期",
     due_date: "到期日",
+    payment_terms: "付款条件",
+    age_days: "账龄天数",
+    due_days: "到期天数",
+    risk_status: "风险状态",
+    records: "记录数",
+    overdue_records: "逾期记录",
+    earliest_due_date: "最近到期日",
+    earliest_due_days: "最近到期天数",
+    receivable_unpaid: "未收合计",
+    payable_unpaid: "未付合计",
+    overdue_receivables: "逾期应收",
+    due_soon_payables: "7天内应付",
     status: "状态",
     warehouse_status: "出库状态",
     delivery_status: "发货状态",
@@ -1989,6 +2001,7 @@ function procurementCenterPage(body) {
 async function queryFinanceCenter(params = {}) {
   const pageindex = params.pageindex || 1;
   const pagesize = params.pagesize || 20;
+  const today = startOfDay(parseDate(params.today) || new Date());
   const [receivableResult, payableResult] = await Promise.allSettled([
     client.queryView("receivables", {
       pageindex,
@@ -2016,8 +2029,14 @@ async function queryFinanceCenter(params = {}) {
     .map(([name, status]) => `${name} 数据源暂不可用：${status.message}`);
   const receivableTable = receivableResult.status === "fulfilled" ? normalizeTable(receivableResult.value) : { rows: [], page: null };
   const payableTable = payableResult.status === "fulfilled" ? normalizeTable(payableResult.value) : { rows: [], page: null };
-  const receivableRows = receivableTable.rows.map((row) => mapFinanceRow(row, "receivable"));
-  const payableRows = payableTable.rows.map((row) => mapFinanceRow(row, "payable"));
+  const receivableRows = receivableTable.rows.map((row) => mapFinanceRow(row, "receivable", today));
+  const payableRows = payableTable.rows.map((row) => mapFinanceRow(row, "payable", today));
+  const receivableDebtRows = topFinanceCounterparties(receivableRows);
+  const payableDebtRows = topFinanceCounterparties(payableRows);
+  const overdueReceivables = financeRowsByRisk(receivableRows, "已逾期");
+  const upcomingPayables = payableRows
+    .filter((row) => parseNumber(row.unpaid_amount) > 0 && row.due_days !== null && row.due_days <= 7)
+    .sort(compareFinanceDueRows);
 
   return {
     header: { status: 0, message: "ok" },
@@ -2030,26 +2049,40 @@ async function queryFinanceCenter(params = {}) {
         payable_records: payableRows.length,
         receivable_unpaid: sumFinanceAmount(receivableRows, "unpaid_amount"),
         payable_unpaid: sumFinanceAmount(payableRows, "unpaid_amount"),
+        overdue_receivables: overdueReceivables.length,
+        due_soon_payables: upcomingPayables.length,
         source_errors: sourceNotes.length
       },
       sections: {
         receivables: receivableRows,
-        payables: payableRows
+        payables: payableRows,
+        receivable_debts: receivableDebtRows,
+        overdue_receivables: overdueReceivables,
+        due_soon_payables: upcomingPayables,
+        payable_debts: payableDebtRows
       },
       source_status: sourceStatus,
       notes: [
         ...sourceNotes,
         "应收应付中心 V1 聚合收款/应收和付款/应付记录，先用于老板和销售查看往来风险。",
-        "后续可按客户、供应商、逾期天数和付款条件继续细化。"
+        "逾期判断优先使用到期日；如果 ERP 返回付款条件天数且有单据日期，则自动推算到期日。"
       ]
     }
   };
 }
 
-function mapFinanceRow(row, direction) {
+function mapFinanceRow(row, direction, today) {
   const amount = firstNumber(row.moneyall, row.MoneyAll, row.money1, row.Money1, row.money, row.Money, row.cmoney, row.CMoney, row["金额"], row["应收金额"], row["应付金额"]);
   const paidAmount = firstNumber(row.hkmoney, row.HkMoney, row.money2, row.Money2, row.paymoney, row.PayMoney, row["已收金额"], row["已付金额"], row["收款金额"], row["付款金额"]);
   const unpaidAmount = firstNumber(row.wsmoney, row.WsMoney, row.leftmoney, row.LeftMoney, row["未收金额"], row["未付金额"], amount !== null && paidAmount !== null ? amount - paidAmount : null);
+  const billDateText = firstText(row.date1, row.Date1, row.dateadd, row.DateAdd, row.tdate, row.TDate, row["单据日期"], row["申请日期"]);
+  const paymentTermsDays = firstNumber(row.paydays, row.PayDays, row.daynum, row.DayNum, row.zq, row.Zq, row["账期"], row["付款条件"], row["付款条件天数"]);
+  const dueDateText = firstText(row.date2, row.Date2, row.dateend, row.DateEnd, row["到期日"], row["计划日期"]);
+  const billDate = parseDate(billDateText);
+  const dueDate = parseDate(dueDateText) || (billDate && paymentTermsDays !== null ? addDays(billDate, paymentTermsDays) : null);
+  const dueDays = dueDate ? daysBetween(today, startOfDay(dueDate)) : null;
+  const ageDays = billDate ? daysBetween(startOfDay(billDate), today) : null;
+  const riskStatus = financeRiskStatus(unpaidAmount, dueDays);
   return {
     direction,
     counterparty: firstText(row.khmc, row.gysname, row.cateName, row.CateName, row.title2, row["客户"], row["供应商"], row["往来单位"], row["单位名称"]),
@@ -2058,12 +2091,87 @@ function mapFinanceRow(row, direction) {
     amount,
     paid_amount: paidAmount,
     unpaid_amount: unpaidAmount,
-    bill_date: firstText(row.date1, row.Date1, row.dateadd, row.DateAdd, row.tdate, row.TDate, row["单据日期"], row["申请日期"]),
-    due_date: firstText(row.date2, row.Date2, row.dateend, row.DateEnd, row["到期日"], row["计划日期"]),
+    bill_date: billDate ? formatDate(billDate) : billDateText,
+    due_date: dueDate ? formatDate(dueDate) : dueDateText,
+    payment_terms: paymentTermsDays !== null ? `${paymentTermsDays}天` : firstText(row.paytype, row.PayType, row["付款方式"], row["结算方式"]),
+    age_days: ageDays,
+    due_days: dueDays,
+    risk_status: riskStatus,
     status: firstText(row.status, row.Status, row.zt, row.Zt, row.skzt, row.fkzt, row["状态"], row["收款状态"], row["付款状态"]),
     owner: firstText(row.xsry, row.person, row.Person, row.owner, row["负责人"], row["经办人"]),
     raw: row
   };
+}
+
+function financeRiskStatus(unpaidAmount, dueDays) {
+  const unpaid = parseNumber(unpaidAmount) || 0;
+  if (unpaid <= 0) {
+    return "已结清";
+  }
+  if (dueDays === null) {
+    return "未清";
+  }
+  if (dueDays < 0) {
+    return "已逾期";
+  }
+  if (dueDays <= 7) {
+    return "7天内到期";
+  }
+  return "未到期";
+}
+
+function financeRowsByRisk(rows, riskStatus) {
+  return rows
+    .filter((row) => row.risk_status === riskStatus && parseNumber(row.unpaid_amount) > 0)
+    .sort(compareFinanceDueRows);
+}
+
+function compareFinanceDueRows(a, b) {
+  const aDays = a.due_days === null ? Number.POSITIVE_INFINITY : a.due_days;
+  const bDays = b.due_days === null ? Number.POSITIVE_INFINITY : b.due_days;
+  if (aDays !== bDays) {
+    return aDays - bDays;
+  }
+  return (parseNumber(b.unpaid_amount) || 0) - (parseNumber(a.unpaid_amount) || 0);
+}
+
+function topFinanceCounterparties(rows) {
+  const grouped = new Map();
+  for (const row of rows) {
+    const unpaid = parseNumber(row.unpaid_amount) || 0;
+    if (unpaid <= 0) {
+      continue;
+    }
+    const key = row.counterparty || "未识别往来单位";
+    const current = grouped.get(key) || {
+      counterparty: key,
+      unpaid_amount: 0,
+      records: 0,
+      overdue_records: 0,
+      earliest_due_date: null,
+      earliest_due_days: null,
+      risk_status: "未清"
+    };
+    current.unpaid_amount += unpaid;
+    current.records += 1;
+    if (row.risk_status === "已逾期") {
+      current.overdue_records += 1;
+    }
+    if (row.due_days !== null && (current.earliest_due_days === null || row.due_days < current.earliest_due_days)) {
+      current.earliest_due_days = row.due_days;
+      current.earliest_due_date = row.due_date;
+    }
+    if (current.overdue_records > 0) {
+      current.risk_status = "已逾期";
+    } else if (current.earliest_due_days !== null && current.earliest_due_days <= 7) {
+      current.risk_status = "7天内到期";
+    }
+    grouped.set(key, current);
+  }
+  return [...grouped.values()]
+    .map((row) => ({ ...row, unpaid_amount: Number(row.unpaid_amount.toFixed(2)) }))
+    .sort((a, b) => b.unpaid_amount - a.unpaid_amount)
+    .slice(0, 20);
 }
 
 function firstText(...values) {
@@ -2089,11 +2197,17 @@ function financeCenterPage(body) {
       ["应付记录", body.summary.payable_records],
       ["未收合计", body.summary.receivable_unpaid],
       ["未付合计", body.summary.payable_unpaid],
+      ["逾期应收", body.summary.overdue_receivables],
+      ["7天内应付", body.summary.due_soon_payables],
       ["数据源异常", body.summary.source_errors]
     ],
     panels: [
-      modulePanel("应收/收款", body.sections.receivables, ["counterparty", "bill_no", "business_title", "amount", "paid_amount", "unpaid_amount", "bill_date", "status"]),
-      modulePanel("应付/付款", body.sections.payables, ["counterparty", "bill_no", "business_title", "amount", "paid_amount", "unpaid_amount", "bill_date", "status"])
+      modulePanel("客户欠款排行", body.sections.receivable_debts, ["counterparty", "unpaid_amount", "records", "overdue_records", "earliest_due_date", "earliest_due_days", "risk_status"]),
+      modulePanel("逾期应收", body.sections.overdue_receivables, ["counterparty", "bill_no", "business_title", "unpaid_amount", "due_date", "due_days", "owner"]),
+      modulePanel("7天内应付", body.sections.due_soon_payables, ["counterparty", "bill_no", "business_title", "unpaid_amount", "due_date", "due_days", "status"]),
+      modulePanel("供应商未付排行", body.sections.payable_debts, ["counterparty", "unpaid_amount", "records", "overdue_records", "earliest_due_date", "earliest_due_days", "risk_status"]),
+      modulePanel("应收/收款明细", body.sections.receivables, ["counterparty", "bill_no", "business_title", "amount", "paid_amount", "unpaid_amount", "bill_date", "due_date", "payment_terms", "age_days", "due_days", "risk_status"]),
+      modulePanel("应付/付款明细", body.sections.payables, ["counterparty", "bill_no", "business_title", "amount", "paid_amount", "unpaid_amount", "bill_date", "due_date", "payment_terms", "age_days", "due_days", "risk_status"])
     ],
     notes: body.notes,
     actions: [
@@ -2515,7 +2629,7 @@ function pmcGoalPage() {
     ["报表中心", "已完成V1入口", "管理指标汇总；Excel导出待开发"],
     ["排产甘特图", "已完成V1入口", "按订单交期生成时间轴；工单/设备/工序排产待接入"],
     ["采购跟催", "已完成V1入口", "先接入库流水和应付付款；采购订单/供应商联系人待确认"],
-    ["应收应付", "已完成V1入口", "聚合应收/收款、应付/付款，后续补逾期和付款条件"],
+    ["应收应付", "已完成V1", "聚合应收/应付、客户欠款排行、逾期应收、7天内应付、付款条件推算"],
     ["数据源状态", "已完成V1入口", "轻量检查 ERP 登录、本地快照、业务入口可用性"],
     ["权限登录", "暂缓", "当前按用户要求为内网免登录版"]
   ];
