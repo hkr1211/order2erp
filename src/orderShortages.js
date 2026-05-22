@@ -92,7 +92,7 @@ export async function queryOrderShortages(client, params = {}) {
 }
 
 async function queryContractShortagesStrict(client, params = {}) {
-  const pageSize = clampInt(params.scan_size || params.pagesizes || params.page_size || 100, 1, 500);
+  const pageSize = clampInt(params.scan_size || params.pagesize || params.page_size || 100, 1, 500);
   const contractLines = await client.queryContractLines({ ord: params.ord });
   const inventoryRows = await client.lookupInventoryForContractLines(contractLines.body.rows, {
     ...params,
