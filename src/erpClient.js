@@ -274,6 +274,83 @@ export class ErpClient {
     };
   }
 
+  async queryInventoryAlerts(params = {}) {
+    const pageSize = clampInt(params.scan_size || params.pagesize || params.page_size || 100, 1, 500);
+    const scanPages = clampInt(params.scan_pages || 3, 1, 20);
+    const alertLimit = clampInt(params.alert_limit || params.limit || 20, 1, 200);
+    const lowStockThreshold = Number(params.low_stock_threshold || params.threshold || 5);
+    const oldStockDays = Number(params.old_stock_days || 180);
+    const baseFilters = {};
+    if (params.cks !== undefined && params.cks !== null && params.cks !== "") {
+      baseFilters.cks = params.cks;
+    }
+    if (params.searchKey || params.title) {
+      baseFilters.title = params.searchKey || params.title;
+    }
+    if (params.order1) {
+      baseFilters.order1 = params.order1;
+    }
+
+    const summaryRows = [];
+    const detailRows = [];
+    for (let pageIndex = 1; pageIndex <= scanPages; pageIndex += 1) {
+      const pageParams = { ...baseFilters, page_size: String(pageSize), page_index: String(pageIndex) };
+      const [summary, details] = await Promise.all([
+        this.queryView("inventory", pageParams),
+        this.queryView("inventory_details", pageParams)
+      ]);
+      summaryRows.push(...normalizeTable(summary).rows);
+      detailRows.push(...normalizeTable(details).rows);
+
+      const summaryPage = summary?.Page;
+      const detailsPage = details?.Page;
+      const summaryDone = summaryPage?.PageCount ? pageIndex >= Number(summaryPage.PageCount) : true;
+      const detailsDone = detailsPage?.PageCount ? pageIndex >= Number(detailsPage.PageCount) : true;
+      if (summaryDone && detailsDone) {
+        break;
+      }
+    }
+
+    const lowStock = summaryRows
+      .map(mapInventoryRow)
+      .filter((row) => row.stock_qty !== null && row.stock_qty > 0 && row.available_qty !== null && row.available_qty <= lowStockThreshold);
+
+    const frozenStock = summaryRows
+      .map(mapInventoryRow)
+      .filter((row) => row.frozen_qty !== null && row.frozen_qty > 0);
+
+    const oldStock = detailRows
+      .map(mapInventoryRow)
+      .filter((row) => row.stock_age_days !== null && row.stock_age_days >= oldStockDays);
+
+    return {
+      header: { status: 0, message: "ok" },
+      body: {
+        model: "inventory_alerts",
+        scan: {
+          scan_pages: scanPages,
+          page_size: pageSize,
+          alert_limit: alertLimit,
+          low_stock_threshold: lowStockThreshold,
+          old_stock_days: oldStockDays,
+          filters: baseFilters
+        },
+        sections: {
+          low_stock: lowStock.slice(0, alertLimit),
+          frozen_stock: frozenStock.slice(0, alertLimit),
+          old_stock: oldStock.slice(0, alertLimit)
+        },
+        counts: {
+          scanned_summary_rows: summaryRows.length,
+          scanned_detail_rows: detailRows.length,
+          low_stock: lowStock.length,
+          frozen_stock: frozenStock.length,
+          old_stock: oldStock.length
+        }
+      }
+    };
+  }
+
   async callAsp(path, params = {}, cmdkey = "refresh") {
     const session = await this.ensureSession();
     const payload = {
@@ -568,6 +645,14 @@ function parseNumber(value) {
   }
   const number = Number(String(value).replace(/,/g, ""));
   return Number.isFinite(number) ? number : null;
+}
+
+function clampInt(value, min, max) {
+  const number = Number.parseInt(value, 10);
+  if (!Number.isFinite(number)) {
+    return min;
+  }
+  return Math.max(min, Math.min(max, number));
 }
 
 function firstValue(...values) {

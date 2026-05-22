@@ -59,6 +59,7 @@ curl 'http://localhost:3000/api/products?searchKey=钼&pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/stock_in_records?rkzt=3&pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/stock_in_details?ord=137556&pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/pmc_exceptions?pageindex=1&pagesize=20'
+curl 'http://localhost:3000/api/inventory_alerts?scan_pages=2&scan_size=50&alert_limit=20&low_stock_threshold=5&old_stock_days=180'
 ```
 
 接口返回中包含三层数据：
@@ -88,7 +89,8 @@ OpenClaw 或 Hermes 可以把本中台注册成一个只读工具：
     "production_progress",
     "receivables",
     "payables",
-    "pmc_exceptions"
+    "pmc_exceptions",
+    "inventory_alerts"
   ]
 }
 ```
@@ -112,6 +114,7 @@ curl 'http://localhost:3000/agent/tool-schema'
 - `receivables`：收款/应收查询，基于 `/webapi/v3/ov1/financemanage/moneyback/list`
 - `payables`：付款/应付查询，基于 `/webapi/v3/ov1/financemanage/moneyout/list`
 - `pmc_exceptions`：第一版先聚合未出库合同、未回款合同
+- `inventory_alerts`：库存异常视图，聚合低库存、冻结库存、长库龄库存
 
 ## 下一步
 
@@ -139,6 +142,12 @@ curl 'http://localhost:3000/agent/tool-schema'
 - 高温钼棒 `Mo20201000174`：库存 6.56 kg，仓库 `4号棒丝材库`
 - 锆锭 `Zr104000008`：库存 7740 kg，仓库 `2号带箔材库`
 - 钽板 `Ta10201000086`：库存 3.25 kg，仓库 `1号钽铌库`
+
+库存异常视图已接入：
+
+- `GET /api/inventory_alerts?scan_pages=2&scan_size=50&alert_limit=20&low_stock_threshold=5&old_stock_days=180`
+- 第一版规则：可用库存小于等于阈值、冻结库存大于 0、库龄超过阈值
+- 当前扫描前 100 条库存汇总/明细，低库存命中 26 条，冻结库存 0 条，长库龄 0 条
 
 已验证入库流水可查询：
 
