@@ -1876,55 +1876,128 @@ async function queryPmcConsole(params = {}) {
     today: formatDate(today)
   };
 
-  const [dashboard, todayOrders, monthOrders] = await Promise.all([
-    queryPmcDashboard(dashboardParams),
-    querySalesOrderCount({ dateQD_0: formatDate(today), dateQD_1: formatDate(today) }),
-    querySalesOrderCount({ dateQD_0: formatDate(monthStart), dateQD_1: formatDate(monthEnd) })
-  ]);
+  try {
+    const [dashboard, todayOrders, monthOrders] = await Promise.all([
+      queryPmcDashboard(dashboardParams),
+      querySalesOrderCount({ dateQD_0: formatDate(today), dateQD_1: formatDate(today) }),
+      querySalesOrderCount({ dateQD_0: formatDate(monthStart), dateQD_1: formatDate(monthEnd) })
+    ]);
 
-  const source = dashboard.body;
-  const summary = {
-    today_orders: todayOrders.count,
-    month_orders: monthOrders.count,
-    overdue_orders: uniqueCount(source.sections.overdue_delivery_rows || [], "order_no"),
-    due_soon_orders: uniqueCount(source.sections.due_soon_delivery_rows || [], "order_no"),
-    shortage_orders: source.summary.order_shortage_orders || 0,
-    pending_quote_projects: source.summary.pending_quote_projects || 0,
-    low_stock: source.summary.low_stock || 0
-  };
+    const source = dashboard.body;
+    const summary = {
+      today_orders: todayOrders.count,
+      month_orders: monthOrders.count,
+      overdue_orders: uniqueCount(source.sections.overdue_delivery_rows || [], "order_no"),
+      due_soon_orders: uniqueCount(source.sections.due_soon_delivery_rows || [], "order_no"),
+      shortage_orders: source.summary.order_shortage_orders || 0,
+      pending_quote_projects: source.summary.pending_quote_projects || 0,
+      low_stock: source.summary.low_stock || 0
+    };
 
-  const body = {
+    const body = {
+      model: "pmc_console",
+      generated_at: new Date().toISOString(),
+      scan: {
+        today: formatDate(today),
+        month_start: formatDate(monthStart),
+        month_end: formatDate(monthEnd),
+        dashboard: dashboardParams
+      },
+      summary,
+      sections: {
+        overdue_orders: source.sections.overdue_delivery_rows || [],
+        due_soon_orders: source.sections.due_soon_delivery_rows || [],
+        shortage_orders: source.sections.order_shortage_rows || [],
+        pending_quotes: source.sections.pending_quotes || [],
+        low_stock: source.sections.low_stock || []
+      },
+      source_status: {
+        ...source.source_status,
+        today_orders: todayOrders,
+        month_orders: monthOrders
+      },
+      notes: [
+        "PMC 驾驶舱面向老板、PMC、销售共用，第一版聚焦订单、交期、缺料、待报价和低库存。",
+        "物料齐套第一版按销售订单产品库存计算，不做 BOM 展开；车间报工继续使用 ERP。"
+      ]
+    };
+
+    savePmcSnapshot(body);
+    return {
+      header: { status: 0, message: "ok" },
+      body
+    };
+  } catch (error) {
+    const message = summarizeDataSourceError(error);
+    const fallback = latestPmcSnapshot();
+    if (fallback) {
+      return {
+        header: { status: 0, message: "using local snapshot" },
+        body: {
+          ...fallback.payload,
+          cached: true,
+          offline: true,
+          generated_at: new Date().toISOString(),
+          cache_created_at: fallback.created_at,
+          source_status: {
+            ...(fallback.payload.source_status || {}),
+            erp_realtime: { ok: false, message }
+          },
+          notes: [
+            `ERP 数据源暂不可用：${message}`,
+            `当前显示本地快照，快照时间：${formatDateTime(fallback.created_at)}。`,
+            ...(fallback.payload.notes || [])
+          ]
+        }
+      };
+    }
+    return {
+      header: { status: 0, message: "offline empty dashboard" },
+      body: emptyPmcConsoleBody({
+        today,
+        monthStart,
+        monthEnd,
+        dashboardParams,
+        message
+      })
+    };
+  }
+}
+
+function emptyPmcConsoleBody({ today, monthStart, monthEnd, dashboardParams, message }) {
+  return {
     model: "pmc_console",
     generated_at: new Date().toISOString(),
+    offline: true,
     scan: {
       today: formatDate(today),
       month_start: formatDate(monthStart),
       month_end: formatDate(monthEnd),
       dashboard: dashboardParams
     },
-    summary,
+    summary: {
+      today_orders: null,
+      month_orders: null,
+      overdue_orders: 0,
+      due_soon_orders: 0,
+      shortage_orders: 0,
+      pending_quote_projects: 0,
+      low_stock: 0
+    },
     sections: {
-      overdue_orders: source.sections.overdue_delivery_rows || [],
-      due_soon_orders: source.sections.due_soon_delivery_rows || [],
-      shortage_orders: source.sections.order_shortage_rows || [],
-      pending_quotes: source.sections.pending_quotes || [],
-      low_stock: source.sections.low_stock || []
+      overdue_orders: [],
+      due_soon_orders: [],
+      shortage_orders: [],
+      pending_quotes: [],
+      low_stock: []
     },
     source_status: {
-      ...source.source_status,
-      today_orders: todayOrders,
-      month_orders: monthOrders
+      erp_realtime: { ok: false, message }
     },
     notes: [
-      "PMC 驾驶舱面向老板、PMC、销售共用，第一版聚焦订单、交期、缺料、待报价和低库存。",
-      "物料齐套第一版按销售订单产品库存计算，不做 BOM 展开；车间报工继续使用 ERP。"
+      `ERP 数据源暂不可用：${message}`,
+      "本地还没有可用快照；请稍后刷新驾驶舱。"
     ]
-  };
-
-  savePmcSnapshot(body);
-  return {
-    header: { status: 0, message: "ok" },
-    body
   };
 }
 
