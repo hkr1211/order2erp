@@ -188,6 +188,7 @@ curl 'http://localhost:3000/agent/tool-schema'
 - 异常管理中心：`http://localhost:3000/exceptions`
 - 报表中心：`http://localhost:3000/reports`
 - 报表导出：`http://localhost:3000/reports/export.csv`，导出 Excel 可打开的 CSV
+- Excel日报：`http://localhost:3000/reports/export.xls`，导出带格式的 Excel 日报
 - 报表打印版：`http://localhost:3000/reports/print`，适合浏览器打印成 PDF
 - PMC 全功能路线：`http://localhost:3000/goal`
 - 用户范围：老板、PMC、销售
@@ -204,7 +205,7 @@ curl 'http://localhost:3000/agent/tool-schema'
 - 生产中心：ERP 生产进度、领料、BOM、工序计划接口入口
 - 排产甘特视图：按订单最近交期生成时间轴，先看交期压力和缺料风险
 - 异常中心：交期、缺料、待报价、低库存统一待办池
-- 报表中心：订单、交期、缺料、报价、库存管理指标汇总，支持 CSV 导出和打印版日报
+- 报表中心：订单、交期、缺料、报价、库存管理指标汇总，支持 CSV、Excel 日报和打印版
 - 物料齐套口径：第一版按销售订单产品库存计算，不做 BOM 展开
 - 车间报工：继续使用 ERP，本中台暂不开发报工入口
 

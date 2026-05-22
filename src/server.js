@@ -93,6 +93,12 @@ const server = http.createServer(async (req, res) => {
       return sendCsv(res, "pmc-report.csv", reportCenterCsv(result.body));
     }
 
+    if (req.method === "GET" && url.pathname === "/reports/export.xls") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = await queryReportCenter(params);
+      return sendExcel(res, "pmc-report.xls", reportCenterExcel(result.body));
+    }
+
     if (req.method === "GET" && url.pathname === "/reports/print") {
       const params = Object.fromEntries(url.searchParams);
       const result = await queryReportCenter(params);
@@ -303,6 +309,14 @@ function sendCsv(res, filename, csv) {
   res.end(`\ufeff${csv}`);
 }
 
+function sendExcel(res, filename, html) {
+  res.writeHead(200, {
+    "Content-Type": "application/vnd.ms-excel; charset=utf-8",
+    "Content-Disposition": `attachment; filename="${filename}"`
+  });
+  res.end(`\ufeff${html}`);
+}
+
 function homePage() {
   const links = [
     ["健康检查", "/health", "确认本地中台是否正在运行"],
@@ -321,6 +335,7 @@ function homePage() {
     ["异常管理中心", "/exceptions", "交期、缺料、库存、报价异常统一待办"],
     ["报表中心", "/reports", "订单、交期、缺料、报价、库存指标汇总"],
     ["报表导出", "/reports/export.csv", "导出 Excel 可打开的 PMC 指标 CSV"],
+    ["Excel报表", "/reports/export.xls", "导出带格式的 PMC 日报 Excel 文件"],
     ["报表打印版", "/reports/print", "适合打印成 PDF 的 PMC 日报"],
     ["PMC 综合看板", "/api/pmc_dashboard?scan_pages=1&scan_size=20&contract_limit=3&alert_limit=10&low_stock_threshold=5&old_stock_days=180&due_soon_days=7&quote_limit=10", "库存、缺料、交期、待报价项目汇总"],
     ["销售订单", "/api/sales_orders?pageindex=1&pagesize=10", "查询最近销售合同/订单"],
@@ -1848,8 +1863,8 @@ async function queryReportCenter(params = {}) {
       },
       notes: [
         ...sourceNotes,
-        "报表中心第一版提供可浏览的指标汇总。",
-        "Excel 导出、月报模板、供应商绩效和设备利用率需要在后续阶段补齐。"
+        "报表中心提供可浏览指标、打印版、CSV 导出和 Excel 日报导出。",
+        "月报模板、供应商绩效和设备利用率需要在后续阶段补齐。"
       ]
     }
   };
@@ -2379,7 +2394,7 @@ function exceptionCenterPage(body) {
 function reportCenterPage(body) {
   return modulePage({
     title: "报表中心",
-    subtitle: "第一版先形成管理指标汇总，后续增加 Excel 导出和月报模板。",
+    subtitle: "形成管理指标汇总，并提供打印版、CSV 和 Excel 日报导出。",
     summary: [
       ["今日订单", body.summary.today_orders],
       ["本月订单", body.summary.month_orders],
@@ -2399,6 +2414,7 @@ function reportCenterPage(body) {
     notes: body.notes,
     actions: [
       ["打印版", "/reports/print"],
+      ["导出 Excel", "/reports/export.xls"],
       ["导出 CSV", "/reports/export.csv"],
       ["刷新", "/reports?refresh=1"]
     ]
@@ -2508,6 +2524,59 @@ function reportCenterCsv(body) {
   appendCsvSection(lines, "低库存预警", tableRowsForCsv(body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"]));
   appendCsvSection(lines, "备注", [["内容"], ...(body.notes || []).map((note) => [note])]);
   return lines.map((row) => row.map(csvCell).join(",")).join("\r\n");
+}
+
+function reportCenterExcel(body) {
+  const summaryRows = [
+    ["指标", "数值"],
+    ["今日订单", body.summary.today_orders],
+    ["本月订单", body.summary.month_orders],
+    ["红灯订单", body.summary.red_orders],
+    ["黄灯订单", body.summary.yellow_orders],
+    ["绿灯订单", body.summary.green_orders],
+    ["缺料订单", body.summary.shortage_orders],
+    ["临期订单", body.summary.due_soon_orders],
+    ["待报价", body.summary.pending_quote_projects],
+    ["低库存", body.summary.low_stock]
+  ];
+  const generatedAt = formatDateTime(body.generated_at);
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: "Microsoft YaHei", Arial, sans-serif; color: #172033; }
+    h1 { font-size: 20px; margin: 0 0 6px; }
+    h2 { font-size: 15px; margin: 18px 0 6px; }
+    .meta { color: #667085; margin-bottom: 14px; }
+    table { border-collapse: collapse; margin-bottom: 14px; }
+    th { background: #d9ead3; font-weight: 700; }
+    th, td { border: 1px solid #9aa4b2; padding: 6px 8px; mso-number-format:"\\@"; }
+    .danger { background: #fce4e4; }
+    .warning { background: #fff2cc; }
+  </style>
+</head>
+<body>
+  <h1>蕴杰金属 PMC 日报</h1>
+  <div class="meta">生成时间：${escapeHtml(generatedAt)}</div>
+  ${excelTable("指标汇总", summaryRows)}
+  ${excelTable("订单状态样本", tableRowsForCsv(body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]))}
+  ${excelTable("待报价项目", tableRowsForCsv(body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"]))}
+  ${excelTable("低库存预警", tableRowsForCsv(body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"]))}
+  ${excelTable("备注", [["内容"], ...(body.notes || []).map((note) => [note])])}
+</body>
+</html>`;
+}
+
+function excelTable(title, rows) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  if (!safeRows.length) {
+    return "";
+  }
+  return `<h2>${escapeHtml(title)}</h2><table>${safeRows.map((row, rowIndex) => {
+    const tag = rowIndex === 0 ? "th" : "td";
+    return `<tr>${row.map((cell) => `<${tag}>${escapeHtml(cell ?? "")}</${tag}>`).join("")}</tr>`;
+  }).join("")}</table>`;
 }
 
 function appendCsvSection(lines, title, rows) {
@@ -2626,7 +2695,7 @@ function pmcGoalPage() {
     ["待报价中心", "已完成V1入口", "项目/商机待报价清单"],
     ["生产进度中心", "已完成V1入口", "ERP生产进度、领料、BOM、工序计划数据入口"],
     ["异常管理中心", "已完成V1入口", "交期、缺料、库存、报价异常待办池"],
-    ["报表中心", "已完成V1入口", "管理指标汇总；Excel导出待开发"],
+    ["报表中心", "已完成V1", "管理指标汇总、打印版、CSV导出、Excel日报导出"],
     ["排产甘特图", "已完成V1入口", "按订单交期生成时间轴；工单/设备/工序排产待接入"],
     ["采购跟催", "已完成V1入口", "先接入库流水和应付付款；采购订单/供应商联系人待确认"],
     ["应收应付", "已完成V1", "聚合应收/应付、客户欠款排行、逾期应收、7天内应付、付款条件推算"],
@@ -2637,8 +2706,8 @@ function pmcGoalPage() {
     title: "PMC 全功能路线",
     subtitle: "目标是逐步实现 KIMI 设计文档中的完整 PMC 平台；先用智邦 ERP API 和 SQLite 做内网免登录 V1。",
     summary: [
-      ["已完成V1", 7],
-      ["待开发V2", 2],
+      ["已完成V1", 9],
+      ["待开发V2", 1],
       ["暂缓项", 1]
     ],
     panels: [
@@ -2647,7 +2716,7 @@ function pmcGoalPage() {
     notes: [
       "短期优先：让老板/PMC/销售能看到真实订单、交期、缺料、库存和待报价。",
       "中期重点：补采购订单和供应商跟催，再做排产甘特图。",
-      "长期重点：权限、审批、通知、Excel报表、移动端适配。"
+      "长期重点：权限、审批、通知、月报模板、移动端适配。"
     ]
   });
 }
