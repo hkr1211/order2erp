@@ -63,6 +63,12 @@ const server = http.createServer(async (req, res) => {
       return sendHtml(res, 200, productionCenterPage(result.body));
     }
 
+    if (req.method === "GET" && url.pathname === "/scheduling") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = await querySchedulingCenter(params);
+      return sendHtml(res, 200, schedulingCenterPage(result.body));
+    }
+
     if (req.method === "GET" && url.pathname === "/exceptions") {
       const params = Object.fromEntries(url.searchParams);
       const result = await queryExceptionCenter(params);
@@ -298,6 +304,7 @@ function homePage() {
     ["采购跟催中心", "/procurement", "采购到货、入库、应付付款跟踪入口"],
     ["待报价中心", "/quotes", "集中查看项目/商机中的待报价项目"],
     ["生产进度中心", "/production", "生产进度、领料、BOM 和工序计划数据入口"],
+    ["排产甘特视图", "/scheduling", "按订单交期生成排产时间轴 V1"],
     ["异常管理中心", "/exceptions", "交期、缺料、库存、报价异常统一待办"],
     ["报表中心", "/reports", "订单、交期、缺料、报价、库存指标汇总"],
     ["报表导出", "/reports/export.csv", "导出 Excel 可打开的 PMC 指标 CSV"],
@@ -1848,6 +1855,19 @@ function modulePage({ title, subtitle, summary = [], panels = [], notes = [], ac
     .empty { padding: 20px 16px; color: var(--muted); font-size: 14px; }
     .notes { margin-top: 12px; color: var(--muted); font-size: 13px; line-height: 1.7; }
     .pill { display: inline-block; padding: 3px 7px; border-radius: 999px; background: var(--green-soft); color: var(--green); font-size: 12px; white-space: nowrap; }
+    .timeline { min-width: 820px; padding: 14px 16px 18px; }
+    .timeline-scale { position: relative; height: 24px; margin-left: 220px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+    .timeline-scale span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+    .timeline-row { display: grid; grid-template-columns: 210px 1fr; gap: 10px; min-height: 54px; align-items: center; border-bottom: 1px solid var(--border); }
+    .timeline-row:last-child { border-bottom: 0; }
+    .timeline-label strong { display: block; font-size: 13px; }
+    .timeline-label span { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+    .timeline-track { position: relative; height: 18px; border-radius: 999px; background: #eef2f6; }
+    .timeline-dot { position: absolute; top: 50%; width: 14px; height: 14px; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 0 3px #ffffff; }
+    .timeline-dot.red { background: var(--red); }
+    .timeline-dot.yellow { background: #f4a000; }
+    .timeline-dot.green { background: var(--green); }
+    .timeline-text { position: absolute; top: 22px; color: var(--muted); font-size: 12px; white-space: nowrap; }
     @media (max-width: 980px) { header, .grid { display: block; } .actions { justify-content: flex-start; margin-top: 14px; } .panel { margin-top: 12px; } h1 { font-size: 24px; } }
   </style>
 </head>
@@ -1943,6 +1963,121 @@ function procurementCenterPage(body) {
       ["应付接口", "/api/payables?pageindex=1&pagesize=20"]
     ]
   });
+}
+
+async function querySchedulingCenter(params = {}) {
+  const horizonDays = clampInt(params.horizon_days || 30, 7, 90);
+  const orderCenter = await queryOrderCenter({
+    pageindex: params.pageindex || 1,
+    pagesize: params.pagesize || 30,
+    contract_limit: params.contract_limit || 10,
+    due_soon_days: params.due_soon_days || 7,
+    scan_size: params.scan_size || 100,
+    searchKey: params.searchKey || ""
+  });
+  const today = startOfDay(params.today ? new Date(params.today) : new Date());
+  const items = (orderCenter.body.rows || []).map((row) => mapScheduleItem(row, today, horizonDays));
+  const visibleItems = items.filter((item) => item.in_window || item.status_code !== "green").slice(0, 30);
+
+  return {
+    header: { status: 0, message: "ok" },
+    body: {
+      model: "scheduling_center",
+      generated_at: new Date().toISOString(),
+      offline: Boolean(orderCenter.body.offline),
+      scan: {
+        today: formatDate(today),
+        horizon_days: horizonDays
+      },
+      summary: {
+        schedule_items: visibleItems.length,
+        red_orders: visibleItems.filter((item) => item.status_code === "red").length,
+        yellow_orders: visibleItems.filter((item) => item.status_code === "yellow").length,
+        no_delivery_date: items.filter((item) => !item.delivery_date).length
+      },
+      rows: visibleItems,
+      source_status: orderCenter.body.source_status,
+      notes: [
+        ...(orderCenter.body.offline ? orderCenter.body.notes || [] : []),
+        "排产甘特视图 V1 按订单最近交期生成时间轴，用于先看交期压力。",
+        "后续接工单、设备、工序计划和产能后，再升级为可拖拽排产。"
+      ]
+    }
+  };
+}
+
+function mapScheduleItem(row, today, horizonDays) {
+  const delivery = parseDate(row.delivery_date);
+  const days = delivery ? daysBetween(today, startOfDay(delivery)) : null;
+  const clamped = days === null ? horizonDays : Math.max(0, Math.min(horizonDays, days));
+  return {
+    order_no: row.order_no,
+    customer: row.customer,
+    owner: row.owner,
+    product_name: (row.risk_products || []).join(" / "),
+    delivery_date: row.delivery_date,
+    days_from_today: days,
+    due_status: row.due_status,
+    shortage_status: row.shortage_status,
+    status_code: row.status_code,
+    status_text: row.status_text,
+    timeline_left: Math.round((clamped / horizonDays) * 100),
+    in_window: days !== null && days >= 0 && days <= horizonDays
+  };
+}
+
+function schedulingCenterPage(body) {
+  return modulePage({
+    title: "排产甘特视图",
+    subtitle: `按订单最近交期生成 ${body.scan.horizon_days} 天时间轴，先看交期压力和缺料风险。`,
+    summary: [
+      ["时间轴订单", body.summary.schedule_items],
+      ["红灯订单", body.summary.red_orders],
+      ["黄灯订单", body.summary.yellow_orders],
+      ["无交期", body.summary.no_delivery_date]
+    ],
+    panels: [
+      scheduleTimelinePanel(body.rows, body.scan.horizon_days),
+      modulePanel("排产订单列表", body.rows, ["status_text", "order_no", "customer", "owner", "delivery_date", "due_status", "shortage_status"])
+    ],
+    notes: body.notes,
+    actions: [
+      ["订单中心", "/orders"],
+      ["刷新", "/scheduling?refresh=1"]
+    ]
+  });
+}
+
+function scheduleTimelinePanel(rows, horizonDays) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  return `<section class="panel">
+    <h2>交期时间轴 <span class="pill">${safeRows.length}</span></h2>
+    ${
+      safeRows.length
+        ? `<div class="timeline">${timelineScale(horizonDays)}${safeRows.map(scheduleTimelineRow).join("")}</div>`
+        : `<div class="empty">当前没有可排入时间轴的订单。</div>`
+    }
+  </section>`;
+}
+
+function timelineScale(horizonDays) {
+  const marks = [0, Math.round(horizonDays / 4), Math.round(horizonDays / 2), Math.round((horizonDays * 3) / 4), horizonDays];
+  return `<div class="timeline-scale">${marks.map((day) => `<span style="left:${Math.round((day / horizonDays) * 100)}%">${day}天</span>`).join("")}</div>`;
+}
+
+function scheduleTimelineRow(row) {
+  const tone = row.status_code === "red" ? "red" : row.status_code === "yellow" ? "yellow" : "green";
+  const left = row.delivery_date ? row.timeline_left : 100;
+  return `<div class="timeline-row">
+    <div class="timeline-label">
+      <strong>${escapeHtml(row.order_no || "")}</strong>
+      <span>${escapeHtml(row.customer || "")}</span>
+    </div>
+    <div class="timeline-track">
+      <span class="timeline-dot ${tone}" style="left:${left}%"></span>
+      <span class="timeline-text" style="left:${Math.max(0, Math.min(78, left))}%">${escapeHtml(row.delivery_date || "无交期")}</span>
+    </div>
+  </div>`;
 }
 
 function productionCenterPage(body) {
@@ -2153,7 +2288,7 @@ function pmcGoalPage() {
     ["生产进度中心", "已完成V1入口", "ERP生产进度、领料、BOM、工序计划数据入口"],
     ["异常管理中心", "已完成V1入口", "交期、缺料、库存、报价异常待办池"],
     ["报表中心", "已完成V1入口", "管理指标汇总；Excel导出待开发"],
-    ["排产甘特图", "待开发V2", "需要确认ERP工单/设备/工序计划真实字段"],
+    ["排产甘特图", "已完成V1入口", "按订单交期生成时间轴；工单/设备/工序排产待接入"],
     ["采购跟催", "已完成V1入口", "先接入库流水和应付付款；采购订单/供应商联系人待确认"],
     ["权限登录", "暂缓", "当前按用户要求为内网免登录版"]
   ];
