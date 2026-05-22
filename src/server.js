@@ -75,6 +75,12 @@ const server = http.createServer(async (req, res) => {
       return sendCsv(res, "pmc-report.csv", reportCenterCsv(result.body));
     }
 
+    if (req.method === "GET" && url.pathname === "/reports/print") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = await queryReportCenter(params);
+      return sendHtml(res, 200, reportPrintPage(result.body));
+    }
+
     if (req.method === "GET" && url.pathname === "/goal") {
       return sendHtml(res, 200, pmcGoalPage());
     }
@@ -288,6 +294,7 @@ function homePage() {
     ["异常管理中心", "/exceptions", "交期、缺料、库存、报价异常统一待办"],
     ["报表中心", "/reports", "订单、交期、缺料、报价、库存指标汇总"],
     ["报表导出", "/reports/export.csv", "导出 Excel 可打开的 PMC 指标 CSV"],
+    ["报表打印版", "/reports/print", "适合打印成 PDF 的 PMC 日报"],
     ["PMC 综合看板", "/api/pmc_dashboard?scan_pages=1&scan_size=20&contract_limit=3&alert_limit=10&low_stock_threshold=5&old_stock_days=180&due_soon_days=7&quote_limit=10", "库存、缺料、交期、待报价项目汇总"],
     ["销售订单", "/api/sales_orders?pageindex=1&pagesize=10", "查询最近销售合同/订单"],
     ["订单缺料", "/api/order_shortages?pageindex=1&pagesize=10&contract_limit=3&scan_size=100", "扫描最近未发货订单缺料情况"],
@@ -1908,10 +1915,93 @@ function reportCenterPage(body) {
     ],
     notes: body.notes,
     actions: [
+      ["打印版", "/reports/print"],
       ["导出 CSV", "/reports/export.csv"],
       ["刷新", "/reports?refresh=1"]
     ]
   });
+}
+
+function reportPrintPage(body) {
+  const summaryRows = [
+    ["今日订单", body.summary.today_orders],
+    ["本月订单", body.summary.month_orders],
+    ["红灯订单", body.summary.red_orders],
+    ["黄灯订单", body.summary.yellow_orders],
+    ["绿灯订单", body.summary.green_orders],
+    ["缺料订单", body.summary.shortage_orders],
+    ["临期订单", body.summary.due_soon_orders],
+    ["待报价", body.summary.pending_quote_projects],
+    ["低库存", body.summary.low_stock]
+  ];
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PMC 日报打印版</title>
+  <style>
+    :root { color-scheme: light; --text: #172033; --muted: #667085; --border: #cfd6e2; --soft: #f3f6f8; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--text); background: #eef2f6; }
+    main { width: min(1020px, calc(100% - 32px)); margin: 24px auto; padding: 28px; background: #ffffff; border: 1px solid var(--border); }
+    header { display: flex; justify-content: space-between; gap: 20px; padding-bottom: 14px; border-bottom: 2px solid var(--text); }
+    h1 { margin: 0; font-size: 28px; letter-spacing: 0; }
+    h2 { margin: 24px 0 10px; font-size: 16px; letter-spacing: 0; }
+    .meta { color: var(--muted); font-size: 13px; line-height: 1.7; text-align: right; }
+    .summary { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--border); border-bottom: 0; border-right: 0; margin-top: 18px; }
+    .metric { min-height: 72px; padding: 10px 12px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    .metric span { display: block; color: var(--muted); font-size: 12px; }
+    .metric strong { display: block; margin-top: 8px; font-size: 24px; }
+    table { width: 100%; border-collapse: collapse; page-break-inside: auto; }
+    th, td { padding: 8px 9px; border: 1px solid var(--border); text-align: left; vertical-align: top; font-size: 12px; line-height: 1.4; }
+    th { background: var(--soft); font-weight: 650; }
+    .notes { margin-top: 18px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+    .toolbar { margin-bottom: 12px; text-align: right; }
+    .button { display: inline-block; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); text-decoration: none; font-size: 13px; background: #ffffff; }
+    @media print {
+      body { background: #ffffff; }
+      main { width: 100%; margin: 0; padding: 0; border: 0; }
+      .toolbar { display: none; }
+      h2 { page-break-after: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="toolbar"><a class="button" href="/reports">返回报表中心</a> <a class="button" href="javascript:window.print()">打印</a></div>
+    <header>
+      <div>
+        <h1>蕴杰金属 PMC 日报</h1>
+        <div class="notes">订单、交期、缺料、报价、库存综合摘要</div>
+      </div>
+      <div class="meta">
+        <div>生成时间：${escapeHtml(formatDateTime(body.generated_at))}</div>
+        <div>数据口径：ERP API + 本地快照</div>
+      </div>
+    </header>
+    <section class="summary">
+      ${summaryRows.map(([label, value]) => `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value ?? "")}</strong></div>`).join("")}
+    </section>
+    ${printTable("订单状态样本", body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"])}
+    ${printTable("待报价项目", body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"])}
+    ${printTable("低库存预警", body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"])}
+    <section class="notes">${(body.notes || []).map((note) => `<div>${escapeHtml(note)}</div>`).join("")}</section>
+  </main>
+</body>
+</html>`;
+}
+
+function printTable(title, rows, columns) {
+  const safeRows = Array.isArray(rows) ? rows.slice(0, 12) : [];
+  return `<section>
+    <h2>${escapeHtml(title)}</h2>
+    ${
+      safeRows.length
+        ? `<table><thead><tr>${columns.map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${safeRows.map((row) => `<tr>${columns.map((column) => `<td>${formatDetailCell(column, row?.[column])}</td>`).join("")}</tr>`).join("")}</tbody></table>`
+        : `<table><tbody><tr><td>当前没有${escapeHtml(title)}。</td></tr></tbody></table>`
+    }
+  </section>`;
 }
 
 function reportCenterCsv(body) {

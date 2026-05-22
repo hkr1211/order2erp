@@ -59,6 +59,7 @@ open 'http://localhost:3000/production'
 open 'http://localhost:3000/exceptions'
 open 'http://localhost:3000/reports'
 open 'http://localhost:3000/reports/export.csv'
+open 'http://localhost:3000/reports/print'
 open 'http://localhost:3000/goal'
 curl 'http://localhost:3000/views'
 curl 'http://localhost:3000/agent/tool-schema'
@@ -179,6 +180,7 @@ curl 'http://localhost:3000/agent/tool-schema'
 - 异常管理中心：`http://localhost:3000/exceptions`
 - 报表中心：`http://localhost:3000/reports`
 - 报表导出：`http://localhost:3000/reports/export.csv`，导出 Excel 可打开的 CSV
+- 报表打印版：`http://localhost:3000/reports/print`，适合浏览器打印成 PDF
 - PMC 全功能路线：`http://localhost:3000/goal`
 - 用户范围：老板、PMC、销售
 - 运行方式：内网免登录
@@ -190,7 +192,7 @@ curl 'http://localhost:3000/agent/tool-schema'
 - 待报价中心：项目/商机待报价清单
 - 生产中心：ERP 生产进度、领料、BOM、工序计划接口入口
 - 异常中心：交期、缺料、待报价、低库存统一待办池
-- 报表中心：订单、交期、缺料、报价、库存管理指标汇总，支持 CSV 导出
+- 报表中心：订单、交期、缺料、报价、库存管理指标汇总，支持 CSV 导出和打印版日报
 - 物料齐套口径：第一版按销售订单产品库存计算，不做 BOM 展开
 - 车间报工：继续使用 ERP，本中台暂不开发报工入口
 
