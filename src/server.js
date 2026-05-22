@@ -51,6 +51,12 @@ const server = http.createServer(async (req, res) => {
       return sendHtml(res, 200, procurementCenterPage(result.body));
     }
 
+    if (req.method === "GET" && url.pathname === "/finance") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = await queryFinanceCenter(params);
+      return sendHtml(res, 200, financeCenterPage(result.body));
+    }
+
     if (req.method === "GET" && url.pathname === "/quotes") {
       const params = Object.fromEntries(url.searchParams);
       const result = await queryQuoteCenter(params);
@@ -302,6 +308,7 @@ function homePage() {
     ["订单管理中心", "/orders", "订单状态灯、交期风险、缺料标记"],
     ["物料控制中心", "/materials", "缺料订单、低库存、冻结库存和长库龄预警"],
     ["采购跟催中心", "/procurement", "采购到货、入库、应付付款跟踪入口"],
+    ["应收应付中心", "/finance", "客户欠款、收款状态、供应商付款跟踪"],
     ["待报价中心", "/quotes", "集中查看项目/商机中的待报价项目"],
     ["生产进度中心", "/production", "生产进度、领料、BOM 和工序计划数据入口"],
     ["排产甘特视图", "/scheduling", "按订单交期生成排产时间轴 V1"],
@@ -710,6 +717,14 @@ function labelFor(key) {
     confirmed_time: "确认时间",
     warehouse_title: "仓库",
     source_errors: "数据源异常",
+    counterparty: "往来单位",
+    bill_no: "单号",
+    business_title: "业务摘要",
+    paid_amount: "已收/已付",
+    unpaid_amount: "未收/未付",
+    bill_date: "单据日期",
+    due_date: "到期日",
+    status: "状态",
     warehouse_status: "出库状态",
     delivery_status: "发货状态",
     payment_status: "收款状态",
@@ -1965,6 +1980,123 @@ function procurementCenterPage(body) {
   });
 }
 
+async function queryFinanceCenter(params = {}) {
+  const pageindex = params.pageindex || 1;
+  const pagesize = params.pagesize || 20;
+  const [receivableResult, payableResult] = await Promise.allSettled([
+    client.queryView("receivables", {
+      pageindex,
+      pagesize,
+      searchKey: params.searchKey || ""
+    }),
+    client.queryView("payables", {
+      pageindex,
+      pagesize,
+      searchKey: params.searchKey || ""
+    })
+  ]);
+  const sourceStatus = {
+    receivables: {
+      ok: receivableResult.status === "fulfilled",
+      message: receivableResult.status === "rejected" ? summarizeDataSourceError(receivableResult.reason) : null
+    },
+    payables: {
+      ok: payableResult.status === "fulfilled",
+      message: payableResult.status === "rejected" ? summarizeDataSourceError(payableResult.reason) : null
+    }
+  };
+  const sourceNotes = Object.entries(sourceStatus)
+    .filter(([, status]) => !status.ok)
+    .map(([name, status]) => `${name} 数据源暂不可用：${status.message}`);
+  const receivableTable = receivableResult.status === "fulfilled" ? normalizeTable(receivableResult.value) : { rows: [], page: null };
+  const payableTable = payableResult.status === "fulfilled" ? normalizeTable(payableResult.value) : { rows: [], page: null };
+  const receivableRows = receivableTable.rows.map((row) => mapFinanceRow(row, "receivable"));
+  const payableRows = payableTable.rows.map((row) => mapFinanceRow(row, "payable"));
+
+  return {
+    header: { status: 0, message: "ok" },
+    body: {
+      model: "finance_center",
+      generated_at: new Date().toISOString(),
+      offline: sourceNotes.length > 0,
+      summary: {
+        receivable_records: receivableRows.length,
+        payable_records: payableRows.length,
+        receivable_unpaid: sumFinanceAmount(receivableRows, "unpaid_amount"),
+        payable_unpaid: sumFinanceAmount(payableRows, "unpaid_amount"),
+        source_errors: sourceNotes.length
+      },
+      sections: {
+        receivables: receivableRows,
+        payables: payableRows
+      },
+      source_status: sourceStatus,
+      notes: [
+        ...sourceNotes,
+        "应收应付中心 V1 聚合收款/应收和付款/应付记录，先用于老板和销售查看往来风险。",
+        "后续可按客户、供应商、逾期天数和付款条件继续细化。"
+      ]
+    }
+  };
+}
+
+function mapFinanceRow(row, direction) {
+  const amount = firstNumber(row.moneyall, row.MoneyAll, row.money1, row.Money1, row.money, row.Money, row.cmoney, row.CMoney, row["金额"], row["应收金额"], row["应付金额"]);
+  const paidAmount = firstNumber(row.hkmoney, row.HkMoney, row.money2, row.Money2, row.paymoney, row.PayMoney, row["已收金额"], row["已付金额"], row["收款金额"], row["付款金额"]);
+  const unpaidAmount = firstNumber(row.wsmoney, row.WsMoney, row.leftmoney, row.LeftMoney, row["未收金额"], row["未付金额"], amount !== null && paidAmount !== null ? amount - paidAmount : null);
+  return {
+    direction,
+    counterparty: firstText(row.khmc, row.gysname, row.cateName, row.CateName, row.title2, row["客户"], row["供应商"], row["往来单位"], row["单位名称"]),
+    bill_no: firstText(row.htid, row.rkbh, row.billno, row.BillNo, row.order1, row.Order1, row["单号"], row["合同编号"], row["付款单号"], row["收款单号"]),
+    business_title: firstText(row.title, row.Title, row.intro, row.Intro, row["摘要"], row["标题"]),
+    amount,
+    paid_amount: paidAmount,
+    unpaid_amount: unpaidAmount,
+    bill_date: firstText(row.date1, row.Date1, row.dateadd, row.DateAdd, row.tdate, row.TDate, row["单据日期"], row["申请日期"]),
+    due_date: firstText(row.date2, row.Date2, row.dateend, row.DateEnd, row["到期日"], row["计划日期"]),
+    status: firstText(row.status, row.Status, row.zt, row.Zt, row.skzt, row.fkzt, row["状态"], row["收款状态"], row["付款状态"]),
+    owner: firstText(row.xsry, row.person, row.Person, row.owner, row["负责人"], row["经办人"]),
+    raw: row
+  };
+}
+
+function firstText(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return String(value).trim();
+    }
+  }
+  return null;
+}
+
+function sumFinanceAmount(rows, key) {
+  const total = rows.reduce((sum, row) => sum + (parseNumber(row[key]) || 0), 0);
+  return Number(total.toFixed(2));
+}
+
+function financeCenterPage(body) {
+  return modulePage({
+    title: "应收应付中心",
+    subtitle: "集中查看客户应收、收款状态和供应商应付/付款情况。",
+    summary: [
+      ["应收记录", body.summary.receivable_records],
+      ["应付记录", body.summary.payable_records],
+      ["未收合计", body.summary.receivable_unpaid],
+      ["未付合计", body.summary.payable_unpaid],
+      ["数据源异常", body.summary.source_errors]
+    ],
+    panels: [
+      modulePanel("应收/收款", body.sections.receivables, ["counterparty", "bill_no", "business_title", "amount", "paid_amount", "unpaid_amount", "bill_date", "status"]),
+      modulePanel("应付/付款", body.sections.payables, ["counterparty", "bill_no", "business_title", "amount", "paid_amount", "unpaid_amount", "bill_date", "status"])
+    ],
+    notes: body.notes,
+    actions: [
+      ["应收接口", "/api/receivables?pageindex=1&pagesize=20"],
+      ["应付接口", "/api/payables?pageindex=1&pagesize=20"]
+    ]
+  });
+}
+
 async function querySchedulingCenter(params = {}) {
   const horizonDays = clampInt(params.horizon_days || 30, 7, 90);
   const orderCenter = await queryOrderCenter({
@@ -2290,6 +2422,7 @@ function pmcGoalPage() {
     ["报表中心", "已完成V1入口", "管理指标汇总；Excel导出待开发"],
     ["排产甘特图", "已完成V1入口", "按订单交期生成时间轴；工单/设备/工序排产待接入"],
     ["采购跟催", "已完成V1入口", "先接入库流水和应付付款；采购订单/供应商联系人待确认"],
+    ["应收应付", "已完成V1入口", "聚合应收/收款、应付/付款，后续补逾期和付款条件"],
     ["权限登录", "暂缓", "当前按用户要求为内网免登录版"]
   ];
   return modulePage({

@@ -55,6 +55,7 @@ open 'http://localhost:3000/orders'
 open 'http://localhost:3000/order?ord=合同ord'
 open 'http://localhost:3000/materials'
 open 'http://localhost:3000/procurement'
+open 'http://localhost:3000/finance'
 open 'http://localhost:3000/quotes'
 open 'http://localhost:3000/production'
 open 'http://localhost:3000/scheduling'
@@ -178,6 +179,7 @@ curl 'http://localhost:3000/agent/tool-schema'
 - 订单详情入口：在订单中心点击订单号，或访问 `http://localhost:3000/order?ord=合同ord`
 - 物料控制中心：`http://localhost:3000/materials`
 - 采购跟催中心：`http://localhost:3000/procurement`
+- 应收应付中心：`http://localhost:3000/finance`
 - 待报价中心：`http://localhost:3000/quotes`
 - 生产进度中心：`http://localhost:3000/production`
 - 排产甘特视图：`http://localhost:3000/scheduling`
@@ -194,6 +196,7 @@ curl 'http://localhost:3000/agent/tool-schema'
 - 订单详情：合同基本信息、PO 编号尝试识别、产品明细、交期风险、缺料分析
 - 物料中心：缺料订单、低库存、冻结库存、长库龄库存
 - 采购跟催中心：入库流水、应付付款跟踪入口；采购订单和供应商联系人待接口确认
+- 应收应付中心：客户应收、收款状态、供应商应付/付款
 - 待报价中心：项目/商机待报价清单
 - 生产中心：ERP 生产进度、领料、BOM、工序计划接口入口
 - 排产甘特视图：按订单最近交期生成时间轴，先看交期压力和缺料风险
