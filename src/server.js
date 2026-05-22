@@ -824,78 +824,129 @@ async function queryOrderCenter(params = {}) {
   const searchKey = params.searchKey || "";
   const statusFilter = params.status || "";
 
-  const [salesResult, deliveryRisks, shortages] = await Promise.all([
-    client.queryView("sales_orders", {
-      searchKey,
-      pageindex: String(pageIndex),
-      pagesize: String(pageSize)
-    }),
-    queryOrderDeliveryRisks(client, {
-      searchKey,
-      pageindex: String(pageIndex),
-      pagesize: String(pageSize),
-      contract_limit: String(contractLimit),
-      due_soon_days: String(dueSoonDays)
-    }),
-    queryOrderShortages(client, {
-      searchKey,
-      pageindex: String(pageIndex),
-      pagesize: String(pageSize),
-      contract_limit: String(contractLimit),
-      scan_size: String(scanSize)
-    })
-  ]);
-
-  const salesTable = normalizeTable(salesResult);
-  const salesOrders = toBusinessView("sales_orders", salesTable).rows;
-  const riskIndex = indexOrderRisks(deliveryRisks.body.rows || []);
-  const shortageIndex = indexOrderShortages(shortages.body.rows || []);
-  const rows = salesOrders.map((order) => mapOrderCenterRow(order, riskIndex, shortageIndex));
-  const filteredRows = statusFilter ? rows.filter((row) => row.status_code === statusFilter) : rows;
-
-  return {
-    header: { status: 0, message: "ok" },
-    body: {
-      model: "order_center",
-      scan: {
-        pageindex: pageIndex,
-        pagesize: pageSize,
-        contract_limit: contractLimit,
-        due_soon_days: dueSoonDays,
-        scan_size: scanSize,
+  try {
+    const [salesResult, deliveryRisks, shortages] = await Promise.all([
+      client.queryView("sales_orders", {
         searchKey,
-        status: statusFilter
-      },
-      page: salesTable.page,
-      summary: {
-        total_rows: rows.length,
-        visible_rows: filteredRows.length,
-        red_orders: rows.filter((row) => row.status_code === "red").length,
-        yellow_orders: rows.filter((row) => row.status_code === "yellow").length,
-        green_orders: rows.filter((row) => row.status_code === "green").length,
-        shortage_orders: rows.filter((row) => row.shortage_status === "缺料").length,
-        overdue_orders: rows.filter((row) => row.due_status === "逾期").length,
-        due_soon_orders: rows.filter((row) => row.due_status === "7天内到期").length
-      },
-      rows: filteredRows,
-      source_status: {
-        sales_orders: { ok: true, rows: salesOrders.length, page: salesTable.page },
-        order_delivery_risks: {
-          ok: (deliveryRisks.body.errors || []).length === 0,
-          checked_orders: deliveryRisks.body.summary.checked_orders,
-          risk_rows: deliveryRisks.body.summary.risk_rows
+        pageindex: String(pageIndex),
+        pagesize: String(pageSize)
+      }),
+      queryOrderDeliveryRisks(client, {
+        searchKey,
+        pageindex: String(pageIndex),
+        pagesize: String(pageSize),
+        contract_limit: String(contractLimit),
+        due_soon_days: String(dueSoonDays)
+      }),
+      queryOrderShortages(client, {
+        searchKey,
+        pageindex: String(pageIndex),
+        pagesize: String(pageSize),
+        contract_limit: String(contractLimit),
+        scan_size: String(scanSize)
+      })
+    ]);
+
+    const salesTable = normalizeTable(salesResult);
+    const salesOrders = toBusinessView("sales_orders", salesTable).rows;
+    const riskIndex = indexOrderRisks(deliveryRisks.body.rows || []);
+    const shortageIndex = indexOrderShortages(shortages.body.rows || []);
+    const rows = salesOrders.map((order) => mapOrderCenterRow(order, riskIndex, shortageIndex));
+    const filteredRows = statusFilter ? rows.filter((row) => row.status_code === statusFilter) : rows;
+
+    return {
+      header: { status: 0, message: "ok" },
+      body: {
+        model: "order_center",
+        scan: {
+          pageindex: pageIndex,
+          pagesize: pageSize,
+          contract_limit: contractLimit,
+          due_soon_days: dueSoonDays,
+          scan_size: scanSize,
+          searchKey,
+          status: statusFilter
         },
-        order_shortages: {
-          ok: (shortages.body.errors || []).length === 0,
-          checked_orders: shortages.body.summary.checked_orders,
-          shortage_rows: shortages.body.summary.shortage_rows
-        }
-      },
-      notes: [
-        "订单管理中心第一版按销售订单列表聚合交期风险和缺料风险。",
-        "PO 编号后续从合同明细提取；当前列表先显示 ERP 合同号。"
-      ]
-    }
+        page: salesTable.page,
+        summary: {
+          total_rows: rows.length,
+          visible_rows: filteredRows.length,
+          red_orders: rows.filter((row) => row.status_code === "red").length,
+          yellow_orders: rows.filter((row) => row.status_code === "yellow").length,
+          green_orders: rows.filter((row) => row.status_code === "green").length,
+          shortage_orders: rows.filter((row) => row.shortage_status === "缺料").length,
+          overdue_orders: rows.filter((row) => row.due_status === "逾期").length,
+          due_soon_orders: rows.filter((row) => row.due_status === "7天内到期").length
+        },
+        rows: filteredRows,
+        source_status: {
+          sales_orders: { ok: true, rows: salesOrders.length, page: salesTable.page },
+          order_delivery_risks: {
+            ok: (deliveryRisks.body.errors || []).length === 0,
+            checked_orders: deliveryRisks.body.summary.checked_orders,
+            risk_rows: deliveryRisks.body.summary.risk_rows
+          },
+          order_shortages: {
+            ok: (shortages.body.errors || []).length === 0,
+            checked_orders: shortages.body.summary.checked_orders,
+            shortage_rows: shortages.body.summary.shortage_rows
+          }
+        },
+        notes: [
+          "订单管理中心第一版按销售订单列表聚合交期风险和缺料风险。",
+          "PO 编号后续从合同明细提取；当前列表先显示 ERP 合同号。"
+        ]
+      }
+    };
+  } catch (error) {
+    return {
+      header: { status: 0, message: "offline order center" },
+      body: emptyOrderCenterBody({
+        pageIndex,
+        pageSize,
+        contractLimit,
+        dueSoonDays,
+        scanSize,
+        searchKey,
+        statusFilter,
+        message: summarizeDataSourceError(error)
+      })
+    };
+  }
+}
+
+function emptyOrderCenterBody({ pageIndex, pageSize, contractLimit, dueSoonDays, scanSize, searchKey, statusFilter, message }) {
+  return {
+    model: "order_center",
+    offline: true,
+    scan: {
+      pageindex: pageIndex,
+      pagesize: pageSize,
+      contract_limit: contractLimit,
+      due_soon_days: dueSoonDays,
+      scan_size: scanSize,
+      searchKey,
+      status: statusFilter
+    },
+    page: null,
+    summary: {
+      total_rows: 0,
+      visible_rows: 0,
+      red_orders: 0,
+      yellow_orders: 0,
+      green_orders: 0,
+      shortage_orders: 0,
+      overdue_orders: 0,
+      due_soon_orders: 0
+    },
+    rows: [],
+    source_status: {
+      erp_realtime: { ok: false, message }
+    },
+    notes: [
+      `ERP 数据源暂不可用：${message}`,
+      "当前无法读取实时订单列表；请稍后刷新订单中心。"
+    ]
   };
 }
 
@@ -1065,6 +1116,7 @@ function orderCenterPage(body, url) {
     .pill.green { background: var(--green-soft); color: var(--green); }
     .order-link { color: #176b58; font-weight: 650; text-decoration: none; }
     .order-link:hover { text-decoration: underline; }
+    .notes { margin-top: 12px; color: var(--muted); font-size: 13px; line-height: 1.7; }
     @media (max-width: 880px) {
       header, .toolbar { display: block; }
       .actions, .filters { margin-top: 12px; justify-content: flex-start; }
@@ -1116,6 +1168,7 @@ function orderCenterPage(body, url) {
         </tbody>
       </table>
     </section>
+    <section class="notes">${(body.notes || []).map((note) => `<div>${escapeHtml(note)}</div>`).join("")}</section>
   </main>
 </body>
 </html>`;
@@ -1495,24 +1548,35 @@ function summarizeDataSourceError(error) {
 }
 
 async function queryQuoteCenter(params = {}) {
-  const pending = await queryPendingQuotes(client, {
-    pageindex: params.pageindex || 1,
-    pagesize: params.pagesize || 20,
-    limit: params.limit || 30,
-    searchKey: params.searchKey || "",
-    include_all: params.include_all || ""
-  });
+  let pending;
+  let sourceError = null;
+  try {
+    pending = await queryPendingQuotes(client, {
+      pageindex: params.pageindex || 1,
+      pagesize: params.pagesize || 20,
+      limit: params.limit || 30,
+      searchKey: params.searchKey || "",
+      include_all: params.include_all || ""
+    });
+  } catch (error) {
+    sourceError = summarizeDataSourceError(error);
+  }
   return {
     header: { status: 0, message: "ok" },
     body: {
       model: "quote_center",
       generated_at: new Date().toISOString(),
+      offline: Boolean(sourceError),
       summary: {
-        scanned_projects: pending.body.summary.scanned_projects,
-        pending_quote_projects: pending.body.summary.pending_quote_projects
+        scanned_projects: pending?.body?.summary?.scanned_projects ?? 0,
+        pending_quote_projects: pending?.body?.summary?.pending_quote_projects ?? 0
       },
-      rows: pending.body.rows,
+      rows: pending?.body?.rows || [],
+      source_status: {
+        pending_quotes: { ok: !sourceError, message: sourceError }
+      },
       notes: [
+        ...(sourceError ? [`ERP 数据源暂不可用：${sourceError}`] : []),
         "待报价中心第一版基于项目/商机阶段和金额状态识别。",
         "后续可补充报价责任人、报价截止时间、跟进记录和一键提醒。"
       ]
@@ -1559,22 +1623,29 @@ async function queryProductionCenter(params = {}) {
 }
 
 async function queryExceptionCenter(params = {}) {
-  const dashboard = await queryPmcDashboard({
-    scan_pages: params.scan_pages || 1,
-    scan_size: params.scan_size || 20,
-    contract_limit: params.contract_limit || 5,
-    alert_limit: params.alert_limit || 20,
-    low_stock_threshold: params.low_stock_threshold || 5,
-    old_stock_days: params.old_stock_days || 180,
-    due_soon_days: params.due_soon_days || 7,
-    quote_limit: params.quote_limit || 20
-  });
-  const body = dashboard.body;
+  let dashboard;
+  let sourceError = null;
+  try {
+    dashboard = await queryPmcDashboard({
+      scan_pages: params.scan_pages || 1,
+      scan_size: params.scan_size || 20,
+      contract_limit: params.contract_limit || 5,
+      alert_limit: params.alert_limit || 20,
+      low_stock_threshold: params.low_stock_threshold || 5,
+      old_stock_days: params.old_stock_days || 180,
+      due_soon_days: params.due_soon_days || 7,
+      quote_limit: params.quote_limit || 20
+    });
+  } catch (error) {
+    sourceError = summarizeDataSourceError(error);
+  }
+  const body = dashboard?.body || { summary: {}, sections: {} };
   return {
     header: { status: 0, message: "ok" },
     body: {
       model: "exception_center",
       generated_at: new Date().toISOString(),
+      offline: Boolean(sourceError),
       summary: {
         overdue_orders: body.summary.overdue_delivery_rows || 0,
         due_soon_orders: body.summary.due_soon_delivery_rows || 0,
@@ -1589,7 +1660,11 @@ async function queryExceptionCenter(params = {}) {
         pending_quotes: body.sections.pending_quotes || [],
         low_stock: body.sections.low_stock || []
       },
+      source_status: {
+        pmc_dashboard: { ok: !sourceError, message: sourceError }
+      },
       notes: [
+        ...(sourceError ? [`ERP 数据源暂不可用：${sourceError}`] : []),
         "异常管理中心把交期、缺料、待报价、低库存聚合成统一待办。",
         "后续可增加责任人、处理时限、关闭状态和操作日志。"
       ]
@@ -1608,6 +1683,11 @@ async function queryReportCenter(params = {}) {
     }),
     queryQuoteCenter({ pageindex: 1, pagesize: 20, limit: 20 })
   ]);
+  const sourceNotes = [
+    ...(consoleData.body.offline ? ["驾驶舱实时数据源暂不可用，报表使用本地快照或空数据。"] : []),
+    ...(orderCenter.body.offline ? ["订单中心实时数据源暂不可用，订单状态样本为空。"] : []),
+    ...(quotes.body.offline ? ["待报价实时数据源暂不可用，待报价样本为空。"] : [])
+  ];
   return {
     header: { status: 0, message: "ok" },
     body: {
@@ -1630,6 +1710,7 @@ async function queryReportCenter(params = {}) {
         low_stock: consoleData.body.sections.low_stock
       },
       notes: [
+        ...sourceNotes,
         "报表中心第一版提供可浏览的指标汇总。",
         "Excel 导出、月报模板、供应商绩效和设备利用率需要在后续阶段补齐。"
       ]
