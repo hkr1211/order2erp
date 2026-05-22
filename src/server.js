@@ -23,6 +23,10 @@ const server = http.createServer(async (req, res) => {
           pmc_exceptions: {
             name: "PMC异常视图",
             allowedParams: ["searchKey", "pageindex", "pagesize"]
+          },
+          inventory_alerts: {
+            name: "库存异常视图",
+            allowedParams: ["cks", "searchKey", "title", "order1", "scan_size", "scan_pages", "alert_limit", "low_stock_threshold", "old_stock_days"]
           }
         }
       });
@@ -40,9 +44,11 @@ const server = http.createServer(async (req, res) => {
       const result =
         viewName === "pmc_exceptions"
           ? await client.queryPmcExceptions(params)
+          : viewName === "inventory_alerts"
+            ? await client.queryInventoryAlerts(params)
           : await client.queryView(viewName, params);
 
-      const normalized = viewName === "pmc_exceptions" ? result.body : normalizeTable(result);
+      const normalized = viewName === "pmc_exceptions" || viewName === "inventory_alerts" ? result.body : normalizeTable(result);
 
       return sendJson(res, 200, {
         view: viewName,
@@ -121,7 +127,8 @@ function agentToolSchema() {
             "production_progress",
             "receivables",
             "payables",
-            "pmc_exceptions"
+            "pmc_exceptions",
+            "inventory_alerts"
           ],
           description: "要查询的业务视图。"
         },
@@ -151,6 +158,10 @@ function agentToolSchema() {
       {
         user: "查最近已入库的物料",
         call: { view: "stock_in_records", filters: { rkzt: "3", pageindex: 1, pagesize: 10 } }
+      },
+      {
+        user: "查一下库存异常",
+        call: { view: "inventory_alerts", filters: { scan_pages: 3, alert_limit: 20, low_stock_threshold: 5, old_stock_days: 180 } }
       }
     ]
   };
