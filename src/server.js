@@ -1,6 +1,7 @@
 import http from "node:http";
 import fs from "node:fs";
 import { ErpClient, ERP_VIEWS, normalizeTable, toBusinessView } from "./erpClient.js";
+import { queryOrderDeliveryRisks } from "./orderDeliveryRisks.js";
 import { queryOrderShortages } from "./orderShortages.js";
 
 loadEnvFile();
@@ -37,6 +38,10 @@ const server = http.createServer(async (req, res) => {
             name: "订单缺料扫描视图",
             allowedParams: ["searchKey", "pageindex", "pagesize", "contract_limit", "limit", "scan_size", "cks", "stype", "include_all"]
           },
+          order_delivery_risks: {
+            name: "订单交期风险视图",
+            allowedParams: ["searchKey", "pageindex", "pagesize", "contract_limit", "limit", "due_soon_days", "today", "stype", "include_all"]
+          },
           inventory_alerts: {
             name: "库存异常视图",
             allowedParams: ["cks", "searchKey", "title", "order1", "scan_size", "scan_pages", "alert_limit", "low_stock_threshold", "old_stock_days"]
@@ -56,6 +61,7 @@ const server = http.createServer(async (req, res) => {
               "contract_limit",
               "order_pagesize",
               "order_scan_size",
+              "due_soon_days",
               "cks"
             ]
           }
@@ -81,6 +87,8 @@ const server = http.createServer(async (req, res) => {
             ? await client.queryContractShortages(params)
           : viewName === "order_shortages"
             ? await queryOrderShortages(client, params)
+          : viewName === "order_delivery_risks"
+            ? await queryOrderDeliveryRisks(client, params)
           : viewName === "inventory_alerts"
             ? await client.queryInventoryAlerts(params)
           : viewName === "pmc_dashboard"
@@ -92,6 +100,7 @@ const server = http.createServer(async (req, res) => {
         viewName === "contract_lines" ||
         viewName === "contract_shortages" ||
         viewName === "order_shortages" ||
+        viewName === "order_delivery_risks" ||
         viewName === "inventory_alerts" ||
         viewName === "pmc_dashboard"
           ? result.body
@@ -175,9 +184,29 @@ async function queryPmcDashboard(params) {
       issue_count: orderShortages.body.summary.shortage_rows,
       errors: orderShortages.body.errors
     };
+    const deliveryRisks = await queryOrderDeliveryRisks(client, {
+      ...params,
+      pagesize: params.order_pagesize || params.pagesize || 10,
+      contract_limit: params.contract_limit || 5
+    });
+    body.scan.order_delivery_risks = deliveryRisks.body.scan;
+    body.summary.delivery_risk_orders = deliveryRisks.body.summary.risk_orders;
+    body.summary.delivery_risk_rows = deliveryRisks.body.summary.risk_rows;
+    body.summary.overdue_delivery_rows = deliveryRisks.body.summary.overdue_rows;
+    body.summary.due_soon_delivery_rows = deliveryRisks.body.summary.due_soon_rows;
+    body.sections.delivery_risk_orders = deliveryRisks.body.orders;
+    body.sections.overdue_delivery_rows = deliveryRisks.body.sections.overdue;
+    body.sections.due_soon_delivery_rows = deliveryRisks.body.sections.due_soon;
+    body.source_status.order_delivery_risks = {
+      ok: deliveryRisks.body.summary.errors === 0,
+      scanned_orders: deliveryRisks.body.summary.scanned_orders,
+      checked_orders: deliveryRisks.body.summary.checked_orders,
+      issue_count: deliveryRisks.body.summary.risk_rows,
+      errors: deliveryRisks.body.errors
+    };
     body.notes = [
-      "PMC 综合看板已聚合库存风险、工序计划延期、生产数据源状态和订单缺料扫描。",
-      "订单缺料默认只检查最近少量未发货/未出库合同；可用 contract_limit 调整扫描量。"
+      "PMC 综合看板已聚合库存风险、工序计划延期、生产数据源状态、订单缺料和订单交期风险。",
+      "订单类风险默认只检查最近少量未发货/未出库合同；可用 contract_limit 调整扫描量。"
     ];
   } catch (error) {
     dashboard.body.source_status.order_shortages = {
@@ -204,6 +233,7 @@ function agentToolSchema() {
             "contract_lines",
             "contract_shortages",
             "order_shortages",
+            "order_delivery_risks",
             "inventory",
             "inventory_details",
             "warehouses",
@@ -248,6 +278,10 @@ function agentToolSchema() {
       {
         user: "最近哪些订单缺料？",
         call: { view: "order_shortages", filters: { pageindex: 1, pagesize: 10, contract_limit: 5, scan_size: 100 } }
+      },
+      {
+        user: "哪些订单快到交期或者已经延期？",
+        call: { view: "order_delivery_risks", filters: { pageindex: 1, pagesize: 10, contract_limit: 5, due_soon_days: 7 } }
       },
       {
         user: "查一下钼产品库存",
