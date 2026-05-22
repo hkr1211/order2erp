@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node src/server.js",
-    "check": "node --check src/server.js && node --check src/erpClient.js"
+    "check": "node --check src/server.js && node --check src/erpClient.js && node --check src/orderShortages.js"
   },
   "engines": {
     "node": ">=18"
