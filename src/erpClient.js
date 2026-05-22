@@ -161,9 +161,9 @@ export const ERP_VIEWS = {
   },
   production_progress: {
     name: "生产进度视图",
-    kind: "modern",
+    kind: "helper",
     path: "/webapi/apiHelper/produce/ProcedureProgre/GetProcedureProgres",
-    defaultParams: {},
+    defaultParams: { pageindex: "1", pagesize: "20" },
     allowedParams: [
       "searchKey",
       "pageindex",
@@ -174,6 +174,37 @@ export const ERP_VIEWS = {
       "productId",
       "procedureId"
     ]
+  },
+  material_orders: {
+    name: "领料视图",
+    kind: "helper",
+    path: "/webapi/apiHelper/produce/MaterialOrder/GetMaterialOrders",
+    defaultParams: { pageindex: "1", pagesize: "20" },
+    allowedParams: ["searchKey", "pageindex", "pagesize", "dateStart", "dateEnd", "orderNo", "productId"]
+  },
+  production_boms: {
+    name: "物料清单视图",
+    kind: "modern",
+    path: "/webapi/v3/produceV2/bom/list",
+    defaultParams: { page_size: "20", page_index: "1" },
+    paramAliases: {
+      pagesize: "page_size",
+      pageindex: "page_index",
+      searchKey: "title"
+    },
+    allowedParams: ["title", "page_index", "page_size"]
+  },
+  procedure_plans: {
+    name: "工序计划视图",
+    kind: "modern",
+    path: "/webapi/v3/produceV2/procedure/planlist",
+    defaultParams: { page_size: "20", page_index: "1" },
+    paramAliases: {
+      pagesize: "page_size",
+      pageindex: "page_index",
+      searchKey: "title"
+    },
+    allowedParams: ["title", "page_index", "page_size"]
   },
   receivables: {
     name: "应收/收款视图",
@@ -242,6 +273,9 @@ export class ErpClient {
 
     if (view.kind === "asp") {
       return this.callAsp(view.path, cleanParams, view.cmdkey);
+    }
+    if (view.kind === "helper") {
+      return this.callHelper(view.path, cleanParams);
     }
     return this.callModern(view.path, cleanParams);
   }
@@ -360,12 +394,17 @@ export class ErpClient {
         .filter(([, value]) => value !== undefined && value !== null && value !== "")
         .map(([id, val]) => ({ id, val }))
     };
-    return this.postJson(path, payload);
+    return redactSession(await this.postJson(path, payload));
   }
 
   async callModern(path, params = {}) {
     const session = await this.ensureSession();
-    return this.postJson(path, params, { "ZBAPI-Token": session });
+    return redactSession(await this.postJson(path, params, { "ZBAPI-Token": session }));
+  }
+
+  async callHelper(path, params = {}) {
+    const session = await this.ensureSession();
+    return redactSession(await this.postJson(path, { session, ...params }));
   }
 
   async postJson(path, payload, headers = {}) {
@@ -653,6 +692,13 @@ function clampInt(value, min, max) {
     return min;
   }
   return Math.max(min, Math.min(max, number));
+}
+
+function redactSession(document) {
+  if (document?.header?.session) {
+    document.header.session = "[redacted]";
+  }
+  return document;
 }
 
 function firstValue(...values) {
