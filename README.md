@@ -54,6 +54,7 @@ open 'http://localhost:3000/pmc'
 open 'http://localhost:3000/orders'
 open 'http://localhost:3000/order?ord=合同ord'
 open 'http://localhost:3000/materials'
+open 'http://localhost:3000/procurement'
 open 'http://localhost:3000/quotes'
 open 'http://localhost:3000/production'
 open 'http://localhost:3000/exceptions'
@@ -175,6 +176,7 @@ curl 'http://localhost:3000/agent/tool-schema'
 - 订单中心入口：`http://localhost:3000/orders`
 - 订单详情入口：在订单中心点击订单号，或访问 `http://localhost:3000/order?ord=合同ord`
 - 物料控制中心：`http://localhost:3000/materials`
+- 采购跟催中心：`http://localhost:3000/procurement`
 - 待报价中心：`http://localhost:3000/quotes`
 - 生产进度中心：`http://localhost:3000/production`
 - 异常管理中心：`http://localhost:3000/exceptions`
@@ -189,6 +191,7 @@ curl 'http://localhost:3000/agent/tool-schema'
 - 订单中心：状态灯、客户、负责人、金额、交期风险、缺料状态、相关产品
 - 订单详情：合同基本信息、PO 编号尝试识别、产品明细、交期风险、缺料分析
 - 物料中心：缺料订单、低库存、冻结库存、长库龄库存
+- 采购跟催中心：入库流水、应付付款跟踪入口；采购订单和供应商联系人待接口确认
 - 待报价中心：项目/商机待报价清单
 - 生产中心：ERP 生产进度、领料、BOM、工序计划接口入口
 - 异常中心：交期、缺料、待报价、低库存统一待办池

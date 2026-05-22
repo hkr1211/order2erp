@@ -45,6 +45,12 @@ const server = http.createServer(async (req, res) => {
       return sendHtml(res, 200, materialControlPage(result.body));
     }
 
+    if (req.method === "GET" && url.pathname === "/procurement") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = await queryProcurementCenter(params);
+      return sendHtml(res, 200, procurementCenterPage(result.body));
+    }
+
     if (req.method === "GET" && url.pathname === "/quotes") {
       const params = Object.fromEntries(url.searchParams);
       const result = await queryQuoteCenter(params);
@@ -289,6 +295,7 @@ function homePage() {
     ["PMC 驾驶舱", "/pmc", "老板、PMC、销售共用的一屏总览"],
     ["订单管理中心", "/orders", "订单状态灯、交期风险、缺料标记"],
     ["物料控制中心", "/materials", "缺料订单、低库存、冻结库存和长库龄预警"],
+    ["采购跟催中心", "/procurement", "采购到货、入库、应付付款跟踪入口"],
     ["待报价中心", "/quotes", "集中查看项目/商机中的待报价项目"],
     ["生产进度中心", "/production", "生产进度、领料、BOM 和工序计划数据入口"],
     ["异常管理中心", "/exceptions", "交期、缺料、库存、报价异常统一待办"],
@@ -686,6 +693,16 @@ function labelFor(key) {
     delivered_qty: "已交数量",
     line_id: "明细ID",
     matched_by: "匹配方式",
+    receipt_no: "入库单号",
+    quantity: "数量",
+    warehouse_keeper: "库管员",
+    applicant: "申请人",
+    receipt_status: "入库状态",
+    receipt_type: "入库类别",
+    application_time: "申请时间",
+    confirmed_time: "确认时间",
+    warehouse_title: "仓库",
+    source_errors: "数据源异常",
     warehouse_status: "出库状态",
     delivery_status: "发货状态",
     payment_status: "收款状态",
@@ -1569,6 +1586,64 @@ function summarizeDataSourceError(error) {
   return message.length > 120 ? `${message.slice(0, 120)}...` : message;
 }
 
+async function queryProcurementCenter(params = {}) {
+  const pageindex = params.pageindex || 1;
+  const pagesize = params.pagesize || 20;
+  const [stockInResult, payablesResult] = await Promise.allSettled([
+    client.queryView("stock_in_records", {
+      pageindex,
+      pagesize,
+      rkzt: params.rkzt || "",
+      searchKey: params.searchKey || ""
+    }),
+    client.queryView("payables", {
+      pageindex,
+      pagesize,
+      searchKey: params.searchKey || ""
+    })
+  ]);
+  const sourceStatus = {
+    stock_in_records: {
+      ok: stockInResult.status === "fulfilled",
+      message: stockInResult.status === "rejected" ? summarizeDataSourceError(stockInResult.reason) : null
+    },
+    payables: {
+      ok: payablesResult.status === "fulfilled",
+      message: payablesResult.status === "rejected" ? summarizeDataSourceError(payablesResult.reason) : null
+    }
+  };
+  const sourceNotes = Object.entries(sourceStatus)
+    .filter(([, status]) => !status.ok)
+    .map(([name, status]) => `${name} 数据源暂不可用：${status.message}`);
+  const stockInTable = stockInResult.status === "fulfilled" ? normalizeTable(stockInResult.value) : { rows: [], page: null };
+  const stockInRows = stockInResult.status === "fulfilled" ? toBusinessView("stock_in_records", stockInTable).rows : [];
+  const payableTable = payablesResult.status === "fulfilled" ? normalizeTable(payablesResult.value) : { rows: [], page: null };
+
+  return {
+    header: { status: 0, message: "ok" },
+    body: {
+      model: "procurement_center",
+      generated_at: new Date().toISOString(),
+      offline: sourceNotes.length > 0,
+      summary: {
+        inbound_records: stockInRows.length,
+        payable_records: payableTable.rows.length,
+        source_errors: sourceNotes.length
+      },
+      sections: {
+        stock_in_records: stockInRows,
+        payables: payableTable.rows
+      },
+      source_status: sourceStatus,
+      notes: [
+        ...sourceNotes,
+        "采购跟催中心 V1 先使用入库流水和应付付款作为采购到货/付款跟踪入口。",
+        "后续需要确认智邦采购订单接口和供应商联系人字段，再补采购单预计到货、跟催记录和一键邮件。"
+      ]
+    }
+  };
+}
+
 async function queryQuoteCenter(params = {}) {
   let pending;
   let sourceError = null;
@@ -1849,6 +1924,27 @@ function quoteCenterPage(body) {
   });
 }
 
+function procurementCenterPage(body) {
+  return modulePage({
+    title: "采购跟催中心",
+    subtitle: "先用入库流水和应付付款做采购到货/付款跟踪入口，后续补采购订单和供应商跟催。",
+    summary: [
+      ["入库记录", body.summary.inbound_records],
+      ["应付记录", body.summary.payable_records],
+      ["数据源异常", body.summary.source_errors]
+    ],
+    panels: [
+      modulePanel("采购到货/入库记录", body.sections.stock_in_records, ["receipt_no", "title", "quantity", "receipt_status", "receipt_type", "warehouse_keeper", "applicant", "confirmed_time"]),
+      modulePanel("应付/付款记录", body.sections.payables, ["title", "supplier", "amount", "payment_status", "created_date", "owner"])
+    ],
+    notes: body.notes,
+    actions: [
+      ["入库接口", "/api/stock_in_records?pageindex=1&pagesize=20"],
+      ["应付接口", "/api/payables?pageindex=1&pagesize=20"]
+    ]
+  });
+}
+
 function productionCenterPage(body) {
   return modulePage({
     title: "生产进度中心",
@@ -2058,7 +2154,7 @@ function pmcGoalPage() {
     ["异常管理中心", "已完成V1入口", "交期、缺料、库存、报价异常待办池"],
     ["报表中心", "已完成V1入口", "管理指标汇总；Excel导出待开发"],
     ["排产甘特图", "待开发V2", "需要确认ERP工单/设备/工序计划真实字段"],
-    ["采购跟催", "待开发V2", "需要采购订单、供应商联系人和在途字段"],
+    ["采购跟催", "已完成V1入口", "先接入库流水和应付付款；采购订单/供应商联系人待确认"],
     ["权限登录", "暂缓", "当前按用户要求为内网免登录版"]
   ];
   return modulePage({
