@@ -25,6 +25,13 @@ export const ERP_VIEWS = {
       "_rpt_sort"
     ]
   },
+  contract_detail: {
+    name: "销售合同详情视图",
+    kind: "modern",
+    path: "/webapi/v3/sales/contract/detail",
+    defaultParams: { ord: "0" },
+    allowedParams: ["ord"]
+  },
   inventory: {
     name: "库存视图",
     kind: "modern",
@@ -385,6 +392,28 @@ export class ErpClient {
     };
   }
 
+  async queryContractLines(params = {}) {
+    const detail = await this.queryView("contract_detail", params);
+    const contract = detail?.Data || {};
+    const lines = Array.isArray(contract.contractlist) ? contract.contractlist : [];
+
+    return {
+      header: { status: 0, message: "ok" },
+      body: {
+        model: "contract_lines",
+        contract: mapContractDetail(contract),
+        rows: lines.map(mapContractLine),
+        counts: {
+          lines: lines.length
+        },
+        notes: [
+          "合同明细是缺料订单计算的需求量来源。",
+          "当前销售合同列表权限返回 0 行；拿到真实合同 ord 后可直接调用本视图读取产品需求明细。"
+        ]
+      }
+    };
+  }
+
   async queryPmcDashboard(params = {}) {
     const alertLimit = clampInt(params.alert_limit || params.limit || 20, 1, 200);
     const today = params.today ? new Date(params.today) : new Date();
@@ -523,6 +552,15 @@ export class ErpClient {
 }
 
 export function normalizeTable(document) {
+  if (document?.Data && typeof document.Data === "object") {
+    return {
+      rows: [document.Data],
+      columns: [],
+      page: null,
+      raw: document
+    };
+  }
+
   const table =
     document?.body?.source?.table ||
     document?.body?.report?.source?.table ||
@@ -578,6 +616,11 @@ export function toBusinessView(viewName, normalized) {
       page: normalized.page,
       rows: normalized.rows.map(mapSalesOrder)
     };
+  }
+
+  if (viewName === "contract_detail") {
+    const contract = normalized.rows[0] || {};
+    return mapContractDetail(contract);
   }
 
   if (viewName === "inventory" || viewName === "inventory_details") {
@@ -663,6 +706,41 @@ function mapSalesOrder(row) {
       row.kpjz === "未开票" ? "未开票" : null,
       row.spzt && row.spzt !== "审批通过" ? row.spzt : null
     ].filter(Boolean),
+    raw: row
+  };
+}
+
+function mapContractDetail(row) {
+  return {
+    erp_id: row.Ord || row.ord || null,
+    order_no: row.Htid || row.htid || null,
+    title: row.Title || row.title || null,
+    customer: row.CateName || row.cateName || null,
+    owner: row.Person1 || row.person1 || null,
+    signed_date: row.Date3 || row.date3 || null,
+    delivery_date: row.Date7 || row.date7 || null,
+    amount: parseMoney(firstValue(row.Money1, row.money1)),
+    received_amount: parseMoney(firstValue(row.HkMoney1, row.hkMoney1)),
+    approval_status: row.SpStatus || row.spStatus || null,
+    detail_status: row.mZt1 || null,
+    delivery_status: row.mZt2 || null,
+    lines_count: Array.isArray(row.contractlist) ? row.contractlist.length : 0,
+    lines: Array.isArray(row.contractlist) ? row.contractlist.map(mapContractLine) : [],
+    raw: row
+  };
+}
+
+function mapContractLine(row) {
+  return {
+    line_id: row.Ord || row.ord || row.ID || row.id || null,
+    product_name: row.Title || row.title || row.CpName || row.cpname || null,
+    product_code: row.Order1 || row.order1 || row.CpBh || row.cpbh || null,
+    product_model: row.Type1 || row.type1 || row.CpXh || row.cpxh || null,
+    unit: row.Unit || row.unit || row.UnitName || row.unitname || null,
+    demand_qty: parseNumber(firstValue(row.Num1, row.num1, row.Num, row.num)),
+    delivered_qty: parseNumber(firstValue(row.SendNum, row.sendNum, row.FhNum, row.fhnum)),
+    remaining_qty: parseNumber(firstValue(row.LeftNum, row.leftNum, row.WfhNum, row.wfhnum)),
+    delivery_date: row.Date1 || row.date1 || row.JhDate || row.jhdate || null,
     raw: row
   };
 }
