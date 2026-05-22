@@ -1,6 +1,7 @@
 import http from "node:http";
 import fs from "node:fs";
 import { ErpClient, ERP_VIEWS, normalizeTable, toBusinessView } from "./erpClient.js";
+import { queryOrderShortages } from "./orderShortages.js";
 
 loadEnvFile();
 
@@ -32,6 +33,10 @@ const server = http.createServer(async (req, res) => {
             name: "合同缺料分析视图",
             allowedParams: ["ord", "contract_ord", "cks", "scan_size", "scan_pages"]
           },
+          order_shortages: {
+            name: "订单缺料扫描视图",
+            allowedParams: ["searchKey", "pageindex", "pagesize", "contract_limit", "limit", "scan_size", "cks", "stype", "include_all"]
+          },
           inventory_alerts: {
             name: "库存异常视图",
             allowedParams: ["cks", "searchKey", "title", "order1", "scan_size", "scan_pages", "alert_limit", "low_stock_threshold", "old_stock_days"]
@@ -60,6 +65,8 @@ const server = http.createServer(async (req, res) => {
             ? await client.queryContractLines(params)
           : viewName === "contract_shortages"
             ? await client.queryContractShortages(params)
+          : viewName === "order_shortages"
+            ? await queryOrderShortages(client, params)
           : viewName === "inventory_alerts"
             ? await client.queryInventoryAlerts(params)
           : viewName === "pmc_dashboard"
@@ -70,6 +77,7 @@ const server = http.createServer(async (req, res) => {
         viewName === "pmc_exceptions" ||
         viewName === "contract_lines" ||
         viewName === "contract_shortages" ||
+        viewName === "order_shortages" ||
         viewName === "inventory_alerts" ||
         viewName === "pmc_dashboard"
           ? result.body
@@ -146,6 +154,7 @@ function agentToolSchema() {
             "contract_detail",
             "contract_lines",
             "contract_shortages",
+            "order_shortages",
             "inventory",
             "inventory_details",
             "warehouses",
@@ -185,7 +194,11 @@ function agentToolSchema() {
       },
       {
         user: "分析这个合同有没有缺料",
-        call: { view: "contract_shortages", filters: { ord: 12345, scan_pages: 5, scan_size: 100 } }
+        call: { view: "contract_shortages", filters: { ord: 12345, scan_size: 100 } }
+      },
+      {
+        user: "最近哪些订单缺料？",
+        call: { view: "order_shortages", filters: { pageindex: 1, pagesize: 10, contract_limit: 5, scan_size: 100 } }
       },
       {
         user: "查一下钼产品库存",
