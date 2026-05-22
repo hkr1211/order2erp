@@ -58,6 +58,9 @@ curl 'http://localhost:3000/api/warehouses?pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/products?searchKey=钼&pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/stock_in_records?rkzt=3&pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/stock_in_details?ord=137556&pageindex=1&pagesize=20'
+curl 'http://localhost:3000/api/material_orders?pageindex=1&pagesize=20'
+curl 'http://localhost:3000/api/production_boms?pageindex=1&pagesize=20'
+curl 'http://localhost:3000/api/procedure_plans?pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/pmc_exceptions?pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/inventory_alerts?scan_pages=2&scan_size=50&alert_limit=20&low_stock_threshold=5&old_stock_days=180'
 ```
@@ -66,7 +69,7 @@ curl 'http://localhost:3000/api/inventory_alerts?scan_pages=2&scan_size=50&alert
 
 - `business`：给 OpenClaw/Hermes/对话系统使用的业务字段
 - `normalized`：把 ERP 表格行列转成对象数组后的结构
-- `raw`：ERP 原始响应，便于排错和字段追溯
+- `raw`：ERP 原始响应，便于排错和字段追溯；登录 `session` 会被脱敏
 
 ## Agent 工具
 
@@ -87,6 +90,9 @@ OpenClaw 或 Hermes 可以把本中台注册成一个只读工具：
     "stock_in_records",
     "stock_in_details",
     "production_progress",
+    "material_orders",
+    "production_boms",
+    "procedure_plans",
     "receivables",
     "payables",
     "pmc_exceptions",
@@ -111,6 +117,9 @@ curl 'http://localhost:3000/agent/tool-schema'
 - `stock_in_records`：入库流水，基于 `/webapi/v3/ov1/storemanage/kuin/list`
 - `stock_in_details`：入库产品明细，基于 `/webapi/v3/ov1/storemanage/kuin/MoreKuinList`
 - `production_progress`：生产进度，先接 `/webapi/apiHelper/produce/ProcedureProgre/GetProcedureProgres`
+- `material_orders`：生产领料，基于 `/webapi/apiHelper/produce/MaterialOrder/GetMaterialOrders`
+- `production_boms`：物料清单，基于 `/webapi/v3/produceV2/bom/list`
+- `procedure_plans`：工序计划，基于 `/webapi/v3/produceV2/procedure/planlist`
 - `receivables`：收款/应收查询，基于 `/webapi/v3/ov1/financemanage/moneyback/list`
 - `payables`：付款/应付查询，基于 `/webapi/v3/ov1/financemanage/moneyout/list`
 - `pmc_exceptions`：第一版先聚合未出库合同、未回款合同
@@ -148,6 +157,12 @@ curl 'http://localhost:3000/agent/tool-schema'
 - `GET /api/inventory_alerts?scan_pages=2&scan_size=50&alert_limit=20&low_stock_threshold=5&old_stock_days=180`
 - 第一版规则：可用库存小于等于阈值、冻结库存大于 0、库龄超过阈值
 - 当前扫描前 100 条库存汇总/明细，低库存命中 26 条，冻结库存 0 条，长库龄 0 条
+
+PMC 数据源继续补充：
+
+- `apiHelper` 类生产接口已确认需要在请求体传入 `session`，中台已兼容
+- `production_progress`、`material_orders` 可通过中台完成鉴权调用，当前 ERP 返回空模型或空数据
+- `production_boms`、`procedure_plans` 可通过新版接口调用，当前账号下返回 0 条记录
 
 已验证入库流水可查询：
 
