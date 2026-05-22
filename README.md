@@ -58,6 +58,8 @@ curl 'http://localhost:3000/api/contract_lines?ord=合同ord'
 curl 'http://localhost:3000/api/contract_shortages?ord=合同ord&scan_size=100'
 curl 'http://localhost:3000/api/order_shortages?pageindex=1&pagesize=10&contract_limit=5&scan_size=100'
 curl 'http://localhost:3000/api/order_delivery_risks?pageindex=1&pagesize=10&contract_limit=5&due_soon_days=7'
+curl 'http://localhost:3000/api/projects?pageindex=1&pagesize=20'
+curl 'http://localhost:3000/api/pending_quotes?pageindex=1&pagesize=20&limit=20'
 curl 'http://localhost:3000/api/inventory?searchKey=物料编码&pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/warehouses?pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/products?searchKey=钼&pageindex=1&pagesize=20'
@@ -94,6 +96,8 @@ OpenClaw 或 Hermes 可以把本中台注册成一个只读工具：
     "contract_shortages",
     "order_shortages",
     "order_delivery_risks",
+    "projects",
+    "pending_quotes",
     "inventory",
     "inventory_details",
     "warehouses",
@@ -127,6 +131,8 @@ curl 'http://localhost:3000/agent/tool-schema'
 - `contract_shortages`：合同缺料分析，按合同明细产品编号逐项查询并匹配库存可用量
 - `order_shortages`：订单缺料扫描，自动取最近销售订单并逐单分析缺料
 - `order_delivery_risks`：订单交期风险，按合同明细交期识别延期和临期交付
+- `projects`：项目/商机查询，基于 `/webapi/v3/ov1/salesmanage/chance/list`
+- `pending_quotes`：待报价项目视图，基于项目阶段和金额状态识别待报价项目
 - `inventory`：库存查询，基于新版 `/webapi/v3/store/inventory/InventorySummary`
 - `inventory_details`：库存明细，基于新版 `/webapi/v3/store/inventory/InventoryDetails`
 - `warehouses`：仓库列表，基于 `/webapi/v3/store/WareHouseStructList`
@@ -141,7 +147,7 @@ curl 'http://localhost:3000/agent/tool-schema'
 - `payables`：付款/应付查询，基于 `/webapi/v3/ov1/financemanage/moneyout/list`
 - `pmc_exceptions`：第一版先聚合未出库合同、未回款合同
 - `inventory_alerts`：库存异常视图，聚合低库存、冻结库存、长库龄库存
-- `pmc_dashboard`：PMC 综合看板，聚合库存风险、工序延期、生产数据源状态和订单缺料扫描
+- `pmc_dashboard`：PMC 综合看板，聚合库存风险、工序延期、生产数据源状态、订单缺料扫描、交期风险和待报价项目
 
 ## 下一步
 
@@ -149,7 +155,7 @@ curl 'http://localhost:3000/agent/tool-schema'
 
 - 延期订单：`order_delivery_risks` 已接好第一版合同明细交期扫描
 - 缺料订单：`order_shortages` 已接好第一版订单级扫描；默认取最近未发货/未出库合同并逐单分析缺料
-- 待报价订单：确认项目/报价接口后接入
+- 待报价项目：`pending_quotes` 已接好第一版项目/商机扫描；后续可按公司真实报价流程细化阶段规则
 
 ## 库存接口验证记录
 
@@ -181,11 +187,13 @@ PMC 数据源继续补充：
 - `apiHelper` 类生产接口已确认需要在请求体传入 `session`，中台已兼容
 - `production_progress`、`material_orders` 可通过中台完成鉴权调用，当前 ERP 返回空模型或空数据
 - `production_boms`、`procedure_plans` 可通过新版接口调用，当前账号下返回 0 条记录
-- `pmc_dashboard` 已接入综合看板：低库存、冻结库存、长库龄库存、延期工序计划、数据源状态、订单缺料扫描
+- `pmc_dashboard` 已接入综合看板：低库存、冻结库存、长库龄库存、延期工序计划、数据源状态、订单缺料扫描、订单交期风险、待报价项目
 - `contract_detail` 已确认可用 Token 方式访问；`ord=0` 返回空合同模板，拿到真实合同 `ord` 后可读取 `contractlist` 产品明细，用于后续缺料订单规则
 - `contract_shortages` 已完成第一版规则：按合同明细产品编号逐项查询库存汇总，输出需求量、可用量和缺口量
 - `order_shortages` 已完成第一版规则：自动扫描最近销售订单，汇总存在缺料的订单和明细行
 - `order_delivery_risks` 已完成第一版规则：自动扫描最近销售订单，按合同明细交期输出延期和临期交付明细
+- `projects` 已确认可通过旧版移动端 ASP 格式访问；当前账号可见 1 条项目
+- `pending_quotes` 已完成第一版规则：阶段含报价、询价、方案、核价、定价，或金额均为 0 且未关闭/成交的项目会进入待报价列表
 
 已验证入库流水可查询：
 

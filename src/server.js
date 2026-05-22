@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { ErpClient, ERP_VIEWS, normalizeTable, toBusinessView } from "./erpClient.js";
 import { queryOrderDeliveryRisks } from "./orderDeliveryRisks.js";
 import { queryOrderShortages } from "./orderShortages.js";
+import { queryPendingQuotes } from "./pendingQuotes.js";
 
 loadEnvFile();
 
@@ -42,6 +43,10 @@ const server = http.createServer(async (req, res) => {
             name: "订单交期风险视图",
             allowedParams: ["searchKey", "pageindex", "pagesize", "contract_limit", "limit", "due_soon_days", "today", "stype", "include_all"]
           },
+          pending_quotes: {
+            name: "待报价项目视图",
+            allowedParams: ["searchKey", "title", "xmid", "customer", "cateName", "complete1", "complete2", "pageindex", "pagesize", "limit", "quote_limit", "include_all"]
+          },
           inventory_alerts: {
             name: "库存异常视图",
             allowedParams: ["cks", "searchKey", "title", "order1", "scan_size", "scan_pages", "alert_limit", "low_stock_threshold", "old_stock_days"]
@@ -62,6 +67,8 @@ const server = http.createServer(async (req, res) => {
               "order_pagesize",
               "order_scan_size",
               "due_soon_days",
+              "quote_pagesize",
+              "quote_limit",
               "cks"
             ]
           }
@@ -89,6 +96,8 @@ const server = http.createServer(async (req, res) => {
             ? await queryOrderShortages(client, params)
           : viewName === "order_delivery_risks"
             ? await queryOrderDeliveryRisks(client, params)
+          : viewName === "pending_quotes"
+            ? await queryPendingQuotes(client, params)
           : viewName === "inventory_alerts"
             ? await client.queryInventoryAlerts(params)
           : viewName === "pmc_dashboard"
@@ -101,6 +110,7 @@ const server = http.createServer(async (req, res) => {
         viewName === "contract_shortages" ||
         viewName === "order_shortages" ||
         viewName === "order_delivery_risks" ||
+        viewName === "pending_quotes" ||
         viewName === "inventory_alerts" ||
         viewName === "pmc_dashboard"
           ? result.body
@@ -204,8 +214,21 @@ async function queryPmcDashboard(params) {
       issue_count: deliveryRisks.body.summary.risk_rows,
       errors: deliveryRisks.body.errors
     };
+    const pendingQuotes = await queryPendingQuotes(client, {
+      ...params,
+      pagesize: params.quote_pagesize || params.pagesize || 20,
+      limit: params.quote_limit || params.alert_limit || 20
+    });
+    body.scan.pending_quotes = pendingQuotes.body.scan;
+    body.summary.pending_quote_projects = pendingQuotes.body.summary.pending_quote_projects;
+    body.sections.pending_quotes = pendingQuotes.body.rows;
+    body.source_status.pending_quotes = {
+      ok: true,
+      scanned_projects: pendingQuotes.body.summary.scanned_projects,
+      issue_count: pendingQuotes.body.summary.pending_quote_projects
+    };
     body.notes = [
-      "PMC 综合看板已聚合库存风险、工序计划延期、生产数据源状态、订单缺料和订单交期风险。",
+      "PMC 综合看板已聚合库存风险、工序计划延期、生产数据源状态、订单缺料、订单交期风险和待报价项目。",
       "订单类风险默认只检查最近少量未发货/未出库合同；可用 contract_limit 调整扫描量。"
     ];
   } catch (error) {
@@ -234,6 +257,8 @@ function agentToolSchema() {
             "contract_shortages",
             "order_shortages",
             "order_delivery_risks",
+            "pending_quotes",
+            "projects",
             "inventory",
             "inventory_details",
             "warehouses",
@@ -282,6 +307,10 @@ function agentToolSchema() {
       {
         user: "哪些订单快到交期或者已经延期？",
         call: { view: "order_delivery_risks", filters: { pageindex: 1, pagesize: 10, contract_limit: 5, due_soon_days: 7 } }
+      },
+      {
+        user: "有哪些待报价项目？",
+        call: { view: "pending_quotes", filters: { pageindex: 1, pagesize: 20, limit: 20 } }
       },
       {
         user: "查一下钼产品库存",

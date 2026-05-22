@@ -131,6 +131,30 @@ export const ERP_VIEWS = {
       "_rpt_sort"
     ]
   },
+  projects: {
+    name: "项目/商机视图",
+    kind: "asp",
+    path: "/sysa/mobilephone/salesmanage/chance/list.asp",
+    cmdkey: "refresh",
+    defaultParams: { pagesize: "20", pageindex: "1" },
+    allowedParams: [
+      "stype",
+      "datatype",
+      "ord",
+      "searchKey",
+      "title",
+      "xmid",
+      "khmc",
+      "cateName",
+      "complete1",
+      "complete2",
+      "tdate1",
+      "tdate2",
+      "pagesize",
+      "pageindex",
+      "_rpt_sort"
+    ]
+  },
   stock_in_records: {
     name: "入库流水视图",
     kind: "asp",
@@ -778,6 +802,13 @@ export function toBusinessView(viewName, normalized) {
     };
   }
 
+  if (viewName === "projects") {
+    return {
+      page: normalized.page,
+      rows: normalized.rows.map(mapProjectRow)
+    };
+  }
+
   if (viewName === "stock_in_records") {
     return {
       page: normalized.page,
@@ -969,6 +1000,41 @@ function mapProductRow(row) {
     category: row.fenlei,
     raw: row
   };
+}
+
+function mapProjectRow(row) {
+  return {
+    erp_id: row.ord,
+    project_no: row.xmid,
+    title: row.title,
+    customer: row.cateName,
+    owner: row.zpName || row.sqName || null,
+    created_date: row.date1,
+    follow_stage: row.complete1,
+    project_stage: row.complete2,
+    source: row.sorce,
+    industry: row.trade,
+    currency: row.bz,
+    estimated_amount: parseMoney(row.money1),
+    quoted_amount: parseMoney(row.money2),
+    approval_status: row.spStatus,
+    lead_status: row.lystatus,
+    risk_flags: [
+      isPendingQuoteProject(row) ? "待报价" : null,
+      row.spStatus && row.spStatus !== "审批通过" ? row.spStatus : null
+    ].filter(Boolean),
+    raw: row
+  };
+}
+
+function isPendingQuoteProject(row) {
+  const stageText = [row.complete1, row.complete2, row.bz, row.spStatus].filter(Boolean).join(" ");
+  if (/报价|询价|方案|核价|定价/.test(stageText)) {
+    return true;
+  }
+  const estimatedAmount = parseMoney(row.money1);
+  const quotedAmount = parseMoney(row.money2);
+  return estimatedAmount === 0 && quotedAmount === 0 && !/成交|签约|合同|失败|关闭|作废/.test(stageText);
 }
 
 function mapStockInRecord(row) {
