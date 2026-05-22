@@ -4,8 +4,10 @@ import { ErpClient, ERP_VIEWS, normalizeTable, toBusinessView } from "./erpClien
 import { queryOrderDeliveryRisks } from "./orderDeliveryRisks.js";
 import { queryOrderShortages } from "./orderShortages.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
+import { initLocalDb, latestPmcSnapshot, savePmcSnapshot } from "./localDb.js";
 
 loadEnvFile();
+initLocalDb();
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "127.0.0.1";
@@ -17,6 +19,12 @@ const server = http.createServer(async (req, res) => {
 
     if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/") {
       return sendHtml(res, 200, homePage());
+    }
+
+    if (req.method === "GET" && url.pathname === "/pmc") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = await queryPmcConsole(params);
+      return sendHtml(res, 200, pmcConsolePage(result.body));
     }
 
     if (req.method === "GET" && url.pathname === "/health") {
@@ -75,6 +83,10 @@ const server = http.createServer(async (req, res) => {
               "quote_limit",
               "cks"
             ]
+          },
+          pmc_console: {
+            name: "PMC驾驶舱首页",
+            allowedParams: ["today", "scan_size", "scan_pages", "alert_limit", "contract_limit", "due_soon_days", "quote_limit", "low_stock_threshold", "old_stock_days"]
           }
         }
       });
@@ -106,6 +118,8 @@ const server = http.createServer(async (req, res) => {
             ? await client.queryInventoryAlerts(params)
           : viewName === "pmc_dashboard"
             ? await queryPmcDashboard(params)
+          : viewName === "pmc_console"
+            ? await queryPmcConsole(params)
           : await client.queryView(viewName, params);
 
       const normalized =
@@ -116,7 +130,8 @@ const server = http.createServer(async (req, res) => {
         viewName === "order_delivery_risks" ||
         viewName === "pending_quotes" ||
         viewName === "inventory_alerts" ||
-        viewName === "pmc_dashboard"
+        viewName === "pmc_dashboard" ||
+        viewName === "pmc_console"
           ? result.body
           : normalizeTable(result);
 
@@ -190,6 +205,7 @@ function homePage() {
     ["健康检查", "/health", "确认本地中台是否正在运行"],
     ["全部视图", "/views", "查看可调用的 ERP 查询视图"],
     ["Agent 工具定义", "/agent/tool-schema", "给 OpenClaw 或 Hermes 注册工具时使用"],
+    ["PMC 驾驶舱", "/pmc", "老板、PMC、销售共用的一屏总览"],
     ["PMC 综合看板", "/api/pmc_dashboard?scan_pages=1&scan_size=20&contract_limit=3&alert_limit=10&low_stock_threshold=5&old_stock_days=180&due_soon_days=7&quote_limit=10", "库存、缺料、交期、待报价项目汇总"],
     ["销售订单", "/api/sales_orders?pageindex=1&pagesize=10", "查询最近销售合同/订单"],
     ["订单缺料", "/api/order_shortages?pageindex=1&pagesize=10&contract_limit=3&scan_size=100", "扫描最近未发货订单缺料情况"],
@@ -537,6 +553,7 @@ function viewTitle(viewName) {
     inventory_details: "库存明细",
     inventory_alerts: "库存异常",
     pmc_dashboard: "PMC 综合看板",
+    pmc_console: "PMC 驾驶舱首页",
     warehouses: "仓库列表",
     products: "产品列表",
     stock_in_records: "入库流水",
@@ -562,6 +579,8 @@ function labelFor(key) {
     stock_qty: "库存数量",
     available_qty: "可用数量",
     shortage_qty: "缺口数量",
+    demand_qty: "需求数量",
+    remaining_qty: "未交数量",
     risk_type: "风险类型",
     days_from_today: "距今天数",
     delivery_date: "交期",
@@ -570,6 +589,7 @@ function labelFor(key) {
     amount: "金额",
     estimated_amount: "预计金额",
     quoted_amount: "报价金额",
+    project_stage: "项目阶段",
     warehouse_status: "出库状态",
     delivery_status: "发货状态",
     payment_status: "收款状态",
@@ -589,6 +609,264 @@ function labelFor(key) {
     errors: "错误数"
   };
   return labels[key] || key;
+}
+
+function pmcConsolePage(body) {
+  const cards = [
+    ["今日订单", body.summary.today_orders ?? "--", "今日签订订单数量", "neutral"],
+    ["本月订单", body.summary.month_orders ?? "--", "本月签订订单数量", "neutral"],
+    ["逾期订单", body.summary.overdue_orders, "交期已过且未交付", "danger"],
+    ["7天内交期", body.summary.due_soon_orders, "临近交付窗口", "warning"],
+    ["缺料订单", body.summary.shortage_orders, "按销售订单产品库存计算", "danger"],
+    ["待报价项目", body.summary.pending_quote_projects, "项目/商机待报价", "warning"],
+    ["低库存预警", body.summary.low_stock, "可用库存低于阈值", "warning"]
+  ];
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>蕴杰金属数字 PMC 控制台</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --text: #172033;
+      --muted: #667085;
+      --border: #d9dee7;
+      --green: #176b58;
+      --green-soft: #e8f3ef;
+      --amber: #a15c00;
+      --amber-soft: #fff3d8;
+      --red: #b42318;
+      --red-soft: #fee4e2;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+    main { width: min(1440px, calc(100% - 32px)); margin: 0 auto; padding: 24px 0 36px; }
+    header { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
+    h1 { margin: 0; font-size: 30px; line-height: 1.2; letter-spacing: 0; }
+    .sub { margin-top: 8px; color: var(--muted); font-size: 14px; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .button { min-height: 36px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); text-decoration: none; font-size: 14px; }
+    .button.primary { background: var(--green); border-color: var(--green); color: #ffffff; }
+    .kpis { display: grid; grid-template-columns: repeat(7, minmax(132px, 1fr)); gap: 10px; margin: 18px 0; }
+    .kpi { min-height: 112px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+    .kpi.warning { background: var(--amber-soft); border-color: #f3c77b; }
+    .kpi.danger { background: var(--red-soft); border-color: #f2a7a3; }
+    .kpi .label { color: var(--muted); font-size: 13px; }
+    .kpi .value { margin-top: 10px; font-size: 30px; line-height: 1; font-weight: 750; }
+    .kpi .hint { margin-top: 12px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .layout { display: grid; grid-template-columns: 1.05fr 1fr; gap: 12px; align-items: start; }
+    .panel { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); overflow: hidden; }
+    .panel h2 { margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--border); font-size: 17px; letter-spacing: 0; }
+    .panel h2.danger { color: var(--red); }
+    .panel h2.warning { color: var(--amber); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; font-size: 13px; line-height: 1.45; }
+    th { background: #f0f3f6; color: #344054; font-weight: 650; white-space: nowrap; }
+    tr:last-child td { border-bottom: 0; }
+    .empty { padding: 20px 16px; color: var(--muted); font-size: 14px; }
+    .stack { display: grid; gap: 12px; }
+    .tag { display: inline-block; padding: 3px 7px; border-radius: 999px; background: var(--green-soft); color: var(--green); font-size: 12px; white-space: nowrap; }
+    .tag.danger { background: var(--red-soft); color: var(--red); }
+    .tag.warning { background: var(--amber-soft); color: var(--amber); }
+    .notes { margin-top: 12px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+    @media (max-width: 1180px) {
+      .kpis { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+      .layout { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 720px) {
+      main { width: min(100% - 24px, 1440px); }
+      header { display: block; }
+      .actions { justify-content: flex-start; margin-top: 14px; }
+      h1 { font-size: 24px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>蕴杰金属数字 PMC 控制台</h1>
+        <div class="sub">内网免登录版 · 老板 / PMC / 销售共用 · 更新时间 ${escapeHtml(formatDateTime(body.generated_at))}${body.cached ? " · 读取本地快照" : ""}</div>
+      </div>
+      <div class="actions">
+        <a class="button" href="/">首页</a>
+        <a class="button" href="/api/pmc_console?format=json">查看 JSON</a>
+        <a class="button primary" href="/pmc?refresh=1">刷新驾驶舱</a>
+      </div>
+    </header>
+    <section class="kpis">
+      ${cards.map(([label, value, hint, tone]) => `<div class="kpi ${tone}"><div class="label">${escapeHtml(label)}</div><div class="value">${escapeHtml(value)}</div><div class="hint">${escapeHtml(hint)}</div></div>`).join("\n")}
+    </section>
+    <section class="layout">
+      <div class="stack">
+        ${pmcTablePanel("逾期订单", body.sections.overdue_orders, ["order_no", "customer", "product_name", "remaining_qty", "delivery_date"], "danger")}
+        ${pmcTablePanel("7天内交期订单", body.sections.due_soon_orders, ["order_no", "customer", "product_name", "remaining_qty", "delivery_date"], "warning")}
+        ${pmcTablePanel("缺料订单", body.sections.shortage_orders, ["order_no", "customer", "product_name", "demand_qty", "available_qty", "shortage_qty"], "danger")}
+      </div>
+      <div class="stack">
+        ${pmcTablePanel("待报价项目", body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"], "warning")}
+        ${pmcTablePanel("低库存预警", body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"], "warning")}
+      </div>
+    </section>
+    <section class="notes">
+      ${body.notes.map((note) => `<div>${escapeHtml(note)}</div>`).join("")}
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
+function pmcTablePanel(title, rows, columns, tone = "") {
+  const safeRows = Array.isArray(rows) ? rows.slice(0, 10) : [];
+  return `<section class="panel">
+    <h2 class="${escapeHtml(tone)}">${escapeHtml(title)} <span class="tag ${escapeHtml(tone)}">${safeRows.length}</span></h2>
+    ${
+      safeRows.length
+        ? `<table><thead><tr>${columns.map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${safeRows.map((row) => `<tr>${columns.map((column) => `<td>${formatCell(row?.[column])}</td>`).join("")}</tr>`).join("")}</tbody></table>`
+        : `<div class="empty">当前没有${escapeHtml(title)}。</div>`
+    }
+  </section>`;
+}
+
+async function queryPmcConsole(params = {}) {
+  const refresh = parseBoolean(params.refresh);
+  const cached = latestPmcSnapshot();
+  if (!refresh && cached && Date.now() - new Date(cached.created_at).getTime() < 5 * 60 * 1000) {
+    return {
+      header: { status: 0, message: "ok" },
+      body: {
+        ...cached.payload,
+        cached: true,
+        cache_created_at: cached.created_at
+      }
+    };
+  }
+
+  const today = startOfDay(params.today ? new Date(params.today) : new Date());
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+  const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+  const dashboardParams = {
+    scan_pages: params.scan_pages || 1,
+    scan_size: params.scan_size || 20,
+    contract_limit: params.contract_limit || 3,
+    alert_limit: params.alert_limit || 10,
+    low_stock_threshold: params.low_stock_threshold || 5,
+    old_stock_days: params.old_stock_days || 180,
+    due_soon_days: params.due_soon_days || 7,
+    quote_limit: params.quote_limit || 10,
+    today: formatDate(today)
+  };
+
+  const [dashboard, todayOrders, monthOrders] = await Promise.all([
+    queryPmcDashboard(dashboardParams),
+    querySalesOrderCount({ dateQD_0: formatDate(today), dateQD_1: formatDate(today) }),
+    querySalesOrderCount({ dateQD_0: formatDate(monthStart), dateQD_1: formatDate(monthEnd) })
+  ]);
+
+  const source = dashboard.body;
+  const summary = {
+    today_orders: todayOrders.count,
+    month_orders: monthOrders.count,
+    overdue_orders: uniqueCount(source.sections.overdue_delivery_rows || [], "order_no"),
+    due_soon_orders: uniqueCount(source.sections.due_soon_delivery_rows || [], "order_no"),
+    shortage_orders: source.summary.order_shortage_orders || 0,
+    pending_quote_projects: source.summary.pending_quote_projects || 0,
+    low_stock: source.summary.low_stock || 0
+  };
+
+  const body = {
+    model: "pmc_console",
+    generated_at: new Date().toISOString(),
+    scan: {
+      today: formatDate(today),
+      month_start: formatDate(monthStart),
+      month_end: formatDate(monthEnd),
+      dashboard: dashboardParams
+    },
+    summary,
+    sections: {
+      overdue_orders: source.sections.overdue_delivery_rows || [],
+      due_soon_orders: source.sections.due_soon_delivery_rows || [],
+      shortage_orders: source.sections.order_shortage_rows || [],
+      pending_quotes: source.sections.pending_quotes || [],
+      low_stock: source.sections.low_stock || []
+    },
+    source_status: {
+      ...source.source_status,
+      today_orders: todayOrders,
+      month_orders: monthOrders
+    },
+    notes: [
+      "PMC 驾驶舱面向老板、PMC、销售共用，第一版聚焦订单、交期、缺料、待报价和低库存。",
+      "物料齐套第一版按销售订单产品库存计算，不做 BOM 展开；车间报工继续使用 ERP。"
+    ]
+  };
+
+  savePmcSnapshot(body);
+  return {
+    header: { status: 0, message: "ok" },
+    body
+  };
+}
+
+async function querySalesOrderCount(params) {
+  try {
+    const result = await client.queryView("sales_orders", {
+      ...params,
+      pageindex: "1",
+      pagesize: "1"
+    });
+    const table = normalizeTable(result);
+    const page = table.page || {};
+    return {
+      ok: true,
+      count: Number(page.recordcount ?? page.RecordCount ?? table.rows.length ?? 0),
+      page
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      count: null,
+      message: error.message
+    };
+  }
+}
+
+function uniqueCount(rows, key) {
+  return new Set(rows.map((row) => row?.[key]).filter(Boolean)).size;
+}
+
+function startOfDay(date) {
+  const copy = new Date(date);
+  copy.setHours(0, 0, 0, 0);
+  return copy;
+}
+
+function formatDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatDateTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return `${formatDate(date)} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function parseBoolean(value) {
+  if (value === true || value === 1) {
+    return true;
+  }
+  const text = value === undefined || value === null ? "" : String(value).trim().toLowerCase();
+  return text === "1" || text === "true" || text === "yes";
 }
 
 async function queryPmcDashboard(params) {
@@ -692,7 +970,8 @@ function agentToolSchema() {
             "payables",
             "pmc_exceptions",
             "inventory_alerts",
-            "pmc_dashboard"
+            "pmc_dashboard",
+            "pmc_console"
           ],
           description: "要查询的业务视图。"
         },
@@ -758,6 +1037,10 @@ function agentToolSchema() {
       {
         user: "给我看 PMC 综合异常",
         call: { view: "pmc_dashboard", filters: { scan_pages: 2, scan_size: 50, contract_limit: 5, alert_limit: 20, low_stock_threshold: 5, old_stock_days: 180 } }
+      },
+      {
+        user: "打开 PMC 驾驶舱首页",
+        call: { view: "pmc_console", filters: { scan_pages: 1, scan_size: 20, contract_limit: 3, alert_limit: 10 } }
       }
     ]
   };
