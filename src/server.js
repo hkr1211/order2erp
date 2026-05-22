@@ -33,6 +33,12 @@ const server = http.createServer(async (req, res) => {
       return sendHtml(res, 200, orderCenterPage(result.body, url));
     }
 
+    if (req.method === "GET" && url.pathname === "/order") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = await queryOrderDetail(params);
+      return sendHtml(res, 200, orderDetailPage(result.body, url));
+    }
+
     if (req.method === "GET" && url.pathname === "/health") {
       return sendJson(res, 200, { ok: true, service: "erp-query-hub" });
     }
@@ -97,6 +103,10 @@ const server = http.createServer(async (req, res) => {
           order_center: {
             name: "订单管理中心",
             allowedParams: ["searchKey", "pageindex", "pagesize", "contract_limit", "due_soon_days", "scan_size", "status"]
+          },
+          order_detail: {
+            name: "订单穿透详情",
+            allowedParams: ["ord", "due_soon_days", "scan_size", "cks", "today"]
           }
         }
       });
@@ -132,6 +142,8 @@ const server = http.createServer(async (req, res) => {
             ? await queryPmcConsole(params)
           : viewName === "order_center"
             ? await queryOrderCenter(params)
+          : viewName === "order_detail"
+            ? await queryOrderDetail(params)
           : await client.queryView(viewName, params);
 
       const normalized =
@@ -144,7 +156,8 @@ const server = http.createServer(async (req, res) => {
         viewName === "inventory_alerts" ||
         viewName === "pmc_dashboard" ||
         viewName === "pmc_console" ||
-        viewName === "order_center"
+        viewName === "order_center" ||
+        viewName === "order_detail"
           ? result.body
           : normalizeTable(result);
 
@@ -561,6 +574,7 @@ function viewTitle(viewName) {
     contract_shortages: "合同缺料分析",
     order_shortages: "订单缺料扫描",
     order_delivery_risks: "订单交期风险",
+    order_detail: "订单穿透详情",
     projects: "项目/商机",
     pending_quotes: "待报价项目",
     inventory: "库存查询",
@@ -605,6 +619,11 @@ function labelFor(key) {
     estimated_amount: "预计金额",
     quoted_amount: "报价金额",
     project_stage: "项目阶段",
+    po_no: "PO编号",
+    unit: "单位",
+    delivered_qty: "已交数量",
+    line_id: "明细ID",
+    matched_by: "匹配方式",
     warehouse_status: "出库状态",
     delivery_status: "发货状态",
     payment_status: "收款状态",
@@ -891,6 +910,7 @@ function mapOrderCenterRow(order, riskIndex, shortageIndex) {
   const statusCode = dueStatus === "逾期" || shortageStatus === "缺料" ? "red" : dueStatus === "7天内到期" ? "yellow" : "green";
   const statusText = statusCode === "red" ? "紧急" : statusCode === "yellow" ? "预警" : "正常";
   return {
+    erp_id: order.erp_id,
     status_light: statusCode === "red" ? "红" : statusCode === "yellow" ? "黄" : "绿",
     status_code: statusCode,
     status_text: statusText,
@@ -1000,6 +1020,8 @@ function orderCenterPage(body, url) {
     .pill.red { background: var(--red-soft); color: var(--red); }
     .pill.yellow { background: var(--amber-soft); color: var(--amber); }
     .pill.green { background: var(--green-soft); color: var(--green); }
+    .order-link { color: #176b58; font-weight: 650; text-decoration: none; }
+    .order-link:hover { text-decoration: underline; }
     @media (max-width: 880px) {
       header, .toolbar { display: block; }
       .actions, .filters { margin-top: 12px; justify-content: flex-start; }
@@ -1068,9 +1090,12 @@ function orderCenterJsonHref(url) {
 
 function orderCenterRowHtml(row) {
   const tone = row.status_code === "red" ? "red" : row.status_code === "yellow" ? "yellow" : "green";
+  const orderLink = row.erp_id
+    ? `<a class="order-link" href="/order?ord=${encodeURIComponent(row.erp_id)}">${escapeHtml(row.order_no)}</a>`
+    : escapeHtml(row.order_no);
   return `<tr>
     <td><span class="light"><span class="dot ${tone}"></span>${escapeHtml(row.status_text)}</span></td>
-    <td>${escapeHtml(row.order_no)}</td>
+    <td>${orderLink}</td>
     <td>${escapeHtml(row.customer)}</td>
     <td>${escapeHtml(row.owner)}</td>
     <td>${escapeHtml(row.amount)}</td>
@@ -1085,6 +1110,272 @@ function orderCenterRowHtml(row) {
     <td>${escapeHtml(row.payment_status)}</td>
     <td>${escapeHtml(row.approval_status)}</td>
   </tr>`;
+}
+
+async function queryOrderDetail(params = {}) {
+  const ord = params.ord || params.contract_ord;
+  if (!ord) {
+    return {
+      header: { status: 0, message: "ok" },
+      body: {
+        model: "order_detail",
+        contract: null,
+        rows: [],
+        sections: { delivery_risks: [], shortage_rows: [] },
+        summary: { lines: 0, delivery_risks: 0, shortage_rows: 0 },
+        notes: ["请传入合同 ord，例如 /order?ord=17328。"]
+      }
+    };
+  }
+
+  const dueSoonDays = clampInt(params.due_soon_days || 7, 0, 365);
+  const scanSize = clampInt(params.scan_size || 100, 1, 500);
+  const today = startOfDay(params.today ? new Date(params.today) : new Date());
+  const dueSoonCutoff = addDays(today, dueSoonDays);
+
+  const [contractLines, shortages, salesResult] = await Promise.all([
+    client.queryContractLines({ ord }),
+    client.queryContractShortages({ ...params, ord, scan_size: scanSize }),
+    client.queryView("sales_orders", {
+      ord,
+      pageindex: "1",
+      pagesize: "1"
+    })
+  ]);
+
+  const salesRows = toBusinessView("sales_orders", normalizeTable(salesResult)).rows;
+  const salesOrder = salesRows.find((row) => String(row.erp_id) === String(ord)) || salesRows[0] || {};
+  const contract = {
+    ...contractLines.body.contract,
+    order_no: contractLines.body.contract?.order_no || salesOrder.order_no || null,
+    title: contractLines.body.contract?.title || salesOrder.title || null,
+    customer: salesOrder.customer || contractLines.body.contract?.customer || null,
+    owner: salesOrder.owner || contractLines.body.contract?.owner || null,
+    warehouse_status: salesOrder.warehouse_status || contractLines.body.contract?.detail_status || null,
+    payment_status: salesOrder.payment_status || null,
+    po_no: extractPoNumber(contractLines.body.contract?.raw) || extractPoNumber(contractLines.body.rows)
+  };
+  const deliveryRisks = (contractLines.body.rows || [])
+    .map((line) => mapOrderDetailDeliveryRisk(contract, line, today, dueSoonCutoff))
+    .filter(Boolean);
+  const shortageRows = shortages.body.rows || [];
+
+  return {
+    header: { status: 0, message: "ok" },
+    body: {
+      model: "order_detail",
+      scan: {
+        ord,
+        today: formatDate(today),
+        due_soon_days: dueSoonDays,
+        scan_size: scanSize,
+        cks: params.cks || ""
+      },
+      contract,
+      rows: contractLines.body.rows || [],
+      sections: {
+        delivery_risks: deliveryRisks,
+        shortage_rows: shortageRows
+      },
+      summary: {
+        lines: contractLines.body.counts?.lines || 0,
+        delivery_risks: deliveryRisks.length,
+        overdue_rows: deliveryRisks.filter((row) => row.risk_type === "overdue").length,
+        due_soon_rows: deliveryRisks.filter((row) => row.risk_type === "due_soon").length,
+        shortage_rows: shortageRows.length,
+        shortage_qty: shortageRows.reduce((sum, row) => sum + Number(row.shortage_qty || 0), 0)
+      },
+      notes: [
+        "订单详情页从合同明细读取产品、数量和交期。",
+        "缺料分析第一版按销售订单产品库存计算，不展开 BOM。"
+      ]
+    }
+  };
+}
+
+function mapOrderDetailDeliveryRisk(contract, line, today, dueSoonCutoff) {
+  const deliveryDate = parseDate(line.delivery_date);
+  if (!deliveryDate) {
+    return null;
+  }
+  const deliveryDay = startOfDay(deliveryDate);
+  const remainingQty = firstNumber(line.remaining_qty, line.demand_qty);
+  if (remainingQty !== null && remainingQty <= 0) {
+    return null;
+  }
+
+  const riskType = deliveryDay < today ? "overdue" : deliveryDay <= dueSoonCutoff ? "due_soon" : null;
+  if (!riskType) {
+    return null;
+  }
+  return {
+    order_erp_id: contract?.erp_id || null,
+    order_no: contract?.order_no || null,
+    customer: contract?.customer || null,
+    owner: contract?.owner || null,
+    risk_type: riskType,
+    days_from_today: daysBetween(today, deliveryDay),
+    line_id: line.line_id,
+    product_name: line.product_name,
+    product_code: line.product_code,
+    product_model: line.product_model,
+    unit: line.unit,
+    demand_qty: line.demand_qty,
+    delivered_qty: line.delivered_qty,
+    remaining_qty: remainingQty,
+    delivery_date: line.delivery_date
+  };
+}
+
+function orderDetailPage(body, url) {
+  const contract = body.contract || {};
+  const title = contract.order_no || `合同 ${body.scan?.ord || ""}`;
+  const jsonParams = new URLSearchParams(url.searchParams);
+  jsonParams.set("format", "json");
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)} - 订单详情</title>
+  <style>
+    :root { color-scheme: light; --bg: #f4f6f8; --panel: #ffffff; --text: #172033; --muted: #667085; --border: #d9dee7; --green: #176b58; --green-soft: #e8f3ef; --amber: #a15c00; --amber-soft: #fff3d8; --red: #b42318; --red-soft: #fee4e2; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+    main { width: min(1440px, calc(100% - 32px)); margin: 0 auto; padding: 24px 0 36px; }
+    header { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
+    h1 { margin: 0; font-size: 28px; line-height: 1.2; letter-spacing: 0; }
+    h2 { margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--border); font-size: 17px; letter-spacing: 0; }
+    .sub { margin-top: 8px; color: var(--muted); font-size: 14px; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .button { min-height: 36px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); text-decoration: none; font-size: 14px; }
+    .button.primary { background: var(--green); border-color: var(--green); color: #ffffff; }
+    .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin: 18px 0; }
+    .metric, .info { padding: 13px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+    .metric span, .info span { display: block; color: var(--muted); font-size: 13px; }
+    .metric strong, .info strong { display: block; margin-top: 8px; font-size: 23px; line-height: 1.15; overflow-wrap: anywhere; }
+    .info strong { font-size: 15px; font-weight: 650; }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+    .panel { margin-top: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); overflow: hidden; }
+    .table-wrap { overflow: auto; }
+    table { width: 100%; min-width: 980px; border-collapse: collapse; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; font-size: 13px; line-height: 1.45; }
+    th { background: #f0f3f6; color: #344054; font-weight: 650; white-space: nowrap; }
+    tr:last-child td { border-bottom: 0; }
+    .pill { display: inline-block; padding: 3px 7px; border-radius: 999px; font-size: 12px; white-space: nowrap; }
+    .pill.red { background: var(--red-soft); color: var(--red); }
+    .pill.yellow { background: var(--amber-soft); color: var(--amber); }
+    .pill.green { background: var(--green-soft); color: var(--green); }
+    .empty { padding: 20px 16px; color: var(--muted); font-size: 14px; }
+    .notes { margin-top: 12px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+    @media (max-width: 900px) { header { display: block; } .actions { justify-content: flex-start; margin-top: 14px; } .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } h1 { font-size: 24px; } }
+    @media (max-width: 560px) { main { width: min(100% - 24px, 1440px); } .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>${escapeHtml(title)}</h1>
+        <div class="sub">订单穿透详情 · 合同 ord ${escapeHtml(body.scan?.ord || "")}</div>
+      </div>
+      <div class="actions">
+        <a class="button" href="/orders">订单中心</a>
+        <a class="button" href="/pmc">PMC 驾驶舱</a>
+        <a class="button primary" href="/api/order_detail?${escapeHtml(jsonParams.toString())}">查看 JSON</a>
+      </div>
+    </header>
+    <section class="summary">
+      ${orderMetric("产品明细", body.summary.lines)}
+      ${orderMetric("交期风险", body.summary.delivery_risks)}
+      ${orderMetric("缺料明细", body.summary.shortage_rows)}
+      ${orderMetric("缺口合计", formatNumber(body.summary.shortage_qty))}
+    </section>
+    <section class="grid">
+      ${orderInfo("客户", contract.customer)}
+      ${orderInfo("负责人", contract.owner)}
+      ${orderInfo("PO编号", contract.po_no || "未识别")}
+      ${orderInfo("签订日期", contract.signed_date)}
+      ${orderInfo("合同金额", formatNumber(contract.amount))}
+      ${orderInfo("收款金额", formatNumber(contract.received_amount))}
+      ${orderInfo("审批状态", contract.approval_status)}
+      ${orderInfo("发货状态", contract.delivery_status)}
+    </section>
+    ${detailTablePanel("产品明细", body.rows, ["product_name", "product_code", "product_model", "unit", "demand_qty", "delivered_qty", "remaining_qty", "delivery_date"])}
+    ${detailTablePanel("交期风险", body.sections.delivery_risks, ["risk_type", "days_from_today", "product_name", "product_code", "remaining_qty", "delivery_date"], true)}
+    ${detailTablePanel("缺料分析", body.sections.shortage_rows, ["product_name", "product_code", "product_model", "demand_qty", "available_qty", "stock_qty", "shortage_qty", "matched_by"], true)}
+    <section class="notes">${body.notes.map((note) => `<div>${escapeHtml(note)}</div>`).join("")}</section>
+  </main>
+</body>
+</html>`;
+}
+
+function orderInfo(label, value) {
+  return `<div class="info"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value ?? "")}</strong></div>`;
+}
+
+function detailTablePanel(title, rows, columns, compact = false) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  return `<section class="panel">
+    <h2>${escapeHtml(title)} <span class="pill ${safeRows.length ? "yellow" : "green"}">${safeRows.length}</span></h2>
+    ${
+      safeRows.length
+        ? `<div class="table-wrap"><table${compact ? ' style="min-width:820px"' : ""}><thead><tr>${columns.map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${safeRows.map((row) => `<tr>${columns.map((column) => `<td>${formatDetailCell(column, row?.[column])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
+        : `<div class="empty">当前没有${escapeHtml(title)}。</div>`
+    }
+  </section>`;
+}
+
+function formatDetailCell(column, value) {
+  if (column === "risk_type") {
+    const label = value === "overdue" ? "逾期" : value === "due_soon" ? "7天内到期" : value;
+    const tone = value === "overdue" ? "red" : value === "due_soon" ? "yellow" : "green";
+    return `<span class="pill ${tone}">${escapeHtml(label || "")}</span>`;
+  }
+  if (["demand_qty", "delivered_qty", "remaining_qty", "available_qty", "stock_qty", "shortage_qty"].includes(column)) {
+    return escapeHtml(formatNumber(value));
+  }
+  return formatCell(value);
+}
+
+function extractPoNumber(value) {
+  const candidates = [];
+  collectPoCandidates(value, candidates, 0);
+  const direct = candidates.find((item) => item.keyScore > 0 && item.text);
+  if (direct) {
+    return direct.text;
+  }
+  const pattern = candidates.find((item) => /\bPO[\w/-]{3,}\b/i.test(item.text));
+  return pattern ? pattern.text.match(/\bPO[\w/-]{3,}\b/i)?.[0] || pattern.text : null;
+}
+
+function collectPoCandidates(value, candidates, depth) {
+  if (!value || depth > 3) {
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectPoCandidates(item, candidates, depth + 1);
+    }
+    return;
+  }
+  if (typeof value !== "object") {
+    const text = String(value).trim();
+    if (text) {
+      candidates.push({ text, keyScore: 0 });
+    }
+    return;
+  }
+  for (const [key, raw] of Object.entries(value)) {
+    const text = raw === undefined || raw === null ? "" : String(raw).trim();
+    const keyScore = /(^|_)(po|pono|po_no|purchaseorder|purchase_order)($|_)/i.test(key) || /客户.*单|采购.*单|外贸.*单|PO/i.test(key) ? 1 : 0;
+    if (text && keyScore) {
+      candidates.push({ text, keyScore });
+    }
+    if (raw && typeof raw === "object") {
+      collectPoCandidates(raw, candidates, depth + 1);
+    }
+  }
 }
 
 async function queryPmcConsole(params = {}) {
@@ -1195,10 +1486,59 @@ function uniqueCount(rows, key) {
   return new Set(rows.map((row) => row?.[key]).filter(Boolean)).size;
 }
 
+function firstNumber(...values) {
+  for (const value of values) {
+    const number = parseNumber(value);
+    if (number !== null) {
+      return number;
+    }
+  }
+  return null;
+}
+
+function parseNumber(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  const number = Number(String(value).replace(/,/g, ""));
+  return Number.isFinite(number) ? number : null;
+}
+
+function formatNumber(value) {
+  const number = parseNumber(value);
+  if (number === null) {
+    return value ?? "";
+  }
+  return Number.isInteger(number) ? String(number) : String(Number(number.toFixed(4)));
+}
+
+function parseDate(value) {
+  const text = value === undefined || value === null ? "" : String(value).trim();
+  const yearMatch = text.match(/^(\d{4})-/);
+  if (yearMatch && Number(yearMatch[1]) < 2000) {
+    return null;
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime()) || date.getFullYear() < 2000) {
+    return null;
+  }
+  return date;
+}
+
 function startOfDay(date) {
   const copy = new Date(date);
   copy.setHours(0, 0, 0, 0);
   return copy;
+}
+
+function addDays(date, days) {
+  const copy = new Date(date);
+  copy.setDate(copy.getDate() + days);
+  return copy;
+}
+
+function daysBetween(start, end) {
+  return Math.round((end.getTime() - start.getTime()) / 86400000);
 }
 
 function formatDate(date) {
@@ -1335,7 +1675,8 @@ function agentToolSchema() {
             "inventory_alerts",
             "pmc_dashboard",
             "pmc_console",
-            "order_center"
+            "order_center",
+            "order_detail"
           ],
           description: "要查询的业务视图。"
         },
@@ -1357,6 +1698,10 @@ function agentToolSchema() {
       {
         user: "查一下合同明细",
         call: { view: "contract_lines", filters: { ord: 12345 } }
+      },
+      {
+        user: "打开这个订单的穿透详情",
+        call: { view: "order_detail", filters: { ord: 12345, due_soon_days: 7, scan_size: 100 } }
       },
       {
         user: "分析这个合同有没有缺料",
