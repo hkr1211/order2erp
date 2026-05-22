@@ -69,6 +69,12 @@ const server = http.createServer(async (req, res) => {
       return sendHtml(res, 200, reportCenterPage(result.body));
     }
 
+    if (req.method === "GET" && url.pathname === "/reports/export.csv") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = await queryReportCenter(params);
+      return sendCsv(res, "pmc-report.csv", reportCenterCsv(result.body));
+    }
+
     if (req.method === "GET" && url.pathname === "/goal") {
       return sendHtml(res, 200, pmcGoalPage());
     }
@@ -260,6 +266,14 @@ function sendHtml(res, status, html) {
   res.end(html);
 }
 
+function sendCsv(res, filename, csv) {
+  res.writeHead(200, {
+    "Content-Type": "text/csv; charset=utf-8",
+    "Content-Disposition": `attachment; filename="${filename}"`
+  });
+  res.end(`\ufeff${csv}`);
+}
+
 function homePage() {
   const links = [
     ["健康检查", "/health", "确认本地中台是否正在运行"],
@@ -273,6 +287,7 @@ function homePage() {
     ["生产进度中心", "/production", "生产进度、领料、BOM 和工序计划数据入口"],
     ["异常管理中心", "/exceptions", "交期、缺料、库存、报价异常统一待办"],
     ["报表中心", "/reports", "订单、交期、缺料、报价、库存指标汇总"],
+    ["报表导出", "/reports/export.csv", "导出 Excel 可打开的 PMC 指标 CSV"],
     ["PMC 综合看板", "/api/pmc_dashboard?scan_pages=1&scan_size=20&contract_limit=3&alert_limit=10&low_stock_threshold=5&old_stock_days=180&due_soon_days=7&quote_limit=10", "库存、缺料、交期、待报价项目汇总"],
     ["销售订单", "/api/sales_orders?pageindex=1&pagesize=10", "查询最近销售合同/订单"],
     ["订单缺料", "/api/order_shortages?pageindex=1&pagesize=10&contract_limit=3&scan_size=100", "扫描最近未发货订单缺料情况"],
@@ -1892,8 +1907,55 @@ function reportCenterPage(body) {
       modulePanel("低库存预警", body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"])
     ],
     notes: body.notes,
-    actions: [["刷新", "/reports?refresh=1"]]
+    actions: [
+      ["导出 CSV", "/reports/export.csv"],
+      ["刷新", "/reports?refresh=1"]
+    ]
   });
+}
+
+function reportCenterCsv(body) {
+  const lines = [];
+  appendCsvSection(lines, "PMC指标汇总", [
+    ["指标", "数值"],
+    ...Object.entries({
+      今日订单: body.summary.today_orders,
+      本月订单: body.summary.month_orders,
+      红灯订单: body.summary.red_orders,
+      黄灯订单: body.summary.yellow_orders,
+      绿灯订单: body.summary.green_orders,
+      缺料订单: body.summary.shortage_orders,
+      临期订单: body.summary.due_soon_orders,
+      待报价: body.summary.pending_quote_projects,
+      低库存: body.summary.low_stock
+    })
+  ]);
+  appendCsvSection(lines, "订单状态样本", tableRowsForCsv(body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]));
+  appendCsvSection(lines, "待报价项目", tableRowsForCsv(body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"]));
+  appendCsvSection(lines, "低库存预警", tableRowsForCsv(body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"]));
+  appendCsvSection(lines, "备注", [["内容"], ...(body.notes || []).map((note) => [note])]);
+  return lines.map((row) => row.map(csvCell).join(",")).join("\r\n");
+}
+
+function appendCsvSection(lines, title, rows) {
+  if (lines.length) {
+    lines.push([]);
+  }
+  lines.push([title]);
+  lines.push(...rows);
+}
+
+function tableRowsForCsv(rows, columns) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  return [
+    columns.map(labelFor),
+    ...safeRows.map((row) => columns.map((column) => row?.[column] ?? ""))
+  ];
+}
+
+function csvCell(value) {
+  const text = value === undefined || value === null ? "" : String(value);
+  return `"${text.replace(/"/g, '""')}"`;
 }
 
 function pmcGoalPage() {
