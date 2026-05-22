@@ -53,6 +53,8 @@ curl 'http://localhost:3000/health'
 curl 'http://localhost:3000/views'
 curl 'http://localhost:3000/agent/tool-schema'
 curl 'http://localhost:3000/api/sales_orders?searchKey=客户名&pageindex=1&pagesize=20'
+curl 'http://localhost:3000/api/contract_detail?ord=合同ord'
+curl 'http://localhost:3000/api/contract_lines?ord=合同ord'
 curl 'http://localhost:3000/api/inventory?searchKey=物料编码&pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/warehouses?pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/products?searchKey=钼&pageindex=1&pagesize=20'
@@ -84,6 +86,8 @@ OpenClaw 或 Hermes 可以把本中台注册成一个只读工具：
   "method": "GET",
   "views": [
     "sales_orders",
+    "contract_detail",
+    "contract_lines",
     "inventory",
     "inventory_details",
     "warehouses",
@@ -112,6 +116,8 @@ curl 'http://localhost:3000/agent/tool-schema'
 ## 当前业务视图
 
 - `sales_orders`：销售合同/订单查询，基于 `/webapi/v3/ov1/salesmanage/contract/billlist`
+- `contract_detail`：销售合同详情，基于 `/webapi/v3/sales/contract/detail`
+- `contract_lines`：销售合同产品明细，从合同详情的 `contractlist` 提取
 - `inventory`：库存查询，基于新版 `/webapi/v3/store/inventory/InventorySummary`
 - `inventory_details`：库存明细，基于新版 `/webapi/v3/store/inventory/InventoryDetails`
 - `warehouses`：仓库列表，基于 `/webapi/v3/store/WareHouseStructList`
@@ -167,6 +173,7 @@ PMC 数据源继续补充：
 - `production_progress`、`material_orders` 可通过中台完成鉴权调用，当前 ERP 返回空模型或空数据
 - `production_boms`、`procedure_plans` 可通过新版接口调用，当前账号下返回 0 条记录
 - `pmc_dashboard` 已接入第一版综合看板：低库存、冻结库存、长库龄库存、延期工序计划、数据源状态
+- `contract_detail` 已确认可用 Token 方式访问；`ord=0` 返回空合同模板，拿到真实合同 `ord` 后可读取 `contractlist` 产品明细，用于后续缺料订单规则
 
 已验证入库流水可查询：
 
