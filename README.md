@@ -53,6 +53,12 @@ curl 'http://localhost:3000/health'
 open 'http://localhost:3000/pmc'
 open 'http://localhost:3000/orders'
 open 'http://localhost:3000/order?ord=合同ord'
+open 'http://localhost:3000/materials'
+open 'http://localhost:3000/quotes'
+open 'http://localhost:3000/production'
+open 'http://localhost:3000/exceptions'
+open 'http://localhost:3000/reports'
+open 'http://localhost:3000/goal'
 curl 'http://localhost:3000/views'
 curl 'http://localhost:3000/agent/tool-schema'
 curl 'http://localhost:3000/api/sales_orders?searchKey=客户名&pageindex=1&pagesize=20'
@@ -166,12 +172,23 @@ curl 'http://localhost:3000/agent/tool-schema'
 - 图形化入口：`http://localhost:3000/pmc`
 - 订单中心入口：`http://localhost:3000/orders`
 - 订单详情入口：在订单中心点击订单号，或访问 `http://localhost:3000/order?ord=合同ord`
+- 物料控制中心：`http://localhost:3000/materials`
+- 待报价中心：`http://localhost:3000/quotes`
+- 生产进度中心：`http://localhost:3000/production`
+- 异常管理中心：`http://localhost:3000/exceptions`
+- 报表中心：`http://localhost:3000/reports`
+- PMC 全功能路线：`http://localhost:3000/goal`
 - 用户范围：老板、PMC、销售
 - 运行方式：内网免登录
 - 数据库：SQLite，默认保存到 `data/pmc.db`
 - 首屏指标：今日订单、本月订单、逾期订单、7 天内交期订单、缺料订单、待报价项目、低库存预警
 - 订单中心：状态灯、客户、负责人、金额、交期风险、缺料状态、相关产品
 - 订单详情：合同基本信息、PO 编号尝试识别、产品明细、交期风险、缺料分析
+- 物料中心：缺料订单、低库存、冻结库存、长库龄库存
+- 待报价中心：项目/商机待报价清单
+- 生产中心：ERP 生产进度、领料、BOM、工序计划接口入口
+- 异常中心：交期、缺料、待报价、低库存统一待办池
+- 报表中心：订单、交期、缺料、报价、库存管理指标汇总
 - 物料齐套口径：第一版按销售订单产品库存计算，不做 BOM 展开
 - 车间报工：继续使用 ERP，本中台暂不开发报工入口
 

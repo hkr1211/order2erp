@@ -39,6 +39,40 @@ const server = http.createServer(async (req, res) => {
       return sendHtml(res, 200, orderDetailPage(result.body, url));
     }
 
+    if (req.method === "GET" && url.pathname === "/materials") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = await queryMaterialControl(params);
+      return sendHtml(res, 200, materialControlPage(result.body));
+    }
+
+    if (req.method === "GET" && url.pathname === "/quotes") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = await queryQuoteCenter(params);
+      return sendHtml(res, 200, quoteCenterPage(result.body));
+    }
+
+    if (req.method === "GET" && url.pathname === "/production") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = await queryProductionCenter(params);
+      return sendHtml(res, 200, productionCenterPage(result.body));
+    }
+
+    if (req.method === "GET" && url.pathname === "/exceptions") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = await queryExceptionCenter(params);
+      return sendHtml(res, 200, exceptionCenterPage(result.body));
+    }
+
+    if (req.method === "GET" && url.pathname === "/reports") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = await queryReportCenter(params);
+      return sendHtml(res, 200, reportCenterPage(result.body));
+    }
+
+    if (req.method === "GET" && url.pathname === "/goal") {
+      return sendHtml(res, 200, pmcGoalPage());
+    }
+
     if (req.method === "GET" && url.pathname === "/health") {
       return sendJson(res, 200, { ok: true, service: "erp-query-hub" });
     }
@@ -231,8 +265,14 @@ function homePage() {
     ["健康检查", "/health", "确认本地中台是否正在运行"],
     ["全部视图", "/views", "查看可调用的 ERP 查询视图"],
     ["Agent 工具定义", "/agent/tool-schema", "给 OpenClaw 或 Hermes 注册工具时使用"],
+    ["PMC 全功能路线", "/goal", "查看完整 PMC 平台实施目标和当前完成度"],
     ["PMC 驾驶舱", "/pmc", "老板、PMC、销售共用的一屏总览"],
     ["订单管理中心", "/orders", "订单状态灯、交期风险、缺料标记"],
+    ["物料控制中心", "/materials", "缺料订单、低库存、冻结库存和长库龄预警"],
+    ["待报价中心", "/quotes", "集中查看项目/商机中的待报价项目"],
+    ["生产进度中心", "/production", "生产进度、领料、BOM 和工序计划数据入口"],
+    ["异常管理中心", "/exceptions", "交期、缺料、库存、报价异常统一待办"],
+    ["报表中心", "/reports", "订单、交期、缺料、报价、库存指标汇总"],
     ["PMC 综合看板", "/api/pmc_dashboard?scan_pages=1&scan_size=20&contract_limit=3&alert_limit=10&low_stock_threshold=5&old_stock_days=180&due_soon_days=7&quote_limit=10", "库存、缺料、交期、待报价项目汇总"],
     ["销售订单", "/api/sales_orders?pageindex=1&pagesize=10", "查询最近销售合同/订单"],
     ["订单缺料", "/api/order_shortages?pageindex=1&pagesize=10&contract_limit=3&scan_size=100", "扫描最近未发货订单缺料情况"],
@@ -734,6 +774,9 @@ function pmcConsolePage(body) {
       <div class="actions">
         <a class="button" href="/">首页</a>
         <a class="button" href="/orders">订单中心</a>
+        <a class="button" href="/materials">物料中心</a>
+        <a class="button" href="/exceptions">异常中心</a>
+        <a class="button" href="/reports">报表中心</a>
         <a class="button" href="/api/pmc_console?format=json">查看 JSON</a>
         <a class="button primary" href="/pmc?refresh=1">刷新驾驶舱</a>
       </div>
@@ -1376,6 +1419,402 @@ function collectPoCandidates(value, candidates, depth) {
       collectPoCandidates(raw, candidates, depth + 1);
     }
   }
+}
+
+async function queryMaterialControl(params = {}) {
+  const [shortages, inventoryAlerts] = await Promise.all([
+    queryOrderShortages(client, {
+      pageindex: params.pageindex || 1,
+      pagesize: params.pagesize || 10,
+      contract_limit: params.contract_limit || 5,
+      scan_size: params.scan_size || 100,
+      cks: params.cks || ""
+    }),
+    client.queryInventoryAlerts({
+      scan_pages: params.scan_pages || 1,
+      scan_size: params.inventory_scan_size || params.scan_size || 20,
+      alert_limit: params.alert_limit || 20,
+      low_stock_threshold: params.low_stock_threshold || 5,
+      old_stock_days: params.old_stock_days || 180,
+      cks: params.cks || ""
+    })
+  ]);
+  return {
+    header: { status: 0, message: "ok" },
+    body: {
+      model: "material_control",
+      generated_at: new Date().toISOString(),
+      summary: {
+        shortage_orders: shortages.body.summary.orders_with_shortage,
+        shortage_rows: shortages.body.summary.shortage_rows,
+        low_stock: inventoryAlerts.body.counts.low_stock,
+        frozen_stock: inventoryAlerts.body.counts.frozen_stock,
+        old_stock: inventoryAlerts.body.counts.old_stock
+      },
+      sections: {
+        shortage_rows: shortages.body.rows,
+        low_stock: inventoryAlerts.body.sections.low_stock,
+        frozen_stock: inventoryAlerts.body.sections.frozen_stock,
+        old_stock: inventoryAlerts.body.sections.old_stock
+      },
+      notes: [
+        "物料控制中心第一版聚焦缺料订单和库存异常。",
+        "齐套口径沿用销售订单产品库存，后续可接 BOM 展开和采购在途。"
+      ]
+    }
+  };
+}
+
+async function queryQuoteCenter(params = {}) {
+  const pending = await queryPendingQuotes(client, {
+    pageindex: params.pageindex || 1,
+    pagesize: params.pagesize || 20,
+    limit: params.limit || 30,
+    searchKey: params.searchKey || "",
+    include_all: params.include_all || ""
+  });
+  return {
+    header: { status: 0, message: "ok" },
+    body: {
+      model: "quote_center",
+      generated_at: new Date().toISOString(),
+      summary: {
+        scanned_projects: pending.body.summary.scanned_projects,
+        pending_quote_projects: pending.body.summary.pending_quote_projects
+      },
+      rows: pending.body.rows,
+      notes: [
+        "待报价中心第一版基于项目/商机阶段和金额状态识别。",
+        "后续可补充报价责任人、报价截止时间、跟进记录和一键提醒。"
+      ]
+    }
+  };
+}
+
+async function queryProductionCenter(params = {}) {
+  const pageindex = params.pageindex || 1;
+  const pagesize = params.pagesize || 20;
+  const [progressResult, materialResult, bomResult, procedureResult] = await Promise.all([
+    client.queryView("production_progress", { pageindex, pagesize, searchKey: params.searchKey || "" }),
+    client.queryView("material_orders", { pageindex, pagesize, searchKey: params.searchKey || "" }),
+    client.queryView("production_boms", { page_index: pageindex, page_size: pagesize, searchKey: params.searchKey || "" }),
+    client.queryView("procedure_plans", { page_index: pageindex, page_size: pagesize, searchKey: params.searchKey || "" })
+  ]);
+  const progress = normalizeTable(progressResult);
+  const materials = normalizeTable(materialResult);
+  const boms = normalizeTable(bomResult);
+  const procedures = normalizeTable(procedureResult);
+  return {
+    header: { status: 0, message: "ok" },
+    body: {
+      model: "production_center",
+      generated_at: new Date().toISOString(),
+      summary: {
+        progress_rows: progress.rows.length,
+        material_order_rows: materials.rows.length,
+        bom_rows: boms.rows.length,
+        procedure_plan_rows: procedures.rows.length
+      },
+      sections: {
+        progress: progress.rows,
+        material_orders: materials.rows,
+        boms: boms.rows,
+        procedure_plans: procedures.rows
+      },
+      notes: [
+        "生产进度中心先接 ERP 生产进度、领料、BOM、工序计划接口。",
+        "当前公司车间报工继续使用 ERP；本中台不新增报工入口。"
+      ]
+    }
+  };
+}
+
+async function queryExceptionCenter(params = {}) {
+  const dashboard = await queryPmcDashboard({
+    scan_pages: params.scan_pages || 1,
+    scan_size: params.scan_size || 20,
+    contract_limit: params.contract_limit || 5,
+    alert_limit: params.alert_limit || 20,
+    low_stock_threshold: params.low_stock_threshold || 5,
+    old_stock_days: params.old_stock_days || 180,
+    due_soon_days: params.due_soon_days || 7,
+    quote_limit: params.quote_limit || 20
+  });
+  const body = dashboard.body;
+  return {
+    header: { status: 0, message: "ok" },
+    body: {
+      model: "exception_center",
+      generated_at: new Date().toISOString(),
+      summary: {
+        overdue_orders: body.summary.overdue_delivery_rows || 0,
+        due_soon_orders: body.summary.due_soon_delivery_rows || 0,
+        shortage_orders: body.summary.order_shortage_orders || 0,
+        pending_quotes: body.summary.pending_quote_projects || 0,
+        low_stock: body.summary.low_stock || 0
+      },
+      sections: {
+        overdue_orders: body.sections.overdue_delivery_rows || [],
+        due_soon_orders: body.sections.due_soon_delivery_rows || [],
+        shortage_rows: body.sections.order_shortage_rows || [],
+        pending_quotes: body.sections.pending_quotes || [],
+        low_stock: body.sections.low_stock || []
+      },
+      notes: [
+        "异常管理中心把交期、缺料、待报价、低库存聚合成统一待办。",
+        "后续可增加责任人、处理时限、关闭状态和操作日志。"
+      ]
+    }
+  };
+}
+
+async function queryReportCenter(params = {}) {
+  const [consoleData, orderCenter, quotes] = await Promise.all([
+    queryPmcConsole({ ...params, refresh: params.refresh || "" }),
+    queryOrderCenter({
+      pageindex: params.pageindex || 1,
+      pagesize: params.pagesize || 20,
+      contract_limit: params.contract_limit || 5,
+      due_soon_days: params.due_soon_days || 7
+    }),
+    queryQuoteCenter({ pageindex: 1, pagesize: 20, limit: 20 })
+  ]);
+  return {
+    header: { status: 0, message: "ok" },
+    body: {
+      model: "report_center",
+      generated_at: new Date().toISOString(),
+      summary: {
+        today_orders: consoleData.body.summary.today_orders,
+        month_orders: consoleData.body.summary.month_orders,
+        red_orders: orderCenter.body.summary.red_orders,
+        yellow_orders: orderCenter.body.summary.yellow_orders,
+        green_orders: orderCenter.body.summary.green_orders,
+        shortage_orders: orderCenter.body.summary.shortage_orders,
+        due_soon_orders: consoleData.body.summary.due_soon_orders,
+        pending_quote_projects: quotes.body.summary.pending_quote_projects,
+        low_stock: consoleData.body.summary.low_stock
+      },
+      sections: {
+        order_rows: orderCenter.body.rows,
+        pending_quotes: quotes.body.rows,
+        low_stock: consoleData.body.sections.low_stock
+      },
+      notes: [
+        "报表中心第一版提供可浏览的指标汇总。",
+        "Excel 导出、月报模板、供应商绩效和设备利用率需要在后续阶段补齐。"
+      ]
+    }
+  };
+}
+
+function modulePage({ title, subtitle, summary = [], panels = [], notes = [], actions = [] }) {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)} - 蕴杰金属数字 PMC 控制台</title>
+  <style>
+    :root { color-scheme: light; --bg: #f4f6f8; --panel: #ffffff; --text: #172033; --muted: #667085; --border: #d9dee7; --green: #176b58; --green-soft: #e8f3ef; --amber: #a15c00; --amber-soft: #fff3d8; --red: #b42318; --red-soft: #fee4e2; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+    main { width: min(1440px, calc(100% - 32px)); margin: 0 auto; padding: 24px 0 36px; }
+    header { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
+    h1 { margin: 0; font-size: 28px; line-height: 1.2; letter-spacing: 0; }
+    h2 { margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--border); font-size: 17px; letter-spacing: 0; }
+    .sub { margin-top: 8px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .button { min-height: 36px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); text-decoration: none; font-size: 14px; }
+    .button.primary { background: var(--green); border-color: var(--green); color: #ffffff; }
+    .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 18px 0; }
+    .metric { min-height: 92px; padding: 13px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+    .metric span { display: block; color: var(--muted); font-size: 13px; }
+    .metric strong { display: block; margin-top: 9px; font-size: 25px; line-height: 1; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+    .panel { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); overflow: hidden; }
+    .table-wrap { overflow: auto; }
+    table { width: 100%; min-width: 820px; border-collapse: collapse; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; font-size: 13px; line-height: 1.45; }
+    th { background: #f0f3f6; color: #344054; font-weight: 650; white-space: nowrap; }
+    tr:last-child td { border-bottom: 0; }
+    .empty { padding: 20px 16px; color: var(--muted); font-size: 14px; }
+    .notes { margin-top: 12px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+    .pill { display: inline-block; padding: 3px 7px; border-radius: 999px; background: var(--green-soft); color: var(--green); font-size: 12px; white-space: nowrap; }
+    @media (max-width: 980px) { header, .grid { display: block; } .actions { justify-content: flex-start; margin-top: 14px; } .panel { margin-top: 12px; } h1 { font-size: 24px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>${escapeHtml(title)}</h1>
+        <div class="sub">${escapeHtml(subtitle)}</div>
+      </div>
+      <div class="actions">
+        <a class="button" href="/pmc">PMC 驾驶舱</a>
+        <a class="button" href="/orders">订单中心</a>
+        <a class="button" href="/goal">全功能路线</a>
+        ${actions.map(([label, href]) => `<a class="button primary" href="${escapeHtml(href)}">${escapeHtml(label)}</a>`).join("")}
+      </div>
+    </header>
+    <section class="summary">${summary.map(([label, value]) => `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value ?? "")}</strong></div>`).join("")}</section>
+    <section class="grid">${panels.join("")}</section>
+    <section class="notes">${notes.map((note) => `<div>${escapeHtml(note)}</div>`).join("")}</section>
+  </main>
+</body>
+</html>`;
+}
+
+function modulePanel(title, rows, columns) {
+  const safeRows = Array.isArray(rows) ? rows.slice(0, 20) : [];
+  return `<section class="panel">
+    <h2>${escapeHtml(title)} <span class="pill">${safeRows.length}</span></h2>
+    ${
+      safeRows.length
+        ? `<div class="table-wrap"><table><thead><tr>${columns.map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${safeRows.map((row) => `<tr>${columns.map((column) => `<td>${formatDetailCell(column, row?.[column])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
+        : `<div class="empty">当前没有${escapeHtml(title)}。</div>`
+    }
+  </section>`;
+}
+
+function materialControlPage(body) {
+  return modulePage({
+    title: "物料控制中心",
+    subtitle: "按销售订单产品库存计算缺料，同时监控低库存、冻结库存和长库龄库存。",
+    summary: [
+      ["缺料订单", body.summary.shortage_orders],
+      ["缺料明细", body.summary.shortage_rows],
+      ["低库存", body.summary.low_stock],
+      ["冻结库存", body.summary.frozen_stock],
+      ["长库龄", body.summary.old_stock]
+    ],
+    panels: [
+      modulePanel("缺料明细", body.sections.shortage_rows, ["order_no", "customer", "product_name", "product_code", "demand_qty", "available_qty", "shortage_qty"]),
+      modulePanel("低库存预警", body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"]),
+      modulePanel("冻结库存", body.sections.frozen_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"]),
+      modulePanel("长库龄库存", body.sections.old_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"])
+    ],
+    notes: body.notes,
+    actions: [["查看 JSON", "/api/pmc_dashboard?format=json"]]
+  });
+}
+
+function quoteCenterPage(body) {
+  return modulePage({
+    title: "待报价中心",
+    subtitle: "集中查看项目/商机中的待报价项目，后续承接报价责任人和跟催动作。",
+    summary: [
+      ["扫描项目", body.summary.scanned_projects],
+      ["待报价项目", body.summary.pending_quote_projects]
+    ],
+    panels: [
+      modulePanel("待报价项目", body.rows, ["project_no", "title", "customer", "owner", "project_stage", "estimated_amount", "quoted_amount", "created_date"])
+    ],
+    notes: body.notes,
+    actions: [["查看 JSON", "/api/pending_quotes?format=json&pageindex=1&pagesize=20&limit=20"]]
+  });
+}
+
+function productionCenterPage(body) {
+  return modulePage({
+    title: "生产进度中心",
+    subtitle: "先接 ERP 生产进度、领料、BOM 和工序计划接口；车间报工仍在 ERP 内完成。",
+    summary: [
+      ["生产进度", body.summary.progress_rows],
+      ["领料记录", body.summary.material_order_rows],
+      ["BOM记录", body.summary.bom_rows],
+      ["工序计划", body.summary.procedure_plan_rows]
+    ],
+    panels: [
+      modulePanel("生产进度", body.sections.progress, ["orderNo", "productName", "procedureName", "planNum", "finishNum", "state"]),
+      modulePanel("领料记录", body.sections.material_orders, ["orderNo", "productName", "materialName", "num", "state"]),
+      modulePanel("BOM 数据", body.sections.boms, ["title", "cpname", "cpbh", "num", "unit"]),
+      modulePanel("工序计划", body.sections.procedure_plans, ["orderNo", "productName", "procedureName", "planStartDate", "planEndDate"])
+    ],
+    notes: body.notes,
+    actions: [["刷新", "/production"]]
+  });
+}
+
+function exceptionCenterPage(body) {
+  return modulePage({
+    title: "异常管理中心",
+    subtitle: "把交期、缺料、待报价、库存异常统一成 PMC 待办池。",
+    summary: [
+      ["逾期订单", body.summary.overdue_orders],
+      ["7天内交期", body.summary.due_soon_orders],
+      ["缺料订单", body.summary.shortage_orders],
+      ["待报价", body.summary.pending_quotes],
+      ["低库存", body.summary.low_stock]
+    ],
+    panels: [
+      modulePanel("逾期订单", body.sections.overdue_orders, ["order_no", "customer", "product_name", "remaining_qty", "delivery_date"]),
+      modulePanel("7天内交期", body.sections.due_soon_orders, ["order_no", "customer", "product_name", "remaining_qty", "delivery_date"]),
+      modulePanel("缺料明细", body.sections.shortage_rows, ["order_no", "customer", "product_name", "available_qty", "shortage_qty"]),
+      modulePanel("待报价项目", body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"]),
+      modulePanel("低库存预警", body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"])
+    ],
+    notes: body.notes,
+    actions: [["刷新", "/exceptions"]]
+  });
+}
+
+function reportCenterPage(body) {
+  return modulePage({
+    title: "报表中心",
+    subtitle: "第一版先形成管理指标汇总，后续增加 Excel 导出和月报模板。",
+    summary: [
+      ["今日订单", body.summary.today_orders],
+      ["本月订单", body.summary.month_orders],
+      ["红灯订单", body.summary.red_orders],
+      ["黄灯订单", body.summary.yellow_orders],
+      ["绿灯订单", body.summary.green_orders],
+      ["缺料订单", body.summary.shortage_orders],
+      ["临期订单", body.summary.due_soon_orders],
+      ["待报价", body.summary.pending_quote_projects],
+      ["低库存", body.summary.low_stock]
+    ],
+    panels: [
+      modulePanel("订单状态样本", body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]),
+      modulePanel("待报价项目", body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"]),
+      modulePanel("低库存预警", body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"])
+    ],
+    notes: body.notes,
+    actions: [["刷新", "/reports?refresh=1"]]
+  });
+}
+
+function pmcGoalPage() {
+  const rows = [
+    ["PMC驾驶舱首页", "已完成V1", "KPI、逾期、临期、缺料、待报价、低库存"],
+    ["订单管理中心", "已完成V1", "订单状态灯、搜索、过滤、订单详情穿透"],
+    ["物料控制中心", "已完成V1入口", "缺料订单、低库存、冻结库存、长库龄"],
+    ["待报价中心", "已完成V1入口", "项目/商机待报价清单"],
+    ["生产进度中心", "已完成V1入口", "ERP生产进度、领料、BOM、工序计划数据入口"],
+    ["异常管理中心", "已完成V1入口", "交期、缺料、库存、报价异常待办池"],
+    ["报表中心", "已完成V1入口", "管理指标汇总；Excel导出待开发"],
+    ["排产甘特图", "待开发V2", "需要确认ERP工单/设备/工序计划真实字段"],
+    ["采购跟催", "待开发V2", "需要采购订单、供应商联系人和在途字段"],
+    ["权限登录", "暂缓", "当前按用户要求为内网免登录版"]
+  ];
+  return modulePage({
+    title: "PMC 全功能路线",
+    subtitle: "目标是逐步实现 KIMI 设计文档中的完整 PMC 平台；先用智邦 ERP API 和 SQLite 做内网免登录 V1。",
+    summary: [
+      ["已完成V1", 7],
+      ["待开发V2", 2],
+      ["暂缓项", 1]
+    ],
+    panels: [
+      `<section class="panel"><h2>功能路线 <span class="pill">${rows.length}</span></h2><div class="table-wrap"><table><thead><tr><th>模块</th><th>状态</th><th>说明</th></tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></section>`
+    ],
+    notes: [
+      "短期优先：让老板/PMC/销售能看到真实订单、交期、缺料、库存和待报价。",
+      "中期重点：补采购订单和供应商跟催，再做排产甘特图。",
+      "长期重点：权限、审批、通知、Excel报表、移动端适配。"
+    ]
+  });
 }
 
 async function queryPmcConsole(params = {}) {
