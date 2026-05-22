@@ -27,6 +27,10 @@ const server = http.createServer(async (req, res) => {
           inventory_alerts: {
             name: "库存异常视图",
             allowedParams: ["cks", "searchKey", "title", "order1", "scan_size", "scan_pages", "alert_limit", "low_stock_threshold", "old_stock_days"]
+          },
+          pmc_dashboard: {
+            name: "PMC综合看板",
+            allowedParams: ["searchKey", "pageindex", "pagesize", "scan_size", "scan_pages", "alert_limit", "low_stock_threshold", "old_stock_days", "today"]
           }
         }
       });
@@ -46,9 +50,11 @@ const server = http.createServer(async (req, res) => {
           ? await client.queryPmcExceptions(params)
           : viewName === "inventory_alerts"
             ? await client.queryInventoryAlerts(params)
+          : viewName === "pmc_dashboard"
+            ? await client.queryPmcDashboard(params)
           : await client.queryView(viewName, params);
 
-      const normalized = viewName === "pmc_exceptions" || viewName === "inventory_alerts" ? result.body : normalizeTable(result);
+      const normalized = viewName === "pmc_exceptions" || viewName === "inventory_alerts" || viewName === "pmc_dashboard" ? result.body : normalizeTable(result);
 
       return sendJson(res, 200, {
         view: viewName,
@@ -131,7 +137,8 @@ function agentToolSchema() {
             "receivables",
             "payables",
             "pmc_exceptions",
-            "inventory_alerts"
+            "inventory_alerts",
+            "pmc_dashboard"
           ],
           description: "要查询的业务视图。"
         },
@@ -173,6 +180,10 @@ function agentToolSchema() {
       {
         user: "查一下库存异常",
         call: { view: "inventory_alerts", filters: { scan_pages: 3, alert_limit: 20, low_stock_threshold: 5, old_stock_days: 180 } }
+      },
+      {
+        user: "给我看 PMC 综合异常",
+        call: { view: "pmc_dashboard", filters: { scan_pages: 2, scan_size: 50, alert_limit: 20, low_stock_threshold: 5, old_stock_days: 180 } }
       }
     ]
   };
