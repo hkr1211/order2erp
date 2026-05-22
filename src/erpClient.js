@@ -385,6 +385,96 @@ export class ErpClient {
     };
   }
 
+  async queryPmcDashboard(params = {}) {
+    const alertLimit = clampInt(params.alert_limit || params.limit || 20, 1, 200);
+    const today = params.today ? new Date(params.today) : new Date();
+    const [inventoryAlerts, procedurePlans, materialOrders, productionBoms] = await Promise.all([
+      this.queryInventoryAlerts({
+        ...params,
+        alert_limit: alertLimit,
+        scan_pages: params.scan_pages || 2,
+        scan_size: params.scan_size || 50
+      }),
+      this.queryView("procedure_plans", {
+        pageindex: params.pageindex || 1,
+        pagesize: params.pagesize || 50,
+        searchKey: params.searchKey || ""
+      }),
+      this.queryView("material_orders", {
+        pageindex: params.pageindex || 1,
+        pagesize: params.pagesize || 50,
+        searchKey: params.searchKey || ""
+      }),
+      this.queryView("production_boms", {
+        pageindex: params.pageindex || 1,
+        pagesize: params.pagesize || 50,
+        searchKey: params.searchKey || ""
+      })
+    ]);
+
+    const procedureTable = normalizeTable(procedurePlans);
+    const materialOrderTable = normalizeTable(materialOrders);
+    const bomTable = normalizeTable(productionBoms);
+    const delayedProcedurePlans = procedureTable.rows
+      .map(mapProcedurePlanRow)
+      .filter((row) => row.remaining_qty === null || row.remaining_qty > 0)
+      .filter((row) => isBeforeDay(row.planned_finish_date, today))
+      .slice(0, alertLimit);
+
+    const inventorySections = inventoryAlerts.body.sections;
+    const sourceStatus = {
+      inventory_alerts: {
+        ok: true,
+        scanned_rows: inventoryAlerts.body.counts.scanned_summary_rows,
+        issue_count:
+          inventoryAlerts.body.counts.low_stock +
+          inventoryAlerts.body.counts.frozen_stock +
+          inventoryAlerts.body.counts.old_stock
+      },
+      procedure_plans: tableStatus(procedureTable, procedurePlans),
+      material_orders: tableStatus(materialOrderTable, materialOrders),
+      production_boms: tableStatus(bomTable, productionBoms)
+    };
+
+    return {
+      header: { status: 0, message: "ok" },
+      body: {
+        model: "pmc_dashboard",
+        generated_at: new Date().toISOString(),
+        scan: {
+          alert_limit: alertLimit,
+          inventory: inventoryAlerts.body.scan,
+          filters: {
+            searchKey: params.searchKey || "",
+            pageindex: params.pageindex || 1,
+            pagesize: params.pagesize || 50
+          }
+        },
+        summary: {
+          low_stock: inventoryAlerts.body.counts.low_stock,
+          frozen_stock: inventoryAlerts.body.counts.frozen_stock,
+          old_stock: inventoryAlerts.body.counts.old_stock,
+          delayed_procedure_plans: delayedProcedurePlans.length,
+          material_order_rows: materialOrderTable.rows.length,
+          bom_rows: bomTable.rows.length
+        },
+        sections: {
+          low_stock: inventorySections.low_stock.slice(0, alertLimit),
+          frozen_stock: inventorySections.frozen_stock.slice(0, alertLimit),
+          old_stock: inventorySections.old_stock.slice(0, alertLimit),
+          delayed_procedure_plans: delayedProcedurePlans,
+          material_orders: materialOrderTable.rows.slice(0, alertLimit),
+          production_boms: bomTable.rows.slice(0, alertLimit)
+        },
+        source_status: sourceStatus,
+        notes: [
+          "第一版 PMC 看板先聚合库存风险、工序计划延期和生产数据源状态。",
+          "缺料订单需要销售/生产需求明细与库存可用量建立匹配关系后继续补规则。"
+        ]
+      }
+    };
+  }
+
   async callAsp(path, params = {}, cmdkey = "refresh") {
     const session = await this.ensureSession();
     const payload = {
@@ -674,6 +764,31 @@ function mapStockInDetail(row) {
   };
 }
 
+function mapProcedurePlanRow(row) {
+  return {
+    procedure_plan_id: row["工序计划ID"],
+    work_assignment_id: row["派工单ID"],
+    procedure_id: row["工序ID"],
+    procedure_name: row["工序名称"],
+    product_name: row["产品名称"],
+    product_code: row["产品编号"],
+    product_model: row["产品型号"],
+    unit: row["汇报单位"],
+    sequence: parseNumber(row["执行顺序"]),
+    work_center_id: row["工作中心ID"],
+    work_center_name: row["工作中心名称"],
+    planned_qty: parseNumber(row["加工数量"]),
+    qualified_qty: parseNumber(row["合格数量"]),
+    rework_qty: parseNumber(row["返工数量"]),
+    scrap_qty: parseNumber(row["报废数量"]),
+    remaining_qty: parseNumber(row["剩余数量"]),
+    owner: row["工序计划负责人"],
+    planned_start_date: row["计划开工期"] || null,
+    planned_finish_date: row["计划完工期"] || null,
+    raw: row
+  };
+}
+
 function parseMoney(value) {
   return parseNumber(value);
 }
@@ -699,6 +814,32 @@ function redactSession(document) {
     document.header.session = "[redacted]";
   }
   return document;
+}
+
+function tableStatus(table, raw) {
+  return {
+    ok: raw?.header?.status === undefined ? true : Number(raw.header.status) === 0,
+    rows: table.rows.length,
+    page: table.page || null,
+    message: raw?.header?.message || raw?.Msg || null,
+    model: raw?.body?.model || null
+  };
+}
+
+function parseDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function startOfDay(date) {
+  const copy = new Date(date);
+  copy.setHours(0, 0, 0, 0);
+  return copy;
+}
+
+function isBeforeDay(value, date) {
+  const parsed = parseDate(value);
+  return parsed ? parsed < startOfDay(date) : false;
 }
 
 function firstValue(...values) {
