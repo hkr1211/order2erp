@@ -51,6 +51,7 @@ npm start
 ```bash
 curl 'http://localhost:3000/health'
 open 'http://localhost:3000/pmc'
+open 'http://localhost:3000/orders'
 curl 'http://localhost:3000/views'
 curl 'http://localhost:3000/agent/tool-schema'
 curl 'http://localhost:3000/api/sales_orders?searchKey=客户名&pageindex=1&pagesize=20'
@@ -73,6 +74,7 @@ curl 'http://localhost:3000/api/pmc_exceptions?pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/inventory_alerts?scan_pages=2&scan_size=50&alert_limit=20&low_stock_threshold=5&old_stock_days=180'
 curl 'http://localhost:3000/api/pmc_dashboard?scan_pages=2&scan_size=50&contract_limit=5&alert_limit=20&low_stock_threshold=5&old_stock_days=180'
 curl 'http://localhost:3000/api/pmc_console?scan_pages=1&scan_size=20&contract_limit=3&alert_limit=10'
+curl 'http://localhost:3000/api/order_center?pageindex=1&pagesize=20&contract_limit=10&due_soon_days=7'
 ```
 
 接口返回中包含三层数据：
@@ -115,7 +117,8 @@ OpenClaw 或 Hermes 可以把本中台注册成一个只读工具：
     "pmc_exceptions",
     "inventory_alerts",
     "pmc_dashboard",
-    "pmc_console"
+    "pmc_console",
+    "order_center"
   ]
 }
 ```
@@ -152,14 +155,17 @@ curl 'http://localhost:3000/agent/tool-schema'
 - `inventory_alerts`：库存异常视图，聚合低库存、冻结库存、长库龄库存
 - `pmc_dashboard`：PMC 综合看板，聚合库存风险、工序延期、生产数据源状态、订单缺料扫描、交期风险和待报价项目
 - `pmc_console`：PMC 驾驶舱首页数据，面向老板/PMC/销售的一屏总览
+- `order_center`：订单管理中心数据，聚合销售订单、交期风险和缺料状态
 
 ## PMC 控制台 V1
 
 - 图形化入口：`http://localhost:3000/pmc`
+- 订单中心入口：`http://localhost:3000/orders`
 - 用户范围：老板、PMC、销售
 - 运行方式：内网免登录
 - 数据库：SQLite，默认保存到 `data/pmc.db`
 - 首屏指标：今日订单、本月订单、逾期订单、7 天内交期订单、缺料订单、待报价项目、低库存预警
+- 订单中心：状态灯、客户、负责人、金额、交期风险、缺料状态、相关产品
 - 物料齐套口径：第一版按销售订单产品库存计算，不做 BOM 展开
 - 车间报工：继续使用 ERP，本中台暂不开发报工入口
 

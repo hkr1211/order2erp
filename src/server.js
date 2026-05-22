@@ -27,6 +27,12 @@ const server = http.createServer(async (req, res) => {
       return sendHtml(res, 200, pmcConsolePage(result.body));
     }
 
+    if (req.method === "GET" && url.pathname === "/orders") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = await queryOrderCenter(params);
+      return sendHtml(res, 200, orderCenterPage(result.body, url));
+    }
+
     if (req.method === "GET" && url.pathname === "/health") {
       return sendJson(res, 200, { ok: true, service: "erp-query-hub" });
     }
@@ -87,6 +93,10 @@ const server = http.createServer(async (req, res) => {
           pmc_console: {
             name: "PMC驾驶舱首页",
             allowedParams: ["today", "scan_size", "scan_pages", "alert_limit", "contract_limit", "due_soon_days", "quote_limit", "low_stock_threshold", "old_stock_days"]
+          },
+          order_center: {
+            name: "订单管理中心",
+            allowedParams: ["searchKey", "pageindex", "pagesize", "contract_limit", "due_soon_days", "scan_size", "status"]
           }
         }
       });
@@ -120,6 +130,8 @@ const server = http.createServer(async (req, res) => {
             ? await queryPmcDashboard(params)
           : viewName === "pmc_console"
             ? await queryPmcConsole(params)
+          : viewName === "order_center"
+            ? await queryOrderCenter(params)
           : await client.queryView(viewName, params);
 
       const normalized =
@@ -131,7 +143,8 @@ const server = http.createServer(async (req, res) => {
         viewName === "pending_quotes" ||
         viewName === "inventory_alerts" ||
         viewName === "pmc_dashboard" ||
-        viewName === "pmc_console"
+        viewName === "pmc_console" ||
+        viewName === "order_center"
           ? result.body
           : normalizeTable(result);
 
@@ -206,6 +219,7 @@ function homePage() {
     ["全部视图", "/views", "查看可调用的 ERP 查询视图"],
     ["Agent 工具定义", "/agent/tool-schema", "给 OpenClaw 或 Hermes 注册工具时使用"],
     ["PMC 驾驶舱", "/pmc", "老板、PMC、销售共用的一屏总览"],
+    ["订单管理中心", "/orders", "订单状态灯、交期风险、缺料标记"],
     ["PMC 综合看板", "/api/pmc_dashboard?scan_pages=1&scan_size=20&contract_limit=3&alert_limit=10&low_stock_threshold=5&old_stock_days=180&due_soon_days=7&quote_limit=10", "库存、缺料、交期、待报价项目汇总"],
     ["销售订单", "/api/sales_orders?pageindex=1&pagesize=10", "查询最近销售合同/订单"],
     ["订单缺料", "/api/order_shortages?pageindex=1&pagesize=10&contract_limit=3&scan_size=100", "扫描最近未发货订单缺料情况"],
@@ -554,6 +568,7 @@ function viewTitle(viewName) {
     inventory_alerts: "库存异常",
     pmc_dashboard: "PMC 综合看板",
     pmc_console: "PMC 驾驶舱首页",
+    order_center: "订单管理中心",
     warehouses: "仓库列表",
     products: "产品列表",
     stock_in_records: "入库流水",
@@ -607,6 +622,11 @@ function labelFor(key) {
     pending_quote_projects: "待报价项目",
     scanned_projects: "扫描项目",
     errors: "错误数"
+    ,
+    status_light: "状态灯",
+    status_text: "订单状态",
+    due_status: "交期状态",
+    shortage_status: "缺料状态"
   };
   return labels[key] || key;
 }
@@ -694,6 +714,7 @@ function pmcConsolePage(body) {
       </div>
       <div class="actions">
         <a class="button" href="/">首页</a>
+        <a class="button" href="/orders">订单中心</a>
         <a class="button" href="/api/pmc_console?format=json">查看 JSON</a>
         <a class="button primary" href="/pmc?refresh=1">刷新驾驶舱</a>
       </div>
@@ -730,6 +751,340 @@ function pmcTablePanel(title, rows, columns, tone = "") {
         : `<div class="empty">当前没有${escapeHtml(title)}。</div>`
     }
   </section>`;
+}
+
+async function queryOrderCenter(params = {}) {
+  const pageIndex = clampInt(params.pageindex || 1, 1, 10000);
+  const pageSize = clampInt(params.pagesize || 20, 1, 100);
+  const contractLimit = clampInt(params.contract_limit || pageSize, 1, 30);
+  const dueSoonDays = clampInt(params.due_soon_days || 7, 1, 60);
+  const scanSize = clampInt(params.scan_size || 100, 1, 500);
+  const searchKey = params.searchKey || "";
+  const statusFilter = params.status || "";
+
+  const [salesResult, deliveryRisks, shortages] = await Promise.all([
+    client.queryView("sales_orders", {
+      searchKey,
+      pageindex: String(pageIndex),
+      pagesize: String(pageSize)
+    }),
+    queryOrderDeliveryRisks(client, {
+      searchKey,
+      pageindex: String(pageIndex),
+      pagesize: String(pageSize),
+      contract_limit: String(contractLimit),
+      due_soon_days: String(dueSoonDays)
+    }),
+    queryOrderShortages(client, {
+      searchKey,
+      pageindex: String(pageIndex),
+      pagesize: String(pageSize),
+      contract_limit: String(contractLimit),
+      scan_size: String(scanSize)
+    })
+  ]);
+
+  const salesTable = normalizeTable(salesResult);
+  const salesOrders = toBusinessView("sales_orders", salesTable).rows;
+  const riskIndex = indexOrderRisks(deliveryRisks.body.rows || []);
+  const shortageIndex = indexOrderShortages(shortages.body.rows || []);
+  const rows = salesOrders.map((order) => mapOrderCenterRow(order, riskIndex, shortageIndex));
+  const filteredRows = statusFilter ? rows.filter((row) => row.status_code === statusFilter) : rows;
+
+  return {
+    header: { status: 0, message: "ok" },
+    body: {
+      model: "order_center",
+      scan: {
+        pageindex: pageIndex,
+        pagesize: pageSize,
+        contract_limit: contractLimit,
+        due_soon_days: dueSoonDays,
+        scan_size: scanSize,
+        searchKey,
+        status: statusFilter
+      },
+      page: salesTable.page,
+      summary: {
+        total_rows: rows.length,
+        visible_rows: filteredRows.length,
+        red_orders: rows.filter((row) => row.status_code === "red").length,
+        yellow_orders: rows.filter((row) => row.status_code === "yellow").length,
+        green_orders: rows.filter((row) => row.status_code === "green").length,
+        shortage_orders: rows.filter((row) => row.shortage_status === "缺料").length,
+        overdue_orders: rows.filter((row) => row.due_status === "逾期").length,
+        due_soon_orders: rows.filter((row) => row.due_status === "7天内到期").length
+      },
+      rows: filteredRows,
+      source_status: {
+        sales_orders: { ok: true, rows: salesOrders.length, page: salesTable.page },
+        order_delivery_risks: {
+          ok: (deliveryRisks.body.errors || []).length === 0,
+          checked_orders: deliveryRisks.body.summary.checked_orders,
+          risk_rows: deliveryRisks.body.summary.risk_rows
+        },
+        order_shortages: {
+          ok: (shortages.body.errors || []).length === 0,
+          checked_orders: shortages.body.summary.checked_orders,
+          shortage_rows: shortages.body.summary.shortage_rows
+        }
+      },
+      notes: [
+        "订单管理中心第一版按销售订单列表聚合交期风险和缺料风险。",
+        "PO 编号后续从合同明细提取；当前列表先显示 ERP 合同号。"
+      ]
+    }
+  };
+}
+
+function indexOrderRisks(rows) {
+  const index = new Map();
+  for (const row of rows) {
+    const current = index.get(row.order_no) || {
+      overdue: 0,
+      dueSoon: 0,
+      earliestDays: null,
+      nearestDeliveryDate: null,
+      products: []
+    };
+    if (row.risk_type === "overdue") {
+      current.overdue += 1;
+    }
+    if (row.risk_type === "due_soon") {
+      current.dueSoon += 1;
+    }
+    if (current.earliestDays === null || row.days_from_today < current.earliestDays) {
+      current.earliestDays = row.days_from_today;
+      current.nearestDeliveryDate = row.delivery_date;
+    }
+    if (row.product_name) {
+      current.products.push(row.product_name);
+    }
+    index.set(row.order_no, current);
+  }
+  return index;
+}
+
+function indexOrderShortages(rows) {
+  const index = new Map();
+  for (const row of rows) {
+    const current = index.get(row.order_no) || {
+      rows: 0,
+      shortageQty: 0,
+      products: []
+    };
+    current.rows += 1;
+    current.shortageQty += Number(row.shortage_qty || 0);
+    if (row.product_name) {
+      current.products.push(row.product_name);
+    }
+    index.set(row.order_no, current);
+  }
+  return index;
+}
+
+function mapOrderCenterRow(order, riskIndex, shortageIndex) {
+  const risk = riskIndex.get(order.order_no) || {};
+  const shortage = shortageIndex.get(order.order_no) || {};
+  const dueStatus = risk.overdue > 0 ? "逾期" : risk.dueSoon > 0 ? "7天内到期" : "正常";
+  const shortageStatus = shortage.rows > 0 ? "缺料" : "未发现缺料";
+  const statusCode = dueStatus === "逾期" || shortageStatus === "缺料" ? "red" : dueStatus === "7天内到期" ? "yellow" : "green";
+  const statusText = statusCode === "red" ? "紧急" : statusCode === "yellow" ? "预警" : "正常";
+  return {
+    status_light: statusCode === "red" ? "红" : statusCode === "yellow" ? "黄" : "绿",
+    status_code: statusCode,
+    status_text: statusText,
+    order_no: order.order_no,
+    po_no: null,
+    title: order.title,
+    customer: order.customer,
+    owner: order.owner,
+    amount: order.amount,
+    signed_date: order.signed_date,
+    delivery_date: risk.nearestDeliveryDate || null,
+    days_from_today: risk.earliestDays,
+    due_status: dueStatus,
+    shortage_status: shortageStatus,
+    shortage_rows: shortage.rows || 0,
+    shortage_qty: shortage.shortageQty || 0,
+    risk_products: uniqueList([...(risk.products || []), ...(shortage.products || [])]).slice(0, 5),
+    warehouse_status: order.warehouse_status,
+    delivery_status: order.delivery_status,
+    payment_status: order.payment_status,
+    approval_status: order.approval_status,
+    raw: order.raw
+  };
+}
+
+function uniqueList(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function orderCenterPage(body, url) {
+  const current = body.scan || {};
+  const queryBase = new URLSearchParams();
+  if (current.searchKey) {
+    queryBase.set("searchKey", current.searchKey);
+  }
+  queryBase.set("pageindex", String(current.pageindex || 1));
+  queryBase.set("pagesize", String(current.pagesize || 20));
+  queryBase.set("contract_limit", String(current.contract_limit || 20));
+  queryBase.set("due_soon_days", String(current.due_soon_days || 7));
+  queryBase.set("scan_size", String(current.scan_size || 100));
+
+  const statusLinks = [
+    ["全部", ""],
+    ["红灯", "red"],
+    ["黄灯", "yellow"],
+    ["绿灯", "green"]
+  ];
+  const statusNav = statusLinks
+    .map(([label, status]) => {
+      const next = new URLSearchParams(queryBase);
+      if (status) {
+        next.set("status", status);
+      }
+      const active = (current.status || "") === status ? " active" : "";
+      return `<a class="filter${active}" href="/orders?${escapeHtml(next.toString())}">${escapeHtml(label)}</a>`;
+    })
+    .join("");
+
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>订单管理中心 - 蕴杰金属数字 PMC 控制台</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --text: #172033;
+      --muted: #667085;
+      --border: #d9dee7;
+      --green: #16803c;
+      --green-soft: #e8f5eb;
+      --amber: #a15c00;
+      --amber-soft: #fff3d8;
+      --red: #b42318;
+      --red-soft: #fee4e2;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+    main { width: min(1440px, calc(100% - 32px)); margin: 0 auto; padding: 24px 0 36px; }
+    header { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
+    h1 { margin: 0; font-size: 28px; line-height: 1.2; letter-spacing: 0; }
+    .sub { margin-top: 8px; color: var(--muted); font-size: 14px; }
+    .actions, .filters { display: flex; gap: 8px; flex-wrap: wrap; }
+    .actions { justify-content: flex-end; }
+    .button, .filter { min-height: 36px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); text-decoration: none; font-size: 14px; }
+    .button.primary, .filter.active { background: #176b58; border-color: #176b58; color: #ffffff; }
+    .toolbar { display: flex; justify-content: space-between; gap: 12px; align-items: flex-end; margin: 18px 0; }
+    form { display: flex; gap: 8px; flex-wrap: wrap; }
+    input { min-height: 36px; width: 280px; max-width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+    .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .metric { padding: 13px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+    .metric span { display: block; color: var(--muted); font-size: 13px; }
+    .metric strong { display: block; margin-top: 8px; font-size: 24px; line-height: 1; }
+    .table-wrap { overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+    table { width: 100%; min-width: 1180px; border-collapse: collapse; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; font-size: 13px; line-height: 1.45; }
+    th { position: sticky; top: 0; z-index: 1; background: #f0f3f6; color: #344054; font-weight: 650; white-space: nowrap; }
+    .light { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-weight: 650; }
+    .dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+    .dot.red { background: var(--red); }
+    .dot.yellow { background: #f4a000; }
+    .dot.green { background: var(--green); }
+    .pill { display: inline-block; margin: 0 4px 4px 0; padding: 3px 7px; border-radius: 999px; font-size: 12px; white-space: nowrap; }
+    .pill.red { background: var(--red-soft); color: var(--red); }
+    .pill.yellow { background: var(--amber-soft); color: var(--amber); }
+    .pill.green { background: var(--green-soft); color: var(--green); }
+    @media (max-width: 880px) {
+      header, .toolbar { display: block; }
+      .actions, .filters { margin-top: 12px; justify-content: flex-start; }
+      h1 { font-size: 24px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>订单管理中心</h1>
+        <div class="sub">按销售订单产品库存口径聚合缺料，按合同明细交期识别逾期和临期。</div>
+      </div>
+      <div class="actions">
+        <a class="button" href="/pmc">PMC 驾驶舱</a>
+        <a class="button" href="/">首页</a>
+        <a class="button primary" href="${escapeHtml(orderCenterJsonHref(url))}">查看 JSON</a>
+      </div>
+    </header>
+    <section class="toolbar">
+      <form action="/orders" method="GET">
+        <input name="searchKey" value="${escapeHtml(current.searchKey || "")}" placeholder="搜索订单号、客户、标题">
+        <input type="hidden" name="pagesize" value="${escapeHtml(current.pagesize || 20)}">
+        <input type="hidden" name="contract_limit" value="${escapeHtml(current.contract_limit || 20)}">
+        <input type="hidden" name="due_soon_days" value="${escapeHtml(current.due_soon_days || 7)}">
+        <input type="hidden" name="scan_size" value="${escapeHtml(current.scan_size || 100)}">
+        <button class="button primary" type="submit">查询</button>
+      </form>
+      <div class="filters">${statusNav}</div>
+    </section>
+    <section class="metrics">
+      ${orderMetric("当前行数", body.summary.visible_rows)}
+      ${orderMetric("红灯订单", body.summary.red_orders)}
+      ${orderMetric("黄灯订单", body.summary.yellow_orders)}
+      ${orderMetric("绿灯订单", body.summary.green_orders)}
+      ${orderMetric("缺料订单", body.summary.shortage_orders)}
+      ${orderMetric("临期订单", body.summary.due_soon_orders)}
+    </section>
+    <section class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>状态灯</th><th>订单号</th><th>客户</th><th>负责人</th><th>金额</th><th>签订日期</th><th>最近交期</th><th>距今天数</th><th>交期状态</th><th>缺料状态</th><th>相关产品</th><th>出库</th><th>发货</th><th>收款</th><th>审批</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${body.rows.map(orderCenterRowHtml).join("")}
+        </tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
+function orderMetric(label, value) {
+  return `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
+}
+
+function orderCenterJsonHref(url) {
+  const params = new URLSearchParams(url.searchParams);
+  params.set("format", "json");
+  return `/api/order_center?${params}`;
+}
+
+function orderCenterRowHtml(row) {
+  const tone = row.status_code === "red" ? "red" : row.status_code === "yellow" ? "yellow" : "green";
+  return `<tr>
+    <td><span class="light"><span class="dot ${tone}"></span>${escapeHtml(row.status_text)}</span></td>
+    <td>${escapeHtml(row.order_no)}</td>
+    <td>${escapeHtml(row.customer)}</td>
+    <td>${escapeHtml(row.owner)}</td>
+    <td>${escapeHtml(row.amount)}</td>
+    <td>${escapeHtml(row.signed_date)}</td>
+    <td>${escapeHtml(row.delivery_date || "")}</td>
+    <td>${escapeHtml(row.days_from_today ?? "")}</td>
+    <td><span class="pill ${row.due_status === "逾期" ? "red" : row.due_status === "7天内到期" ? "yellow" : "green"}">${escapeHtml(row.due_status)}</span></td>
+    <td><span class="pill ${row.shortage_status === "缺料" ? "red" : "green"}">${escapeHtml(row.shortage_status)}</span></td>
+    <td>${(row.risk_products || []).map((item) => `<span class="pill ${tone}">${escapeHtml(item)}</span>`).join("")}</td>
+    <td>${escapeHtml(row.warehouse_status)}</td>
+    <td>${escapeHtml(row.delivery_status)}</td>
+    <td>${escapeHtml(row.payment_status)}</td>
+    <td>${escapeHtml(row.approval_status)}</td>
+  </tr>`;
 }
 
 async function queryPmcConsole(params = {}) {
@@ -869,6 +1224,14 @@ function parseBoolean(value) {
   return text === "1" || text === "true" || text === "yes";
 }
 
+function clampInt(value, min, max) {
+  const number = Number.parseInt(value, 10);
+  if (!Number.isFinite(number)) {
+    return min;
+  }
+  return Math.max(min, Math.min(max, number));
+}
+
 async function queryPmcDashboard(params) {
   const dashboard = await client.queryPmcDashboard(params);
   try {
@@ -971,7 +1334,8 @@ function agentToolSchema() {
             "pmc_exceptions",
             "inventory_alerts",
             "pmc_dashboard",
-            "pmc_console"
+            "pmc_console",
+            "order_center"
           ],
           description: "要查询的业务视图。"
         },
@@ -1041,6 +1405,10 @@ function agentToolSchema() {
       {
         user: "打开 PMC 驾驶舱首页",
         call: { view: "pmc_console", filters: { scan_pages: 1, scan_size: 20, contract_limit: 3, alert_limit: 10 } }
+      },
+      {
+        user: "查看订单管理中心",
+        call: { view: "order_center", filters: { pageindex: 1, pagesize: 20, contract_limit: 10, due_soon_days: 7 } }
       }
     ]
   };
