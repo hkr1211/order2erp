@@ -414,6 +414,71 @@ export class ErpClient {
     };
   }
 
+  async queryContractShortages(params = {}) {
+    const contractOrd = params.contract_ord || params.ord;
+    if (!contractOrd) {
+      return {
+        header: { status: 0, message: "ok" },
+        body: {
+          model: "contract_shortages",
+          contract: null,
+          rows: [],
+          counts: { lines: 0, shortage_rows: 0 },
+          notes: ["请传入合同 ord，例如 /api/contract_shortages?ord=12345。"]
+        }
+      };
+    }
+
+    const pageSize = clampInt(params.scan_size || params.pagesize || params.page_size || 100, 1, 500);
+    const scanPages = clampInt(params.scan_pages || 3, 1, 20);
+    const [contractLines, inventoryRows] = await Promise.all([
+      this.queryContractLines({ ord: contractOrd }),
+      this.scanInventorySummary({ ...params, scan_size: pageSize, scan_pages: scanPages })
+    ]);
+
+    const inventoryIndex = buildInventoryIndex(inventoryRows.map(mapInventoryRow));
+    const shortageRows = contractLines.body.rows
+      .map((line) => {
+        const demandQty = firstNumber(line.remaining_qty, line.demand_qty);
+        const stock = findInventoryStock(inventoryIndex, line);
+        const availableQty = stock.available_qty ?? stock.stock_qty ?? 0;
+        const shortageQty = demandQty === null ? null : Math.max(0, demandQty - availableQty);
+        return {
+          ...line,
+          demand_qty: demandQty,
+          available_qty: availableQty,
+          stock_qty: stock.stock_qty,
+          shortage_qty: shortageQty,
+          matched_by: stock.matched_by,
+          inventory_matches: stock.matches
+        };
+      })
+      .filter((row) => row.demand_qty !== null && row.shortage_qty > 0);
+
+    return {
+      header: { status: 0, message: "ok" },
+      body: {
+        model: "contract_shortages",
+        contract: contractLines.body.contract,
+        scan: {
+          scan_pages: scanPages,
+          page_size: pageSize,
+          cks: params.cks || null
+        },
+        rows: shortageRows,
+        counts: {
+          lines: contractLines.body.rows.length,
+          inventory_rows: inventoryRows.length,
+          shortage_rows: shortageRows.length
+        },
+        notes: [
+          "第一版按合同明细产品编号优先匹配库存汇总；没有编号时退回产品名称匹配。",
+          "真实准确的缺料判断还需要确认合同明细里的未发/未生产数量字段。"
+        ]
+      }
+    };
+  }
+
   async queryPmcDashboard(params = {}) {
     const alertLimit = clampInt(params.alert_limit || params.limit || 20, 1, 200);
     const today = params.today ? new Date(params.today) : new Date();
@@ -548,6 +613,33 @@ export class ErpClient {
       throw new Error(`ERP HTTP ${response.status} from ${path}: ${JSON.stringify(data).slice(0, 300)}`);
     }
     return data;
+  }
+
+  async scanInventorySummary(params = {}) {
+    const pageSize = clampInt(params.scan_size || params.pagesize || params.page_size || 100, 1, 500);
+    const scanPages = clampInt(params.scan_pages || 3, 1, 20);
+    const baseFilters = {};
+    if (params.cks !== undefined && params.cks !== null && params.cks !== "") {
+      baseFilters.cks = params.cks;
+    }
+    if (params.searchKey || params.title) {
+      baseFilters.title = params.searchKey || params.title;
+    }
+
+    const rows = [];
+    for (let pageIndex = 1; pageIndex <= scanPages; pageIndex += 1) {
+      const result = await this.queryView("inventory", {
+        ...baseFilters,
+        page_size: String(pageSize),
+        page_index: String(pageIndex)
+      });
+      rows.push(...normalizeTable(result).rows);
+      const page = result?.Page;
+      if (page?.PageCount && pageIndex >= Number(page.PageCount)) {
+        break;
+      }
+    }
+    return rows;
   }
 }
 
@@ -867,6 +959,54 @@ function mapProcedurePlanRow(row) {
   };
 }
 
+function buildInventoryIndex(rows) {
+  const byCode = new Map();
+  const byName = new Map();
+  for (const row of rows) {
+    addInventoryIndex(byCode, normalizeKey(row.product_code), row);
+    addInventoryIndex(byName, normalizeKey(row.product_name), row);
+  }
+  return { byCode, byName };
+}
+
+function addInventoryIndex(index, key, row) {
+  if (!key) {
+    return;
+  }
+  const current = index.get(key) || {
+    stock_qty: 0,
+    available_qty: 0,
+    matches: []
+  };
+  current.stock_qty += row.stock_qty || 0;
+  current.available_qty += row.available_qty ?? row.stock_qty ?? 0;
+  current.matches.push({
+    product_name: row.product_name,
+    product_code: row.product_code,
+    warehouse: row.warehouse,
+    stock_qty: row.stock_qty,
+    available_qty: row.available_qty
+  });
+  index.set(key, current);
+}
+
+function findInventoryStock(index, line) {
+  const codeKey = normalizeKey(line.product_code);
+  if (codeKey && index.byCode.has(codeKey)) {
+    return { ...index.byCode.get(codeKey), matched_by: "product_code" };
+  }
+  const nameKey = normalizeKey(line.product_name);
+  if (nameKey && index.byName.has(nameKey)) {
+    return { ...index.byName.get(nameKey), matched_by: "product_name" };
+  }
+  return {
+    stock_qty: 0,
+    available_qty: 0,
+    matched_by: null,
+    matches: []
+  };
+}
+
 function parseMoney(value) {
   return parseNumber(value);
 }
@@ -922,6 +1062,20 @@ function isBeforeDay(value, date) {
 
 function firstValue(...values) {
   return values.find((value) => value !== undefined && value !== null && value !== "");
+}
+
+function firstNumber(...values) {
+  for (const value of values) {
+    const number = parseNumber(value);
+    if (number !== null) {
+      return number;
+    }
+  }
+  return null;
+}
+
+function normalizeKey(value) {
+  return value === undefined || value === null ? "" : String(value).trim().toLowerCase();
 }
 
 function filterParams(params, allowedParams = []) {
