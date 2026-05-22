@@ -43,7 +43,21 @@ const server = http.createServer(async (req, res) => {
           },
           pmc_dashboard: {
             name: "PMC综合看板",
-            allowedParams: ["searchKey", "pageindex", "pagesize", "scan_size", "scan_pages", "alert_limit", "low_stock_threshold", "old_stock_days", "today"]
+            allowedParams: [
+              "searchKey",
+              "pageindex",
+              "pagesize",
+              "scan_size",
+              "scan_pages",
+              "alert_limit",
+              "low_stock_threshold",
+              "old_stock_days",
+              "today",
+              "contract_limit",
+              "order_pagesize",
+              "order_scan_size",
+              "cks"
+            ]
           }
         }
       });
@@ -70,7 +84,7 @@ const server = http.createServer(async (req, res) => {
           : viewName === "inventory_alerts"
             ? await client.queryInventoryAlerts(params)
           : viewName === "pmc_dashboard"
-            ? await client.queryPmcDashboard(params)
+            ? await queryPmcDashboard(params)
           : await client.queryView(viewName, params);
 
       const normalized =
@@ -137,6 +151,41 @@ function readJson(req) {
 function sendJson(res, status, payload) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(payload, null, 2));
+}
+
+async function queryPmcDashboard(params) {
+  const dashboard = await client.queryPmcDashboard(params);
+  try {
+    const orderShortages = await queryOrderShortages(client, {
+      ...params,
+      pagesize: params.order_pagesize || params.pagesize || 10,
+      contract_limit: params.contract_limit || 5,
+      scan_size: params.order_scan_size || params.scan_size || 100
+    });
+    const body = dashboard.body;
+    body.scan.order_shortages = orderShortages.body.scan;
+    body.summary.order_shortage_orders = orderShortages.body.summary.orders_with_shortage;
+    body.summary.order_shortage_rows = orderShortages.body.summary.shortage_rows;
+    body.sections.order_shortages = orderShortages.body.orders;
+    body.sections.order_shortage_rows = orderShortages.body.rows;
+    body.source_status.order_shortages = {
+      ok: orderShortages.body.summary.errors === 0,
+      scanned_orders: orderShortages.body.summary.scanned_orders,
+      checked_orders: orderShortages.body.summary.checked_orders,
+      issue_count: orderShortages.body.summary.shortage_rows,
+      errors: orderShortages.body.errors
+    };
+    body.notes = [
+      "PMC 综合看板已聚合库存风险、工序计划延期、生产数据源状态和订单缺料扫描。",
+      "订单缺料默认只检查最近少量未发货/未出库合同；可用 contract_limit 调整扫描量。"
+    ];
+  } catch (error) {
+    dashboard.body.source_status.order_shortages = {
+      ok: false,
+      message: error.message
+    };
+  }
+  return dashboard;
 }
 
 function agentToolSchema() {
@@ -226,7 +275,7 @@ function agentToolSchema() {
       },
       {
         user: "给我看 PMC 综合异常",
-        call: { view: "pmc_dashboard", filters: { scan_pages: 2, scan_size: 50, alert_limit: 20, low_stock_threshold: 5, old_stock_days: 180 } }
+        call: { view: "pmc_dashboard", filters: { scan_pages: 2, scan_size: 50, contract_limit: 5, alert_limit: 20, low_stock_threshold: 5, old_stock_days: 180 } }
       }
     ]
   };

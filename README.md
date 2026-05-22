@@ -67,7 +67,7 @@ curl 'http://localhost:3000/api/production_boms?pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/procedure_plans?pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/pmc_exceptions?pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/inventory_alerts?scan_pages=2&scan_size=50&alert_limit=20&low_stock_threshold=5&old_stock_days=180'
-curl 'http://localhost:3000/api/pmc_dashboard?scan_pages=2&scan_size=50&alert_limit=20&low_stock_threshold=5&old_stock_days=180'
+curl 'http://localhost:3000/api/pmc_dashboard?scan_pages=2&scan_size=50&contract_limit=5&alert_limit=20&low_stock_threshold=5&old_stock_days=180'
 ```
 
 接口返回中包含三层数据：
@@ -138,7 +138,7 @@ curl 'http://localhost:3000/agent/tool-schema'
 - `payables`：付款/应付查询，基于 `/webapi/v3/ov1/financemanage/moneyout/list`
 - `pmc_exceptions`：第一版先聚合未出库合同、未回款合同
 - `inventory_alerts`：库存异常视图，聚合低库存、冻结库存、长库龄库存
-- `pmc_dashboard`：PMC 综合看板，聚合库存风险、工序延期和生产数据源状态
+- `pmc_dashboard`：PMC 综合看板，聚合库存风险、工序延期、生产数据源状态和订单缺料扫描
 
 ## 下一步
 
@@ -178,7 +178,7 @@ PMC 数据源继续补充：
 - `apiHelper` 类生产接口已确认需要在请求体传入 `session`，中台已兼容
 - `production_progress`、`material_orders` 可通过中台完成鉴权调用，当前 ERP 返回空模型或空数据
 - `production_boms`、`procedure_plans` 可通过新版接口调用，当前账号下返回 0 条记录
-- `pmc_dashboard` 已接入第一版综合看板：低库存、冻结库存、长库龄库存、延期工序计划、数据源状态
+- `pmc_dashboard` 已接入综合看板：低库存、冻结库存、长库龄库存、延期工序计划、数据源状态、订单缺料扫描
 - `contract_detail` 已确认可用 Token 方式访问；`ord=0` 返回空合同模板，拿到真实合同 `ord` 后可读取 `contractlist` 产品明细，用于后续缺料订单规则
 - `contract_shortages` 已完成第一版规则：按合同明细产品编号逐项查询库存汇总，输出需求量、可用量和缺口量
 - `order_shortages` 已完成第一版规则：自动扫描最近销售订单，汇总存在缺料的订单和明细行
