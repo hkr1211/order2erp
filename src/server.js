@@ -28,6 +28,10 @@ const server = http.createServer(async (req, res) => {
             name: "销售合同明细视图",
             allowedParams: ["ord"]
           },
+          contract_shortages: {
+            name: "合同缺料分析视图",
+            allowedParams: ["ord", "contract_ord", "cks", "scan_size", "scan_pages"]
+          },
           inventory_alerts: {
             name: "库存异常视图",
             allowedParams: ["cks", "searchKey", "title", "order1", "scan_size", "scan_pages", "alert_limit", "low_stock_threshold", "old_stock_days"]
@@ -54,6 +58,8 @@ const server = http.createServer(async (req, res) => {
           ? await client.queryPmcExceptions(params)
           : viewName === "contract_lines"
             ? await client.queryContractLines(params)
+          : viewName === "contract_shortages"
+            ? await client.queryContractShortages(params)
           : viewName === "inventory_alerts"
             ? await client.queryInventoryAlerts(params)
           : viewName === "pmc_dashboard"
@@ -61,7 +67,11 @@ const server = http.createServer(async (req, res) => {
           : await client.queryView(viewName, params);
 
       const normalized =
-        viewName === "pmc_exceptions" || viewName === "contract_lines" || viewName === "inventory_alerts" || viewName === "pmc_dashboard"
+        viewName === "pmc_exceptions" ||
+        viewName === "contract_lines" ||
+        viewName === "contract_shortages" ||
+        viewName === "inventory_alerts" ||
+        viewName === "pmc_dashboard"
           ? result.body
           : normalizeTable(result);
 
@@ -135,6 +145,7 @@ function agentToolSchema() {
             "sales_orders",
             "contract_detail",
             "contract_lines",
+            "contract_shortages",
             "inventory",
             "inventory_details",
             "warehouses",
@@ -171,6 +182,10 @@ function agentToolSchema() {
       {
         user: "查一下合同明细",
         call: { view: "contract_lines", filters: { ord: 12345 } }
+      },
+      {
+        user: "分析这个合同有没有缺料",
+        call: { view: "contract_shortages", filters: { ord: 12345, scan_pages: 5, scan_size: 100 } }
       },
       {
         user: "查一下钼产品库存",
