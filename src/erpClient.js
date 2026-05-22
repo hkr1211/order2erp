@@ -401,7 +401,7 @@ export class ErpClient {
       header: { status: 0, message: "ok" },
       body: {
         model: "contract_lines",
-        contract: mapContractDetail(contract),
+        contract: mapContractDetail(contract, params.ord),
         rows: lines.map(mapContractLine),
         counts: {
           lines: lines.length
@@ -430,12 +430,11 @@ export class ErpClient {
     }
 
     const pageSize = clampInt(params.scan_size || params.pagesize || params.page_size || 100, 1, 500);
-    const scanPages = clampInt(params.scan_pages || 3, 1, 20);
-    const [contractLines, inventoryRows] = await Promise.all([
-      this.queryContractLines({ ord: contractOrd }),
-      this.scanInventorySummary({ ...params, scan_size: pageSize, scan_pages: scanPages })
-    ]);
-
+    const contractLines = await this.queryContractLines({ ord: contractOrd });
+    const inventoryRows = await this.lookupInventoryForContractLines(contractLines.body.rows, {
+      ...params,
+      page_size: pageSize
+    });
     const inventoryIndex = buildInventoryIndex(inventoryRows.map(mapInventoryRow));
     const shortageRows = contractLines.body.rows
       .map((line) => {
@@ -461,9 +460,9 @@ export class ErpClient {
         model: "contract_shortages",
         contract: contractLines.body.contract,
         scan: {
-          scan_pages: scanPages,
           page_size: pageSize,
-          cks: params.cks || null
+          cks: params.cks || null,
+          strategy: "product_code_then_name"
         },
         rows: shortageRows,
         counts: {
@@ -472,7 +471,7 @@ export class ErpClient {
           shortage_rows: shortageRows.length
         },
         notes: [
-          "第一版按合同明细产品编号优先匹配库存汇总；没有编号时退回产品名称匹配。",
+          "第一版按合同明细产品编号逐项查询库存汇总；没有编号时退回产品名称查询。",
           "真实准确的缺料判断还需要确认合同明细里的未发/未生产数量字段。"
         ]
       }
@@ -578,17 +577,32 @@ export class ErpClient {
         .filter(([, value]) => value !== undefined && value !== null && value !== "")
         .map(([id, val]) => ({ id, val }))
     };
-    return redactSession(await this.postJson(path, payload));
+    const result = await this.postJson(path, payload);
+    if (isSessionExpired(result)) {
+      const newSession = await this.login();
+      return redactSession(await this.postJson(path, { ...payload, session: newSession }));
+    }
+    return redactSession(result);
   }
 
   async callModern(path, params = {}) {
     const session = await this.ensureSession();
-    return redactSession(await this.postJson(path, params, { "ZBAPI-Token": session }));
+    const result = await this.postJson(path, params, { "ZBAPI-Token": session });
+    if (isSessionExpired(result)) {
+      const newSession = await this.login();
+      return redactSession(await this.postJson(path, params, { "ZBAPI-Token": newSession }));
+    }
+    return redactSession(result);
   }
 
   async callHelper(path, params = {}) {
     const session = await this.ensureSession();
-    return redactSession(await this.postJson(path, { session, ...params }));
+    const result = await this.postJson(path, { session, ...params });
+    if (isSessionExpired(result)) {
+      const newSession = await this.login();
+      return redactSession(await this.postJson(path, { session: newSession, ...params }));
+    }
+    return redactSession(result);
   }
 
   async postJson(path, payload, headers = {}) {
@@ -640,6 +654,34 @@ export class ErpClient {
       }
     }
     return rows;
+  }
+
+  async lookupInventoryForContractLines(lines, params = {}) {
+    const pageSize = clampInt(params.page_size || params.scan_size || 100, 1, 500);
+    const cks = params.cks;
+    const queries = new Map();
+    for (const line of lines) {
+      const productCode = normalizeKey(line.product_code);
+      const productName = normalizeKey(line.product_name);
+      if (productCode) {
+        queries.set(`code:${productCode}`, { order1: line.product_code });
+      } else if (productName) {
+        queries.set(`name:${productName}`, { title: line.product_name });
+      }
+    }
+
+    const results = await Promise.all(
+      [...queries.values()].map((query) =>
+        this.queryView("inventory", {
+          ...query,
+          cks,
+          page_size: String(pageSize),
+          page_index: "1"
+        })
+      )
+    );
+
+    return results.flatMap((result) => normalizeTable(result).rows);
   }
 }
 
@@ -802,9 +844,9 @@ function mapSalesOrder(row) {
   };
 }
 
-function mapContractDetail(row) {
+function mapContractDetail(row, fallbackOrd = null) {
   return {
-    erp_id: row.Ord || row.ord || null,
+    erp_id: row.Ord || row.ord || fallbackOrd || null,
     order_no: row.Htid || row.htid || null,
     title: row.Title || row.title || null,
     customer: row.CateName || row.cateName || null,
@@ -818,7 +860,7 @@ function mapContractDetail(row) {
     delivery_status: row.mZt2 || null,
     lines_count: Array.isArray(row.contractlist) ? row.contractlist.length : 0,
     lines: Array.isArray(row.contractlist) ? row.contractlist.map(mapContractLine) : [],
-    raw: row
+    raw: pickContractDetailRaw(row)
   };
 }
 
@@ -830,10 +872,43 @@ function mapContractLine(row) {
     product_model: row.Type1 || row.type1 || row.CpXh || row.cpxh || null,
     unit: row.Unit || row.unit || row.UnitName || row.unitname || null,
     demand_qty: parseNumber(firstValue(row.Num1, row.num1, row.Num, row.num)),
-    delivered_qty: parseNumber(firstValue(row.SendNum, row.sendNum, row.FhNum, row.fhnum)),
-    remaining_qty: parseNumber(firstValue(row.LeftNum, row.leftNum, row.WfhNum, row.wfhnum)),
-    delivery_date: row.Date1 || row.date1 || row.JhDate || row.jhdate || null,
-    raw: row
+    delivered_qty: parseNumber(firstValue(row.Num2, row.num2, row.SendNum, row.sendNum, row.FhNum, row.fhnum)),
+    remaining_qty: parseNumber(firstValue(row.YNum1, row.ynum1, row.LeftNum, row.leftNum, row.WfhNum, row.wfhnum)),
+    delivery_date: row.Date2 || row.date2 || row.Date1 || row.date1 || row.JhDate || row.jhdate || null,
+    raw: pickContractLineRaw(row)
+  };
+}
+
+function pickContractDetailRaw(row) {
+  return {
+    Title: row.Title,
+    Htid: row.Htid,
+    CateName: row.CateName,
+    Person1: row.Person1,
+    Date3: row.Date3,
+    Date7: row.Date7,
+    Money1: row.Money1,
+    HkMoney1: row.HkMoney1,
+    SpStatus: row.SpStatus,
+    mZt1: row.mZt1,
+    mZt2: row.mZt2
+  };
+}
+
+function pickContractLineRaw(row) {
+  return {
+    Id: row.Id,
+    Ord: row.Ord,
+    Title: row.Title,
+    Order1: row.Order1,
+    Type1: row.Type1,
+    Unit: row.Unit,
+    Num1: row.Num1,
+    Num2: row.Num2,
+    YNum1: row.YNum1,
+    Date2: row.Date2,
+    CanOutStore: row.CanOutStore,
+    Money1: row.Money1
   };
 }
 
@@ -1032,6 +1107,12 @@ function redactSession(document) {
     document.header.session = "[redacted]";
   }
   return document;
+}
+
+function isSessionExpired(document) {
+  const status = Number(document?.header?.status ?? document?.Code ?? 0);
+  const message = String(document?.header?.message || document?.Msg || "");
+  return status === 2 || message.includes("会话过期") || message.toLowerCase().includes("session");
 }
 
 function tableStatus(table, raw) {
