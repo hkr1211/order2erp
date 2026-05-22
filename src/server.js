@@ -103,6 +103,11 @@ const server = http.createServer(async (req, res) => {
       return sendHtml(res, 200, pmcGoalPage());
     }
 
+    if (req.method === "GET" && url.pathname === "/system") {
+      const result = await querySystemStatus();
+      return sendHtml(res, 200, systemStatusPage(result.body));
+    }
+
     if (req.method === "GET" && url.pathname === "/health") {
       return sendJson(res, 200, { ok: true, service: "erp-query-hub" });
     }
@@ -301,6 +306,7 @@ function sendCsv(res, filename, csv) {
 function homePage() {
   const links = [
     ["健康检查", "/health", "确认本地中台是否正在运行"],
+    ["数据源状态中心", "/system", "查看 ERP 连通性、本地快照和系统状态"],
     ["全部视图", "/views", "查看可调用的 ERP 查询视图"],
     ["Agent 工具定义", "/agent/tool-schema", "给 OpenClaw 或 Hermes 注册工具时使用"],
     ["PMC 全功能路线", "/goal", "查看完整 PMC 平台实施目标和当前完成度"],
@@ -2411,6 +2417,93 @@ function csvCell(value) {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
+async function querySystemStatus() {
+  const startedAt = Date.now();
+  let erpStatus;
+  try {
+    const session = await client.login();
+    erpStatus = {
+      ok: true,
+      message: "ERP 登录接口正常",
+      latency_ms: Date.now() - startedAt,
+      session_tail: session ? String(session).slice(-6) : ""
+    };
+  } catch (error) {
+    erpStatus = {
+      ok: false,
+      message: summarizeDataSourceError(error),
+      latency_ms: Date.now() - startedAt
+    };
+  }
+  const snapshot = latestPmcSnapshot();
+  const modules = [
+    ["PMC 驾驶舱", "/pmc", snapshot ? "可用：支持本地快照" : "可用：无快照时显示离线空看板"],
+    ["订单管理中心", "/orders", "可用：ERP 离线时显示空表和提示"],
+    ["物料控制中心", "/materials", "可用：数据源局部失败不影响整页"],
+    ["采购跟催中心", "/procurement", "可用：入库/应付数据源局部容错"],
+    ["应收应付中心", "/finance", "可用：应收/应付数据源局部容错"],
+    ["排产甘特视图", "/scheduling", "可用：基于订单中心容错"],
+    ["异常管理中心", "/exceptions", "可用：ERP 离线时显示空待办和提示"],
+    ["报表中心", "/reports", "可用：支持快照、CSV、打印版"]
+  ];
+
+  return {
+    header: { status: 0, message: "ok" },
+    body: {
+      model: "system_status",
+      generated_at: new Date().toISOString(),
+      summary: {
+        erp_online: erpStatus.ok ? 1 : 0,
+        erp_latency_ms: erpStatus.latency_ms,
+        has_snapshot: snapshot ? 1 : 0,
+        module_count: modules.length
+      },
+      sections: {
+        erp_status: [erpStatus],
+        snapshot: snapshot
+          ? [{
+              created_at: snapshot.created_at,
+              today_orders: snapshot.summary.today_orders,
+              month_orders: snapshot.summary.month_orders,
+              overdue_orders: snapshot.summary.overdue_orders,
+              shortage_orders: snapshot.summary.shortage_orders,
+              low_stock: snapshot.summary.low_stock
+            }]
+          : [],
+        modules: modules.map(([name, path, status]) => ({ name, path, status }))
+      },
+      notes: [
+        erpStatus.ok ? "ERP 实时接口当前可用。" : `ERP 实时接口当前不可用：${erpStatus.message}`,
+        snapshot ? `最近本地快照时间：${formatDateTime(snapshot.created_at)}。` : "当前没有本地驾驶舱快照。",
+        "此页面只做轻量状态检查，不扫描订单、库存和合同明细。"
+      ]
+    }
+  };
+}
+
+function systemStatusPage(body) {
+  return modulePage({
+    title: "数据源状态中心",
+    subtitle: "查看 ERP 登录接口、本地 SQLite 快照和关键业务页面的可用状态。",
+    summary: [
+      ["ERP在线", body.summary.erp_online ? "是" : "否"],
+      ["ERP耗时ms", body.summary.erp_latency_ms],
+      ["本地快照", body.summary.has_snapshot ? "有" : "无"],
+      ["业务入口", body.summary.module_count]
+    ],
+    panels: [
+      modulePanel("ERP 登录状态", body.sections.erp_status, ["ok", "message", "latency_ms", "session_tail"]),
+      modulePanel("最近驾驶舱快照", body.sections.snapshot, ["created_at", "today_orders", "month_orders", "overdue_orders", "shortage_orders", "low_stock"]),
+      modulePanel("业务入口状态", body.sections.modules, ["name", "path", "status"])
+    ],
+    notes: body.notes,
+    actions: [
+      ["刷新状态", "/system"],
+      ["PMC驾驶舱", "/pmc"]
+    ]
+  });
+}
+
 function pmcGoalPage() {
   const rows = [
     ["PMC驾驶舱首页", "已完成V1", "KPI、逾期、临期、缺料、待报价、低库存"],
@@ -2423,6 +2516,7 @@ function pmcGoalPage() {
     ["排产甘特图", "已完成V1入口", "按订单交期生成时间轴；工单/设备/工序排产待接入"],
     ["采购跟催", "已完成V1入口", "先接入库流水和应付付款；采购订单/供应商联系人待确认"],
     ["应收应付", "已完成V1入口", "聚合应收/收款、应付/付款，后续补逾期和付款条件"],
+    ["数据源状态", "已完成V1入口", "轻量检查 ERP 登录、本地快照、业务入口可用性"],
     ["权限登录", "暂缓", "当前按用户要求为内网免登录版"]
   ];
   return modulePage({
