@@ -24,6 +24,10 @@ const server = http.createServer(async (req, res) => {
             name: "PMC异常视图",
             allowedParams: ["searchKey", "pageindex", "pagesize"]
           },
+          contract_lines: {
+            name: "销售合同明细视图",
+            allowedParams: ["ord"]
+          },
           inventory_alerts: {
             name: "库存异常视图",
             allowedParams: ["cks", "searchKey", "title", "order1", "scan_size", "scan_pages", "alert_limit", "low_stock_threshold", "old_stock_days"]
@@ -48,13 +52,18 @@ const server = http.createServer(async (req, res) => {
       const result =
         viewName === "pmc_exceptions"
           ? await client.queryPmcExceptions(params)
+          : viewName === "contract_lines"
+            ? await client.queryContractLines(params)
           : viewName === "inventory_alerts"
             ? await client.queryInventoryAlerts(params)
           : viewName === "pmc_dashboard"
             ? await client.queryPmcDashboard(params)
           : await client.queryView(viewName, params);
 
-      const normalized = viewName === "pmc_exceptions" || viewName === "inventory_alerts" || viewName === "pmc_dashboard" ? result.body : normalizeTable(result);
+      const normalized =
+        viewName === "pmc_exceptions" || viewName === "contract_lines" || viewName === "inventory_alerts" || viewName === "pmc_dashboard"
+          ? result.body
+          : normalizeTable(result);
 
       return sendJson(res, 200, {
         view: viewName,
@@ -124,6 +133,8 @@ function agentToolSchema() {
           type: "string",
           enum: [
             "sales_orders",
+            "contract_detail",
+            "contract_lines",
             "inventory",
             "inventory_details",
             "warehouses",
@@ -144,7 +155,7 @@ function agentToolSchema() {
         },
         filters: {
           type: "object",
-          description: "查询条件。常用：pageindex、pagesize、searchKey、khmc、htbh、title。"
+          description: "查询条件。常用：pageindex、pagesize、searchKey、khmc、htbh、title、ord。"
         }
       }
     },
@@ -156,6 +167,10 @@ function agentToolSchema() {
       {
         user: "有哪些未发货未收款订单？",
         call: { view: "pmc_exceptions", filters: { pageindex: 1, pagesize: 10 } }
+      },
+      {
+        user: "查一下合同明细",
+        call: { view: "contract_lines", filters: { ord: 12345 } }
       },
       {
         user: "查一下钼产品库存",
