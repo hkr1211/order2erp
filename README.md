@@ -115,26 +115,30 @@ curl 'http://localhost:3000/agent/tool-schema'
 
 ## 下一步
 
-拿到测试账号后，先验证 `sales_orders` 和 `inventory` 两个接口返回字段，再根据真实字段补 PMC 异常规则：
+库存余额接口已经打通，下一步可以基于真实库存字段补 PMC 异常规则：
 
 - 延期订单：交期字段与当前日期/预计完工日期比较
 - 缺料订单：订单需求量与库存汇总的可用数量、在途数量比较
 - 待报价订单：确认项目/报价接口后接入
 
-## 库存权限排查记录
+## 库存接口验证记录
 
 `codex` 账号可以查询仓库和产品：
 
 - 仓库列表：不限定 `Del` 状态时可见 21 个仓库；中台接口 `GET /api/warehouses?pageindex=1&pagesize=5` 已验证可分页返回
 - 产品列表：可见 16094 个产品
 
-但当前库存余额接口仍未打通：
+库存余额接口已于 2026-05-22 验证打通：
 
-- `/webapi/v3/store/inventory/InventorySummary`：按文档完整参数、空筛选、指定真实产品编号查询，均返回 `Code=200` 但 `RecordCount=0`
-- `/webapi/v3/store/inventory/InventoryDetails`：同样返回 `Code=200` 但 `RecordCount=0`
-- `/webapi/v3/ov1/storemanage/store/list`：文档指向旧版库存查看列表，但直接调用返回空响应
+- `/webapi/v3/store/inventory/InventorySummary`：空筛选返回 2251 条库存汇总
+- `/webapi/v3/store/inventory/InventoryDetails`：空筛选返回 4221 条库存明细
+- `cks=42`（1号钽铌库）库存汇总返回 164 条，库存明细返回 675 条
 
-这说明账号已经有库存模块的部分查询权限，但“库存余额/库存查看”的真实数据入口或权限范围仍需继续确认。后续需要用 ERP 前台同账号打开库存查看页面，对照浏览器网络请求，或请智邦接口方确认余额台账对应的接口。
+示例库存数据：
+
+- 高温钼棒 `Mo20201000174`：库存 6.56 kg，仓库 `4号棒丝材库`
+- 锆锭 `Zr104000008`：库存 7740 kg，仓库 `2号带箔材库`
+- 钽板 `Ta10201000086`：库存 3.25 kg，仓库 `1号钽铌库`
 
 已验证入库流水可查询：
 
