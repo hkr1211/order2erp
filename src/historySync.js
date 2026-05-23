@@ -120,6 +120,50 @@ export function historySyncWindowParams(options = {}) {
   };
 }
 
+export async function runHistorySyncWindow(options = {}) {
+  const plan = historySyncWindowParams(options);
+  const runPage = options.runPage;
+  if (typeof runPage !== "function") {
+    throw new Error("runHistorySyncWindow requires runPage");
+  }
+  const wait = typeof options.wait === "function" ? options.wait : sleep;
+  const results = [];
+  let stopReason = "已达到安全窗口页数上限。";
+
+  for (const page of plan.pages) {
+    const result = await runPage({
+      source: plan.source,
+      start_date: plan.start_date,
+      end_date: plan.end_date,
+      pageindex: page.page_index,
+      pagesize: page.page_size
+    });
+    results.push(result);
+    if (!result.has_next || Number(result.rows_synced) < plan.pageSize) {
+      stopReason = "最后一页返回不足页大小，窗口已停止。";
+      break;
+    }
+    if (results.length < plan.pages.length) {
+      await wait(plan.delayMs);
+    }
+  }
+
+  return {
+    generated_at: new Date().toISOString(),
+    source: plan.source,
+    label: plan.label,
+    status: results.length === plan.pages.length ? "completed" : "stopped",
+    pages_executed: results.length,
+    rows_synced: results.reduce((sum, row) => sum + (Number(row.rows_synced) || 0), 0),
+    start_page_index: plan.startPageIndex,
+    page_size: plan.pageSize,
+    max_pages: plan.maxPages,
+    delay_ms: plan.delayMs,
+    stop_reason: stopReason,
+    results
+  };
+}
+
 export async function runHistorySyncBatch(client, options = {}) {
   const plan = historySyncParams(options);
   const response = await client.queryView(plan.viewName, plan.erpParams);
@@ -187,6 +231,10 @@ export function buildHistorySyncProgress({ sources = HISTORY_SYNC_SOURCES, lates
 
 function historySyncHref(path, plan, pageIndex) {
   return `${path}?source=${encodeURIComponent(plan.source)}&start_date=${encodeURIComponent(plan.range.start_date)}&end_date=${encodeURIComponent(plan.range.end_date)}&pageindex=${pageIndex}&pagesize=${plan.pageSize}`;
+}
+
+function sleep(delayMs) {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 function startOfDay(date) {

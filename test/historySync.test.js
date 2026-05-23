@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildHistorySyncProgress, defaultHistoryRange, historySyncDryRun, historySyncParams, historySyncWindowParams } from "../src/historySync.js";
+import { buildHistorySyncProgress, defaultHistoryRange, historySyncDryRun, historySyncParams, historySyncWindowParams, runHistorySyncWindow } from "../src/historySync.js";
 
 test("defaultHistoryRange returns the last 90 days", () => {
   const range = defaultHistoryRange(new Date("2026-05-23T08:00:00+08:00"));
@@ -56,6 +56,40 @@ test("historySyncWindowParams clamps page count and delay for ERP safety", () =>
   assert.equal(windowParams.delayMs, 5000);
   assert.equal(windowParams.pages[0].page_index, 3);
   assert.equal(windowParams.pages.at(-1).page_index, 7);
+});
+
+test("runHistorySyncWindow executes pages sequentially and stops after short final page", async () => {
+  const calls = [];
+  const waits = [];
+  const result = await runHistorySyncWindow({
+    source: "sales_orders",
+    start_date: "2026-02-22",
+    end_date: "2026-05-23",
+    pageindex: 2,
+    pagesize: 20,
+    max_pages: 5,
+    delay_ms: 5000,
+    runPage: async (params) => {
+      calls.push(params.pageindex);
+      return {
+        source: params.source,
+        status: "success",
+        rows_synced: params.pageindex === 3 ? 7 : 20,
+        page_index: params.pageindex,
+        page_size: params.pagesize,
+        has_next: params.pageindex !== 3
+      };
+    },
+    wait: async (delayMs) => {
+      waits.push(delayMs);
+    }
+  });
+
+  assert.deepEqual(calls, [2, 3]);
+  assert.deepEqual(waits, [5000]);
+  assert.equal(result.status, "stopped");
+  assert.equal(result.stop_reason, "最后一页返回不足页大小，窗口已停止。");
+  assert.equal(result.pages_executed, 2);
 });
 
 test("buildHistorySyncProgress suggests next page after success", () => {

@@ -9,7 +9,7 @@ import { syncCoreData } from "./syncService.js";
 import { buildSyncPolicyRows } from "./syncPolicy.js";
 import { buildErpHealthSummary, shouldBlockErpBusinessQuery } from "./erpHealth.js";
 import { SQLITE_TABLES, buildSqliteCoverage } from "./sqliteCoverage.js";
-import { HISTORY_SYNC_SOURCES, buildHistorySyncProgress, defaultHistoryRange, historySyncDryRun, historySyncParams, historySyncWindowParams, runHistorySyncBatch } from "./historySync.js";
+import { HISTORY_SYNC_SOURCES, buildHistorySyncProgress, defaultHistoryRange, historySyncDryRun, historySyncParams, historySyncWindowParams, runHistorySyncBatch, runHistorySyncWindow } from "./historySync.js";
 import { buildLocalExceptionCenter, buildLocalFinanceCenter, buildLocalPmcDashboard, quoteOwnerSummaryForLocal } from "./localAnalytics.js";
 
 loadEnvFile();
@@ -174,6 +174,24 @@ const server = http.createServer(async (req, res) => {
       return sendHtml(res, 200, historySyncWindowPage(historySyncWindowParams(params)));
     }
 
+    if (req.method === "GET" && url.pathname === "/history-sync/window/run") {
+      const params = Object.fromEntries(url.searchParams);
+      const guard = shouldBlockErpBusinessQuery({
+        protectionMode: ERP_PROTECTION_MODE,
+        health: queryErpHealth().health,
+        params
+      });
+      if (guard.blocked) {
+        return sendHtml(res, 503, historySyncBlockedPage(guard.reason));
+      }
+      try {
+        const result = await runHistorySyncWindowWithRecord(params);
+        return sendHtml(res, 200, historySyncWindowResultPage(result));
+      } catch (error) {
+        return sendHtml(res, 500, historySyncFailurePage(params, summarizeDataSourceError(error)));
+      }
+    }
+
     if (req.method === "GET" && url.pathname === "/history-sync/run") {
       const params = Object.fromEntries(url.searchParams);
       const guard = shouldBlockErpBusinessQuery({
@@ -213,6 +231,19 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/history_sync/window") {
       const params = Object.fromEntries(url.searchParams);
       return sendJson(res, 200, historySyncWindowParams(params));
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/history_sync/window/run") {
+      const params = Object.fromEntries(url.searchParams);
+      const guard = shouldBlockErpBusinessQuery({
+        protectionMode: ERP_PROTECTION_MODE,
+        health: queryErpHealth().health,
+        params
+      });
+      if (guard.blocked) {
+        return sendJson(res, 503, { error: guard.reason, health: queryErpHealth().health });
+      }
+      return sendJson(res, 200, await runHistorySyncWindowWithRecord(params));
     }
 
     if (req.method === "GET" && url.pathname === "/erp-logs") {
@@ -1212,6 +1243,13 @@ function labelFor(key) {
     error_message: "错误信息",
     next_page_index: "下一页",
     next_run: "继续执行",
+    rows_synced: "同步行数",
+    has_next: "是否还有下一页",
+    max_pages: "最大页数",
+    delay_ms: "页间等待ms",
+    start_page_index: "起始页",
+    pages_executed: "执行页数",
+    stop_reason: "停止原因",
     dry_run: "预演",
     safe_window: "安全窗口",
     run: "执行",
@@ -4530,6 +4568,7 @@ function historySyncPage(body) {
 }
 
 function historySyncWindowPage(result) {
+  const runQuery = `source=${encodeURIComponent(result.source)}&start_date=${encodeURIComponent(result.start_date)}&end_date=${encodeURIComponent(result.end_date)}&pageindex=${result.startPageIndex}&pagesize=${result.pageSize}&max_pages=${result.maxPages}&delay_ms=${result.delayMs}`;
   return modulePage({
     title: "历史同步安全窗口",
     subtitle: `${result.label} 从第 ${result.startPageIndex} 页开始，按受控节奏补齐。页面本身不访问 ERP。`,
@@ -4549,6 +4588,7 @@ function historySyncWindowPage(result) {
       "如果 ERP 当天已经出现卡顿，先不要执行窗口内的同步。"
     ],
     actions: [
+      ["执行这个安全窗口", `/history-sync/window/run?${runQuery}`],
       ["返回历史同步", "/history-sync"],
       ["ERP健康状态", "/api/erp_health"],
       ["ERP请求日志", "/erp-logs"]
@@ -4576,6 +4616,49 @@ function historySyncDryRunPage(result) {
       ["确认执行这一页", `/history-sync/run?${queryString}`],
       ["返回历史同步", "/history-sync"],
       ["ERP健康状态", "/api/erp_health"]
+    ]
+  });
+}
+
+async function runHistorySyncWindowWithRecord(params = {}) {
+  return runHistorySyncWindow({
+    ...params,
+    runPage: async (pageParams) => {
+      const guard = shouldBlockErpBusinessQuery({
+        protectionMode: ERP_PROTECTION_MODE,
+        health: queryErpHealth().health,
+        params: pageParams
+      });
+      if (guard.blocked) {
+        throw new Error(guard.reason);
+      }
+      return runHistorySyncBatchWithRecord(pageParams);
+    }
+  });
+}
+
+function historySyncWindowResultPage(result) {
+  return modulePage({
+    title: "安全窗口执行结果",
+    subtitle: `${result.label} 已按受控窗口执行 ${result.pages_executed} 页。`,
+    summary: [
+      ["同步源", result.label],
+      ["状态", result.status],
+      ["执行页数", result.pages_executed],
+      ["同步行数", result.rows_synced],
+      ["停止原因", result.stop_reason]
+    ],
+    panels: [
+      modulePanel("窗口执行明细", result.results, ["source", "status", "rows_synced", "page_index", "page_size", "start_date", "end_date", "has_next", "next_page_index"])
+    ],
+    notes: [
+      "窗口执行仍然是一页一页请求 ERP，中间包含安全等待。",
+      "如果 ERP 健康状态变差，后续页面会停止执行。"
+    ],
+    actions: [
+      ["返回历史同步", "/history-sync"],
+      ["ERP请求日志", "/erp-logs"],
+      ["SQLite覆盖率", "/sqlite-coverage"]
     ]
   });
 }
