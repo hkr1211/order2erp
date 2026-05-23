@@ -6,6 +6,7 @@ import { queryOrderShortages } from "./orderShortages.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
 import { initLocalDb, latestPmcSnapshot, latestSyncRuns, listMaterialAlerts, listProcedurePlans, listSalesOrders, savePmcSnapshot } from "./localDb.js";
 import { syncCoreData } from "./syncService.js";
+import { buildLocalExceptionCenter, buildLocalPmcDashboard } from "./localAnalytics.js";
 
 loadEnvFile();
 initLocalDb();
@@ -2679,6 +2680,16 @@ function productionWorkloadByCenter(rows, today) {
 }
 
 async function queryExceptionCenter(params = {}) {
+  if (params.refresh !== "1") {
+    const dashboard = queryLocalPmcDashboard(params);
+    if (dashboard) {
+      return {
+        header: { status: 0, message: "ok" },
+        body: buildLocalExceptionCenter(dashboard)
+      };
+    }
+  }
+
   let dashboard;
   let sourceError = null;
   let cached = false;
@@ -2836,6 +2847,46 @@ function exceptionPriorityWeight(priority) {
 }
 
 async function queryReportCenter(params = {}) {
+  if (params.refresh !== "1") {
+    const consoleBody = queryLocalPmcDashboard(params);
+    if (consoleBody) {
+      const orderCenter = await queryOrderCenter({
+        pageindex: params.pageindex || 1,
+        pagesize: params.pagesize || 20,
+        contract_limit: params.contract_limit || 5,
+        due_soon_days: params.due_soon_days || 7
+      });
+      return {
+        header: { status: 0, message: "ok" },
+        body: {
+          model: "report_center",
+          generated_at: new Date().toISOString(),
+          cached: true,
+          summary: {
+            today_orders: consoleBody.summary.today_orders,
+            month_orders: consoleBody.summary.month_orders,
+            red_orders: orderCenter.body.summary.red_orders,
+            yellow_orders: orderCenter.body.summary.yellow_orders,
+            green_orders: orderCenter.body.summary.green_orders,
+            shortage_orders: orderCenter.body.summary.shortage_orders,
+            due_soon_orders: consoleBody.summary.due_soon_orders,
+            pending_quote_projects: consoleBody.summary.pending_quote_projects,
+            low_stock: consoleBody.summary.low_stock
+          },
+          sections: {
+            order_rows: orderCenter.body.rows,
+            pending_quotes: consoleBody.sections.pending_quotes,
+            low_stock: consoleBody.sections.low_stock
+          },
+          notes: [
+            "当前报表读取本地 SQLite 汇总。",
+            "ERP 不可用时，报表继续使用最近同步成功的数据。"
+          ]
+        }
+      };
+    }
+  }
+
   const [consoleData, orderCenter, quotes] = await Promise.all([
     queryPmcConsole({ ...params, refresh: params.refresh || "" }),
     queryOrderCenter({
@@ -3959,8 +4010,32 @@ function pmcGoalPage() {
   });
 }
 
+function queryLocalPmcDashboard(params = {}) {
+  const limit = clampInt(params.local_limit || 1000, 1, 5000);
+  const salesOrders = listSalesOrders({ limit });
+  if (!salesOrders.length) {
+    return null;
+  }
+  const materialAlerts = listMaterialAlerts({ limit });
+  return buildLocalPmcDashboard({
+    today: params.today ? new Date(params.today) : new Date(),
+    salesOrders,
+    materialAlerts
+  });
+}
+
 async function queryPmcConsole(params = {}) {
   const refresh = parseBoolean(params.refresh);
+  if (!refresh) {
+    const localDashboard = queryLocalPmcDashboard(params);
+    if (localDashboard) {
+      return {
+        header: { status: 0, message: "ok" },
+        body: localDashboard
+      };
+    }
+  }
+
   const cached = latestPmcSnapshot();
   if (!refresh && cached && Date.now() - new Date(cached.created_at).getTime() < 5 * 60 * 1000) {
     return {
