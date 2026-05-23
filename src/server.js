@@ -4,7 +4,7 @@ import { ErpClient, ERP_VIEWS, normalizeTable, toBusinessView } from "./erpClien
 import { queryOrderDeliveryRisks } from "./orderDeliveryRisks.js";
 import { queryOrderShortages } from "./orderShortages.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
-import { initLocalDb, latestPmcSnapshot, latestSyncRuns, savePmcSnapshot } from "./localDb.js";
+import { initLocalDb, latestPmcSnapshot, latestSyncRuns, listProcedurePlans, savePmcSnapshot } from "./localDb.js";
 import { syncCoreData } from "./syncService.js";
 
 loadEnvFile();
@@ -70,13 +70,13 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/production") {
       const params = Object.fromEntries(url.searchParams);
-      const result = await queryProductionCenter(params);
+      const result = parseBoolean(params.refresh) ? await queryProductionCenter(params) : await queryLocalProductionCenter(params);
       return sendHtml(res, 200, productionCenterPage(result.body));
     }
 
     if (req.method === "GET" && url.pathname === "/dispatch") {
       const params = Object.fromEntries(url.searchParams);
-      const result = await queryProductionCenter(params);
+      const result = parseBoolean(params.refresh) ? await queryProductionCenter(params) : await queryLocalProductionCenter(params);
       return sendHtml(res, 200, dispatchTrackingPage(result.body));
     }
 
@@ -2444,6 +2444,49 @@ async function queryProductionCenter(params = {}) {
   };
 }
 
+async function queryLocalProductionCenter(params = {}) {
+  const pageSize = clampInt(params.pagesize || 100, 1, 500);
+  const today = startOfDay(parseDate(params.today) || new Date());
+  const procedureRows = listProcedurePlans({ limit: pageSize });
+  const delayedProcedures = procedureRows
+    .filter((row) => row.remaining_qty === null || row.remaining_qty > 0)
+    .filter((row) => parseDate(row.planned_finish_date) && daysBetween(today, startOfDay(parseDate(row.planned_finish_date))) < 0);
+  const workloadRows = productionWorkloadByCenter(procedureRows, today);
+  return {
+    header: { status: 0, message: "ok" },
+    body: {
+      model: "production_center",
+      generated_at: new Date().toISOString(),
+      cached: true,
+      offline: false,
+      summary: {
+        progress_rows: 0,
+        material_order_rows: 0,
+        bom_rows: 0,
+        procedure_plan_rows: procedureRows.length,
+        delayed_procedures: delayedProcedures.length,
+        work_centers: workloadRows.length,
+        source_errors: 0
+      },
+      sections: {
+        progress: [],
+        material_orders: [],
+        boms: [],
+        procedure_plans: procedureRows,
+        delayed_procedures: delayedProcedures,
+        workload_by_center: workloadRows
+      },
+      source_status: {
+        sqlite_procedure_plans: { ok: true, message: null }
+      },
+      notes: [
+        "当前读取本地 SQLite 派工/工序计划表。",
+        "点击“立即同步”可从 ERP 重新同步工序计划。"
+      ]
+    }
+  };
+}
+
 function settledStatus(result) {
   return {
     ok: result.status === "fulfilled",
@@ -3378,7 +3421,7 @@ function productionCenterPage(body) {
       modulePanel("工序计划", body.sections.procedure_plans, ["work_assignment_id", "order_no", "product_name", "procedure_name", "work_center_name", "planned_qty", "finished_qty", "remaining_qty", "planned_start_date", "planned_finish_date", "owner"])
     ],
     notes: body.notes,
-    actions: [["派工追踪", "/dispatch"], ["刷新", "/production"]]
+    actions: [["立即同步", "/sync?sources=procedure_plans"], ["派工追踪", "/dispatch"], ["刷新实时ERP", "/production?refresh=1"]]
   });
 }
 
@@ -3403,7 +3446,7 @@ function dispatchTrackingPage(body) {
       ...body.notes,
       "当前 ERP 的 production_progress 接口返回 0 行时，本页优先使用 procedure_plans 工序计划作为派工追踪主数据。"
     ],
-    actions: [["返回生产中心", "/production"], ["刷新", "/dispatch?refresh=1"]]
+    actions: [["立即同步", "/sync?sources=procedure_plans"], ["返回生产中心", "/production"], ["刷新实时ERP", "/dispatch?refresh=1"]]
   });
 }
 
