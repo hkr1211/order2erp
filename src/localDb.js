@@ -209,16 +209,30 @@ export function logErpRequest(entry) {
     );
 }
 
-export function latestErpRequestLogs(limit = 20) {
+export function latestErpRequestLogs(options = 20) {
   const database = initLocalDb();
+  const normalized = typeof options === "object" && options !== null ? options : { limit: options };
+  const limit = Math.max(1, Math.min(Number(normalized.limit) || 20, 500));
+  const filters = [];
+  const values = [];
+  if (normalized.status) {
+    filters.push("status = ?");
+    values.push(String(normalized.status));
+  }
+  if (normalized.path) {
+    filters.push("path LIKE ?");
+    values.push(`%${String(normalized.path)}%`);
+  }
+  const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
   return database
     .prepare(
       `SELECT requested_at, method, path, status, duration_ms, error_message
        FROM erp_request_logs
+       ${whereClause}
        ORDER BY id DESC
        LIMIT ?`
     )
-    .all(Math.max(1, Math.min(Number(limit) || 20, 100)));
+    .all(...values, limit);
 }
 
 export function replaceSalesOrders(rows) {

@@ -132,6 +132,18 @@ const server = http.createServer(async (req, res) => {
       return sendHtml(res, 200, systemStatusPage(result.body));
     }
 
+    if (req.method === "GET" && url.pathname === "/erp-logs") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = queryErpRequestLogCenter(params);
+      return sendHtml(res, 200, erpRequestLogPage(result.body));
+    }
+
+    if (req.method === "GET" && url.pathname === "/erp-logs/export.csv") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = queryErpRequestLogCenter(params);
+      return sendCsv(res, "erp-request-logs.csv", erpRequestLogCsv(result.body));
+    }
+
     if (req.method === "GET" && url.pathname === "/sync") {
       const params = { pagesize: DEFAULT_SYNC_PAGE_SIZE, ...Object.fromEntries(url.searchParams) };
       const result = await syncCoreData(client, params);
@@ -378,7 +390,8 @@ function homePage() {
     ["Excel报表", "/reports/export.xls", "导出带格式的 PMC 日报 Excel 文件"],
     ["报表打印版", "/reports/print", "适合打印成 PDF 的 PMC 日报"],
     ["PMC 全功能路线", "/goal", "查看完整 PMC 平台实施目标和当前完成度"],
-    ["数据源状态中心", "/system", "查看 ERP 连通性、本地快照和系统状态"]
+    ["数据源状态中心", "/system", "查看 ERP 连通性、本地快照和系统状态"],
+    ["ERP 请求日志", "/erp-logs", "查看本地记录的 ERP 请求成败和耗时"]
   ];
   const apiLinks = [
     ["健康检查", "/health", "确认本地中台是否正在运行"],
@@ -4077,6 +4090,108 @@ function csvCell(value) {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
+function queryErpRequestLogCenter(params = {}) {
+  const status = params.status || "";
+  const pathFilter = params.path || "";
+  const limit = clampInt(params.limit || 100, 1, 500);
+  const rows = latestErpRequestLogs({ status, path: pathFilter, limit });
+  const failedRows = rows.filter((row) => row.status === "failed");
+  const averageDuration = rows.length
+    ? Math.round(rows.reduce((sum, row) => sum + (Number(row.duration_ms) || 0), 0) / rows.length)
+    : 0;
+  const byPath = summarizeErpLogsByPath(rows);
+  return {
+    header: { status: 0, message: "ok" },
+    body: {
+      model: "erp_request_logs",
+      generated_at: new Date().toISOString(),
+      filters: { status, path: pathFilter, limit },
+      summary: {
+        request_logs: rows.length,
+        failed_logs: failedRows.length,
+        success_logs: rows.filter((row) => row.status === "success").length,
+        average_duration_ms: averageDuration,
+        paths: byPath.length
+      },
+      rows,
+      sections: {
+        failed_logs: failedRows,
+        by_path: byPath
+      },
+      notes: [
+        "本页只读取本地 SQLite erp_request_logs 表，不访问 ERP。",
+        "如果 ERP 卡死或 503，优先查看失败请求的 path 和 error_message。"
+      ]
+    }
+  };
+}
+
+function summarizeErpLogsByPath(rows) {
+  const grouped = new Map();
+  for (const row of rows) {
+    const key = row.path || "unknown";
+    const current = grouped.get(key) || {
+      path: key,
+      requests: 0,
+      failed: 0,
+      average_duration_ms: 0,
+      total_duration_ms: 0,
+      last_status: "",
+      last_requested_at: ""
+    };
+    current.requests += 1;
+    current.total_duration_ms += Number(row.duration_ms) || 0;
+    if (row.status === "failed") {
+      current.failed += 1;
+    }
+    if (!current.last_requested_at || row.requested_at > current.last_requested_at) {
+      current.last_status = row.status;
+      current.last_requested_at = row.requested_at;
+    }
+    grouped.set(key, current);
+  }
+  return [...grouped.values()]
+    .map((row) => ({
+      ...row,
+      average_duration_ms: Math.round(row.total_duration_ms / row.requests)
+    }))
+    .sort((a, b) => b.failed - a.failed || b.requests - a.requests)
+    .map(({ total_duration_ms, ...row }) => row);
+}
+
+function erpRequestLogPage(body) {
+  return modulePage({
+    title: "ERP 请求日志",
+    subtitle: "查看本地记录的 ERP API 请求结果，用于排查 503、非 JSON 和熔断问题。",
+    summary: [
+      ["日志条数", body.summary.request_logs],
+      ["失败", body.summary.failed_logs],
+      ["成功", body.summary.success_logs],
+      ["平均耗时ms", body.summary.average_duration_ms],
+      ["接口数", body.summary.paths]
+    ],
+    panels: [
+      modulePanel("失败请求", body.sections.failed_logs, ["requested_at", "method", "path", "status", "duration_ms", "error_message"]),
+      modulePanel("按接口汇总", body.sections.by_path, ["path", "requests", "failed", "average_duration_ms", "last_status", "last_requested_at"]),
+      modulePanel("最近请求", body.rows, ["requested_at", "method", "path", "status", "duration_ms", "error_message"])
+    ],
+    notes: body.notes,
+    actions: [
+      ["只看失败", "/erp-logs?status=failed&limit=100"],
+      ["导出CSV", "/erp-logs/export.csv?limit=500"],
+      ["系统状态", "/system"]
+    ]
+  });
+}
+
+function erpRequestLogCsv(body) {
+  const rows = [
+    ["requested_at", "method", "path", "status", "duration_ms", "error_message"],
+    ...body.rows.map((row) => [row.requested_at, row.method, row.path, row.status, row.duration_ms, row.error_message])
+  ];
+  return rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
+}
+
 async function querySystemStatus(params = {}) {
   const startedAt = Date.now();
   let erpStatus;
@@ -4209,6 +4324,7 @@ function systemStatusPage(body) {
     actions: [
       ["谨慎同步订单20条", "/sync?sources=sales_orders&pagesize=20"],
       ["检测ERP登录", "/system?check_erp=1"],
+      ["ERP请求日志", "/erp-logs"],
       ["刷新状态", "/system"],
       ["PMC驾驶舱", "/pmc"]
     ]
