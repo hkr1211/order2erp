@@ -17,6 +17,7 @@ const HOST = process.env.HOST || "127.0.0.1";
 const ERP_PROTECTION_MODE = process.env.ERP_PROTECTION_MODE !== "0";
 const DEFAULT_SYNC_PAGE_SIZE = Number.parseInt(process.env.DEFAULT_SYNC_PAGE_SIZE || "20", 10) || 20;
 const DEFAULT_SYNC_COOLDOWN_SECONDS = Number.parseInt(process.env.SYNC_COOLDOWN_SECONDS || "300", 10) || 300;
+const ERP_REQUEST_MIN_INTERVAL_MS = Number.parseInt(process.env.ERP_REQUEST_MIN_INTERVAL_MS || "800", 10) || 800;
 const client = new ErpClient();
 
 const server = http.createServer(async (req, res) => {
@@ -4133,6 +4134,7 @@ async function querySystemStatus(params = {}) {
         erp_online: erpStatus.ok === null ? null : erpStatus.ok ? 1 : 0,
         erp_protection_mode: ERP_PROTECTION_MODE ? "开启" : "关闭",
         erp_latency_ms: erpStatus.latency_ms,
+        erp_request_min_interval_ms: ERP_REQUEST_MIN_INTERVAL_MS,
         has_snapshot: snapshot ? 1 : 0,
         module_count: modules.length,
         sync_sources: syncRuns.length,
@@ -4174,6 +4176,7 @@ function systemStatusPage(body) {
       ["ERP在线", erpOnlineText],
       ["保护模式", body.summary.erp_protection_mode],
       ["ERP耗时ms", body.summary.erp_latency_ms],
+      ["请求间隔ms", body.summary.erp_request_min_interval_ms],
       ["本地快照", body.summary.has_snapshot ? "有" : "无"],
       ["同步源", body.summary.sync_sources],
       ["同步失败", body.summary.sync_failures],

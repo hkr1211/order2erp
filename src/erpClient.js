@@ -1,3 +1,5 @@
+import { ErpRequestQueue } from "./erpRequestQueue.js";
+
 const DEFAULT_BASE_URL = "http://192.168.1.179:81";
 
 export const ERP_VIEWS = {
@@ -262,6 +264,9 @@ export class ErpClient {
     this.password = options.password || process.env.ERP_PASSWORD;
     this.serialnum = options.serialnum || process.env.ERP_SERIALNUM || "openclaw001";
     this.session = options.token || process.env.ERP_TOKEN || "";
+    this.requestQueue = options.requestQueue || new ErpRequestQueue({
+      minIntervalMs: process.env.ERP_REQUEST_MIN_INTERVAL_MS || 800
+    });
   }
 
   async login() {
@@ -630,6 +635,10 @@ export class ErpClient {
   }
 
   async postJson(path, payload, headers = {}) {
+    return this.requestQueue.run(() => this.postJsonNow(path, payload, headers));
+  }
+
+  async postJsonNow(path, payload, headers = {}) {
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: "POST",
       headers: {
