@@ -9,6 +9,7 @@ import { syncCoreData } from "./syncService.js";
 import { buildSyncPolicyRows } from "./syncPolicy.js";
 import { buildErpHealthSummary, shouldBlockErpBusinessQuery } from "./erpHealth.js";
 import { SQLITE_TABLES, buildSqliteCoverage } from "./sqliteCoverage.js";
+import { HISTORY_SYNC_SOURCES, defaultHistoryRange, historySyncParams, runHistorySyncBatch } from "./historySync.js";
 import { buildLocalExceptionCenter, buildLocalFinanceCenter, buildLocalPmcDashboard, quoteOwnerSummaryForLocal } from "./localAnalytics.js";
 
 loadEnvFile();
@@ -37,6 +38,7 @@ const NAV_ITEMS = [
   ["报表", "/reports"],
   ["系统", "/system"],
   ["覆盖率", "/sqlite-coverage"],
+  ["历史同步", "/history-sync"],
   ["日志", "/erp-logs"]
 ];
 
@@ -155,6 +157,38 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/sqlite-coverage") {
       const result = querySqliteCoverage();
       return sendHtml(res, 200, sqliteCoveragePage(result.body));
+    }
+
+    if (req.method === "GET" && url.pathname === "/history-sync") {
+      const params = Object.fromEntries(url.searchParams);
+      return sendHtml(res, 200, historySyncPage(queryHistorySyncCenter(params).body));
+    }
+
+    if (req.method === "GET" && url.pathname === "/history-sync/run") {
+      const params = Object.fromEntries(url.searchParams);
+      const guard = shouldBlockErpBusinessQuery({
+        protectionMode: ERP_PROTECTION_MODE,
+        health: queryErpHealth().health,
+        params
+      });
+      if (guard.blocked) {
+        return sendHtml(res, 503, historySyncBlockedPage(guard.reason));
+      }
+      const result = await runHistorySyncBatch(client, params);
+      return sendHtml(res, 200, historySyncResultPage(result));
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/history_sync/run") {
+      const params = Object.fromEntries(url.searchParams);
+      const guard = shouldBlockErpBusinessQuery({
+        protectionMode: ERP_PROTECTION_MODE,
+        health: queryErpHealth().health,
+        params
+      });
+      if (guard.blocked) {
+        return sendJson(res, 503, { error: guard.reason, health: queryErpHealth().health });
+      }
+      return sendJson(res, 200, await runHistorySyncBatch(client, params));
     }
 
     if (req.method === "GET" && url.pathname === "/erp-logs") {
@@ -481,6 +515,7 @@ function modulePathForTitle(title) {
   if (text.includes("报表")) return "/reports";
   if (text.includes("数据源")) return "/system";
   if (text.includes("SQLite")) return "/sqlite-coverage";
+  if (text.includes("历史同步")) return "/history-sync";
   if (text.includes("同步")) return "/system";
   if (text.includes("ERP 请求日志")) return "/erp-logs";
   if (text.includes("全功能")) return "/goal";
@@ -511,6 +546,7 @@ function homePage() {
     ["PMC 全功能路线", "/goal", "查看完整 PMC 平台实施目标和当前完成度"],
     ["数据源状态中心", "/system", "查看 ERP 连通性、本地快照和系统状态"],
     ["SQLite覆盖率", "/sqlite-coverage", "查看各页面依赖的本地表、同步行数和缺口"],
+    ["历史同步任务", "/history-sync", "按90天范围安全分批补齐本地 SQLite 数据"],
     ["ERP 请求日志", "/erp-logs", "查看本地记录的 ERP 请求成败和耗时"]
   ];
   const apiLinks = [
@@ -4360,6 +4396,111 @@ function sqliteCoveragePage(body) {
       ["同步状态", "/sync"],
       ["ERP请求日志", "/erp-logs"]
     ]
+  });
+}
+
+function queryHistorySyncCenter(params = {}) {
+  const range = defaultHistoryRange(params.today ? new Date(params.today) : new Date());
+  const sourceRows = HISTORY_SYNC_SOURCES.map((source) => {
+    const plan = historySyncParams({
+      source: source.source,
+      start_date: params.start_date || range.start_date,
+      end_date: params.end_date || range.end_date,
+      pageindex: 1,
+      pagesize: params.pagesize || 20
+    });
+    const runHref = `/history-sync/run?source=${encodeURIComponent(source.source)}&start_date=${encodeURIComponent(plan.range.start_date)}&end_date=${encodeURIComponent(plan.range.end_date)}&pageindex=1&pagesize=${plan.pageSize}`;
+    return {
+      source: source.source,
+      label: source.label,
+      date_support: source.dateSupport,
+      suggested_range: source.suggestedRange,
+      page_size: plan.pageSize,
+      start_date: plan.range.start_date,
+      end_date: plan.range.end_date,
+      safety: source.riskNote,
+      run: runHref
+    };
+  });
+  return {
+    header: { status: 0, message: "ok" },
+    body: {
+      model: "history_sync_center",
+      generated_at: new Date().toISOString(),
+      summary: {
+        sources: sourceRows.length,
+        days: 90,
+        page_size: clampInt(params.pagesize || 20, 1, 20),
+        request_interval_ms: ERP_REQUEST_MIN_INTERVAL_MS,
+        circuit_breaker: "开启"
+      },
+      rows: sourceRows,
+      notes: [
+        "本页默认不执行同步，只生成安全补数入口。",
+        "点击执行时每次只同步一页，最大20条；成功后再点下一页继续。",
+        "所有请求仍经过 ERP 队列、请求间隔、冷却和熔断保护。"
+      ]
+    }
+  };
+}
+
+function historySyncPage(body) {
+  return modulePage({
+    title: "历史同步任务中心",
+    subtitle: "按最近90天范围安全分批补齐本地 SQLite 数据；默认只显示计划，不自动访问 ERP。",
+    summary: [
+      ["同步源", body.summary.sources],
+      ["范围天数", body.summary.days],
+      ["每页上限", body.summary.page_size],
+      ["请求间隔ms", body.summary.request_interval_ms],
+      ["熔断保护", body.summary.circuit_breaker]
+    ],
+    panels: [
+      modulePanel("可执行同步源", body.rows, ["label", "source", "date_support", "start_date", "end_date", "page_size", "suggested_range", "safety", "run"])
+    ],
+    notes: body.notes,
+    actions: [
+      ["SQLite覆盖率", "/sqlite-coverage"],
+      ["ERP健康状态", "/api/erp_health"],
+      ["ERP请求日志", "/erp-logs"]
+    ]
+  });
+}
+
+function historySyncResultPage(result) {
+  const nextHref = result.has_next
+    ? `/history-sync/run?source=${encodeURIComponent(result.source)}&start_date=${encodeURIComponent(result.start_date)}&end_date=${encodeURIComponent(result.end_date)}&pageindex=${result.next_page_index}&pagesize=${result.page_size}`
+    : "";
+  return modulePage({
+    title: "历史同步结果",
+    subtitle: `${result.label} 第 ${result.page_index} 页已完成。`,
+    summary: [
+      ["同步源", result.label],
+      ["本页行数", result.rows_synced],
+      ["页码", result.page_index],
+      ["页大小", result.page_size],
+      ["还有下一页", result.has_next ? "是" : "否"]
+    ],
+    panels: [
+      modulePanel("本次批次", [result], ["source", "status", "rows_synced", "page_index", "page_size", "start_date", "end_date", "has_next", "next_page_index"])
+    ],
+    notes: result.notes,
+    actions: [
+      ...(nextHref ? [["继续下一页", nextHref]] : []),
+      ["返回历史同步", "/history-sync"],
+      ["SQLite覆盖率", "/sqlite-coverage"]
+    ]
+  });
+}
+
+function historySyncBlockedPage(reason) {
+  return modulePage({
+    title: "历史同步已暂停",
+    subtitle: "ERP 当前处于保护状态，已阻止本次历史同步。",
+    summary: [["状态", "已阻止"]],
+    panels: [],
+    notes: [reason, "请先查看 ERP 健康状态和请求日志，确认 ERP 稳定后再继续。"],
+    actions: [["ERP健康状态", "/api/erp_health"], ["ERP请求日志", "/erp-logs"], ["返回历史同步", "/history-sync"]]
   });
 }
 

@@ -272,7 +272,7 @@ function isTruthy(value) {
   return text === "1" || text === "true" || text === "yes";
 }
 
-function mapSalesOrder(row, index) {
+export function mapSalesOrder(row, index) {
   return {
     erp_id: text(row.erp_id || row.ord || row.id || row.order_no || `sales-${index}`),
     order_no: text(row.order_no),
@@ -292,7 +292,7 @@ function mapSalesOrder(row, index) {
   };
 }
 
-function mapProcedurePlan(row, index) {
+export function mapProcedurePlan(row, index) {
   const workAssignmentId = text(row.workAssignmentId || row.work_assignment_id || row["派工单ID"] || row["派工单号"]);
   const procedureId = text(row.procedurePlanId || row.id || row["工序计划ID"]);
   return {

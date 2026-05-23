@@ -239,14 +239,14 @@ export function replaceSalesOrders(rows) {
   const database = initLocalDb();
   runInTransaction(database, () => {
     database.prepare("DELETE FROM erp_sales_orders").run();
-    const stmt = database.prepare(`
-      INSERT INTO erp_sales_orders
-      (erp_id, order_no, customer, owner, product_name, product_code, product_model, quantity, remaining_qty, delivery_date, signed_date, amount, status_text, raw_json, synced_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    for (const row of rows) {
-      stmt.run(row.erp_id, row.order_no, row.customer, row.owner, row.product_name, row.product_code, row.product_model, row.quantity, row.remaining_qty, row.delivery_date, row.signed_date, row.amount, row.status_text, JSON.stringify(row.raw || row), row.synced_at);
-    }
+    insertSalesOrders(database, rows);
+  });
+}
+
+export function upsertSalesOrders(rows) {
+  const database = initLocalDb();
+  runInTransaction(database, () => {
+    insertSalesOrders(database, rows);
   });
 }
 
@@ -254,14 +254,14 @@ export function replaceProcedurePlans(rows) {
   const database = initLocalDb();
   runInTransaction(database, () => {
     database.prepare("DELETE FROM erp_procedure_plans").run();
-    const stmt = database.prepare(`
-      INSERT INTO erp_procedure_plans
-      (erp_id, work_assignment_id, order_no, product_name, product_code, product_model, procedure_name, work_center_name, planned_qty, finished_qty, remaining_qty, planned_start_date, planned_finish_date, owner, state, raw_json, synced_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    for (const row of rows) {
-      stmt.run(row.erp_id, row.work_assignment_id, row.order_no, row.product_name, row.product_code, row.product_model, row.procedure_name, row.work_center_name, row.planned_qty, row.finished_qty, row.remaining_qty, row.planned_start_date, row.planned_finish_date, row.owner, row.state, JSON.stringify(row.raw || row), row.synced_at);
-    }
+    insertProcedurePlans(database, rows);
+  });
+}
+
+export function upsertProcedurePlans(rows) {
+  const database = initLocalDb();
+  runInTransaction(database, () => {
+    insertProcedurePlans(database, rows);
   });
 }
 
@@ -349,6 +349,28 @@ export function tableStats(tableName, timestampColumn = null) {
 function assertSafeIdentifier(value) {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(value))) {
     throw new Error(`Unsafe SQLite identifier: ${value}`);
+  }
+}
+
+function insertSalesOrders(database, rows) {
+  const stmt = database.prepare(`
+    INSERT OR REPLACE INTO erp_sales_orders
+    (erp_id, order_no, customer, owner, product_name, product_code, product_model, quantity, remaining_qty, delivery_date, signed_date, amount, status_text, raw_json, synced_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const row of rows) {
+    stmt.run(row.erp_id, row.order_no, row.customer, row.owner, row.product_name, row.product_code, row.product_model, row.quantity, row.remaining_qty, row.delivery_date, row.signed_date, row.amount, row.status_text, JSON.stringify(row.raw || row), row.synced_at);
+  }
+}
+
+function insertProcedurePlans(database, rows) {
+  const stmt = database.prepare(`
+    INSERT OR REPLACE INTO erp_procedure_plans
+    (erp_id, work_assignment_id, order_no, product_name, product_code, product_model, procedure_name, work_center_name, planned_qty, finished_qty, remaining_qty, planned_start_date, planned_finish_date, owner, state, raw_json, synced_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const row of rows) {
+    stmt.run(row.erp_id, row.work_assignment_id, row.order_no, row.product_name, row.product_code, row.product_model, row.procedure_name, row.work_center_name, row.planned_qty, row.finished_qty, row.remaining_qty, row.planned_start_date, row.planned_finish_date, row.owner, row.state, JSON.stringify(row.raw || row), row.synced_at);
   }
 }
 
