@@ -756,6 +756,10 @@ function labelFor(key) {
     quote_status: "报价状态",
     quote_followups: "报价跟进",
     urgent_quotes: "紧急报价",
+    material_task_no: "物料任务编号",
+    material_task_type: "物料任务类型",
+    material_tasks: "物料任务",
+    urgent_material_tasks: "紧急物料任务",
     owner_count: "负责人数",
     max_age_days: "最长停留天数",
     bucket: "时间窗口",
@@ -1613,33 +1617,52 @@ function collectPoCandidates(value, candidates, depth) {
 }
 
 async function queryMaterialControl(params = {}) {
-  const [shortageResult, inventoryResult] = await Promise.allSettled([
-    queryOrderShortages(client, {
-      pageindex: params.pageindex || 1,
-      pagesize: params.pagesize || 10,
-      contract_limit: params.contract_limit || 5,
-      scan_size: params.scan_size || 100,
-      cks: params.cks || ""
-    }),
-    client.queryInventoryAlerts({
-      scan_pages: params.scan_pages || 1,
-      scan_size: params.inventory_scan_size || params.scan_size || 20,
-      alert_limit: params.alert_limit || 20,
-      low_stock_threshold: params.low_stock_threshold || 5,
-      old_stock_days: params.old_stock_days || 180,
-      cks: params.cks || ""
-    })
-  ]);
-  const shortages = shortageResult.status === "fulfilled" ? shortageResult.value : null;
-  const inventoryAlerts = inventoryResult.status === "fulfilled" ? inventoryResult.value : null;
+  const timeoutMs = clampInt(params.timeout_ms || 6000, 1000, 20000);
+  const snapshot = latestPmcSnapshot();
+  let cached = false;
+  let shortageResult;
+  let inventoryResult;
+  if (snapshot && params.refresh !== "1") {
+    cached = true;
+    shortageResult = { status: "rejected", reason: new Error("使用本地快照") };
+    inventoryResult = { status: "rejected", reason: new Error("使用本地快照") };
+  } else {
+    [shortageResult, inventoryResult] = await Promise.allSettled([
+      withTimeout(queryOrderShortages(client, {
+        pageindex: params.pageindex || 1,
+        pagesize: params.pagesize || 10,
+        contract_limit: params.contract_limit || 5,
+        scan_size: params.scan_size || 100,
+        cks: params.cks || ""
+      }), timeoutMs),
+      withTimeout(client.queryInventoryAlerts({
+        scan_pages: params.scan_pages || 1,
+        scan_size: params.inventory_scan_size || params.scan_size || 20,
+        alert_limit: params.alert_limit || 20,
+        low_stock_threshold: params.low_stock_threshold || 5,
+        old_stock_days: params.old_stock_days || 180,
+        cks: params.cks || ""
+      }), timeoutMs)
+    ]);
+  }
+  let shortageRows = shortageResult.status === "fulfilled" ? shortageResult.value?.body?.rows || [] : [];
+  let lowStockRows = inventoryResult.status === "fulfilled" ? inventoryResult.value?.body?.sections?.low_stock || [] : [];
+  let frozenStockRows = inventoryResult.status === "fulfilled" ? inventoryResult.value?.body?.sections?.frozen_stock || [] : [];
+  let oldStockRows = inventoryResult.status === "fulfilled" ? inventoryResult.value?.body?.sections?.old_stock || [] : [];
+  if ((cached || shortageResult.status === "rejected" || inventoryResult.status === "rejected") && snapshot) {
+    cached = true;
+    shortageRows = shortageRows.length ? shortageRows : snapshot.payload?.sections?.shortage_orders || [];
+    lowStockRows = lowStockRows.length ? lowStockRows : snapshot.payload?.sections?.low_stock || [];
+  }
+  const materialTasks = buildMaterialTasks({ shortageRows, lowStockRows, frozenStockRows, oldStockRows });
   const sourceStatus = {
     order_shortages: {
-      ok: Boolean(shortages),
-      message: shortageResult.status === "rejected" ? summarizeDataSourceError(shortageResult.reason) : null
+      ok: shortageResult.status === "fulfilled" || cached,
+      message: shortageResult.status === "rejected" && !cached ? summarizeDataSourceError(shortageResult.reason) : null
     },
     inventory_alerts: {
-      ok: Boolean(inventoryAlerts),
-      message: inventoryResult.status === "rejected" ? summarizeDataSourceError(inventoryResult.reason) : null
+      ok: inventoryResult.status === "fulfilled" || cached,
+      message: inventoryResult.status === "rejected" && !cached ? summarizeDataSourceError(inventoryResult.reason) : null
     }
   };
   const sourceNotes = Object.entries(sourceStatus)
@@ -1650,28 +1673,108 @@ async function queryMaterialControl(params = {}) {
     body: {
       model: "material_control",
       generated_at: new Date().toISOString(),
+      cached,
       summary: {
-        shortage_orders: shortages?.body?.summary?.orders_with_shortage ?? 0,
-        shortage_rows: shortages?.body?.summary?.shortage_rows ?? 0,
-        low_stock: inventoryAlerts?.body?.counts?.low_stock ?? 0,
-        frozen_stock: inventoryAlerts?.body?.counts?.frozen_stock ?? 0,
-        old_stock: inventoryAlerts?.body?.counts?.old_stock ?? 0,
+        material_tasks: materialTasks.length,
+        urgent_material_tasks: materialTasks.filter((row) => row.priority === "高").length,
+        shortage_orders: uniqueCount(shortageRows, "order_no"),
+        shortage_rows: shortageRows.length,
+        low_stock: lowStockRows.length,
+        frozen_stock: frozenStockRows.length,
+        old_stock: oldStockRows.length,
         source_errors: sourceNotes.length
       },
       sections: {
-        shortage_rows: shortages?.body?.rows || [],
-        low_stock: inventoryAlerts?.body?.sections?.low_stock || [],
-        frozen_stock: inventoryAlerts?.body?.sections?.frozen_stock || [],
-        old_stock: inventoryAlerts?.body?.sections?.old_stock || []
+        material_tasks: materialTasks,
+        shortage_rows: shortageRows,
+        low_stock: lowStockRows,
+        frozen_stock: frozenStockRows,
+        old_stock: oldStockRows
       },
       source_status: sourceStatus,
       notes: [
         ...sourceNotes,
-        "物料控制中心第一版聚焦缺料订单和库存异常。",
+        ...(cached && snapshot ? [`当前读取本地驾驶舱快照：${formatDateTime(snapshot.created_at)}。`] : []),
+        "物料控制中心聚焦缺料订单、低库存、冻结库存和长库龄，并生成统一处理清单。",
         "齐套口径沿用销售订单产品库存，后续可接 BOM 展开和采购在途。"
       ]
     }
   };
+}
+
+function buildMaterialTasks({ shortageRows, lowStockRows, frozenStockRows, oldStockRows }) {
+  const rows = [
+    ...shortageRows.map((row) => ({
+      material_task_type: "订单缺料",
+      priority: "高",
+      related_no: row.order_no,
+      customer: row.customer,
+      product_code: row.product_code,
+      product_name: row.product_name,
+      warehouse: row.warehouse,
+      demand_qty: row.demand_qty,
+      available_qty: row.available_qty,
+      shortage_qty: row.shortage_qty,
+      responsible_role: "PMC/采购",
+      action: "确认替代库存、采购到货或调整排产"
+    })),
+    ...lowStockRows.map((row) => ({
+      material_task_type: "低库存",
+      priority: parseNumber(row.available_qty) <= 0 ? "高" : "中",
+      related_no: row.product_code,
+      customer: "",
+      product_code: row.product_code,
+      product_name: row.product_name,
+      warehouse: row.warehouse,
+      demand_qty: "",
+      available_qty: row.available_qty,
+      shortage_qty: "",
+      responsible_role: "PMC/仓库",
+      action: "确认安全库存和补料需求"
+    })),
+    ...frozenStockRows.map((row) => ({
+      material_task_type: "冻结库存",
+      priority: "中",
+      related_no: row.product_code,
+      customer: "",
+      product_code: row.product_code,
+      product_name: row.product_name,
+      warehouse: row.warehouse,
+      demand_qty: "",
+      available_qty: row.available_qty,
+      shortage_qty: "",
+      responsible_role: "仓库/财务",
+      action: "确认冻结原因并判断是否可释放"
+    })),
+    ...oldStockRows.map((row) => ({
+      material_task_type: "长库龄",
+      priority: "低",
+      related_no: row.product_code,
+      customer: "",
+      product_code: row.product_code,
+      product_name: row.product_name,
+      warehouse: row.warehouse,
+      demand_qty: "",
+      available_qty: row.available_qty,
+      shortage_qty: "",
+      responsible_role: "PMC/仓库",
+      action: "评估消耗计划或呆滞处理"
+    }))
+  ];
+  return rows
+    .sort((a, b) => materialPriorityWeight(b.priority) - materialPriorityWeight(a.priority) || (parseNumber(b.shortage_qty) || 0) - (parseNumber(a.shortage_qty) || 0))
+    .slice(0, 80)
+    .map((row, index) => ({ material_task_no: `WL-${String(index + 1).padStart(3, "0")}`, ...row }));
+}
+
+function materialPriorityWeight(priority) {
+  if (priority === "高") {
+    return 3;
+  }
+  if (priority === "中") {
+    return 2;
+  }
+  return 1;
 }
 
 function summarizeDataSourceError(error) {
@@ -2383,8 +2486,10 @@ function modulePanel(title, rows, columns) {
 function materialControlPage(body) {
   return modulePage({
     title: "物料控制中心",
-    subtitle: "按销售订单产品库存计算缺料，同时监控低库存、冻结库存和长库龄库存。",
+    subtitle: "按销售订单产品库存计算缺料，并把低库存、冻结、长库龄统一成物料处理清单。",
     summary: [
+      ["物料任务", body.summary.material_tasks],
+      ["紧急任务", body.summary.urgent_material_tasks],
       ["缺料订单", body.summary.shortage_orders],
       ["缺料明细", body.summary.shortage_rows],
       ["低库存", body.summary.low_stock],
@@ -2393,6 +2498,7 @@ function materialControlPage(body) {
       ["数据源异常", body.summary.source_errors]
     ],
     panels: [
+      modulePanel("物料处理清单", body.sections.material_tasks, ["material_task_no", "priority", "material_task_type", "related_no", "customer", "product_name", "product_code", "warehouse", "demand_qty", "available_qty", "shortage_qty", "responsible_role", "action"]),
       modulePanel("缺料明细", body.sections.shortage_rows, ["order_no", "customer", "product_name", "product_code", "demand_qty", "available_qty", "shortage_qty"]),
       modulePanel("低库存预警", body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"]),
       modulePanel("冻结库存", body.sections.frozen_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"]),
@@ -3281,7 +3387,7 @@ function pmcGoalPage() {
   const rows = [
     ["PMC驾驶舱首页", "已完成V1", "KPI、逾期、临期、缺料、待报价、低库存"],
     ["订单管理中心", "已完成V1", "订单状态灯、搜索、过滤、订单详情穿透"],
-    ["物料控制中心", "已完成V1入口", "缺料订单、低库存、冻结库存、长库龄"],
+    ["物料控制中心", "已完成V1", "缺料、低库存、冻结、长库龄统一物料处理清单"],
     ["待报价中心", "已完成V1", "项目/商机报价跟进池，含优先级、负责人汇总和处理建议"],
     ["生产进度中心", "已完成V1", "ERP生产进度、领料、BOM、工序计划，含延期工序和工作中心负荷"],
     ["异常管理中心", "已完成V1", "交期、缺料、库存、报价统一异常待办池，含优先级和责任角色"],
