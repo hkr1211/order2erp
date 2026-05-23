@@ -1408,7 +1408,8 @@ function pmcTablePanel(title, rows, columns, tone = "") {
 
 async function queryOrderCenter(params = {}) {
   const pageIndex = clampInt(params.pageindex || 1, 1, 10000);
-  const pageSize = clampInt(params.pagesize || 20, 1, 100);
+  const pageSize = clampInt(params.pagesize || 100, 1, 100);
+  const offset = (pageIndex - 1) * pageSize;
   const contractLimit = clampInt(params.contract_limit || pageSize, 1, 30);
   const dueSoonDays = clampInt(params.due_soon_days || 7, 1, 60);
   const scanSize = clampInt(params.scan_size || 100, 1, 500);
@@ -1417,9 +1418,10 @@ async function queryOrderCenter(params = {}) {
   const refresh = parseBoolean(params.refresh);
   const snapshot = latestPmcSnapshot();
 
-  if (!refresh && !searchKey) {
-    const localRows = localOrderCenterRows({ limit: pageSize, statusFilter });
-    if (localRows.allRows.length) {
+  if (!refresh) {
+    const localRows = localOrderCenterRows({ limit: pageSize, offset, statusFilter, searchKey });
+    if (localRows.allRows.length || localRows.totalRows > 0) {
+      const totalPages = Math.max(1, Math.ceil((localRows.filteredRows.length || localRows.totalRows) / pageSize));
       return {
         header: { status: 0, message: "ok" },
         body: {
@@ -1435,13 +1437,24 @@ async function queryOrderCenter(params = {}) {
             status: statusFilter
           },
           page: null,
+          pagination: {
+            page_index: pageIndex,
+            page_size: pageSize,
+            total_pages: totalPages,
+            total_sqlite_rows: localRows.totalRows,
+            filtered_rows: localRows.filteredRows.length,
+            page_rows: localRows.pageRows.length,
+            has_previous: pageIndex > 1,
+            has_next: pageIndex < totalPages
+          },
           summary: orderCenterSummary(localRows.allRows, localRows.filteredRows),
-          rows: localRows.filteredRows,
+          rows: localRows.pageRows,
           source_status: {
-            sqlite_sales_orders: { ok: true, rows: localRows.allRows.length }
+            sqlite_sales_orders: { ok: true, rows: localRows.totalRows, filtered_rows: localRows.filteredRows.length }
           },
           notes: [
             "当前读取本地 SQLite 销售订单表。",
+            "订单列表已分页显示；每页最多 100 条，避免浏览器一次渲染过多行。",
             "点击“刷新实时订单”会直接访问 ERP；点击“谨慎同步订单20条”可小批量更新本地 SQLite。"
           ]
         }
@@ -1581,9 +1594,9 @@ async function queryOrderCenter(params = {}) {
   }
 }
 
-function localOrderCenterRows({ limit, statusFilter }) {
+function localOrderCenterRows({ limit, offset = 0, statusFilter, searchKey }) {
   const today = startOfDay(new Date());
-  const salesOrders = listSalesOrders({ limit }).map((row) => mapLocalSalesOrder(row, today));
+  const salesOrders = listSalesOrders({ limit: 5000 }).map((row) => mapLocalSalesOrder(row, today));
   const materialAlerts = listMaterialAlerts({ limit: 500 }).filter((row) => row.alert_type === "shortage");
   const shortageIndex = indexOrderShortages(materialAlerts);
   const rows = salesOrders.map((order) => mapOrderCenterRow(order, new Map(), shortageIndex));
@@ -1599,8 +1612,20 @@ function localOrderCenterRows({ limit, statusFilter }) {
     const dueStatus = days < 0 ? "逾期" : days <= 7 ? "7天内到期" : "正常";
     return enrichOrderCenterAction({ ...row, due_status: dueStatus, days_from_today: days });
   });
-  const filteredRows = statusFilter ? enrichedRows.filter((row) => row.status_code === statusFilter) : enrichedRows;
-  return { allRows: enrichedRows, filteredRows };
+  const searchText = String(searchKey || "").trim().toLowerCase();
+  const filteredRows = enrichedRows.filter((row) => {
+    if (statusFilter && row.status_code !== statusFilter) {
+      return false;
+    }
+    if (!searchText) {
+      return true;
+    }
+    return [row.order_no, row.customer, row.owner, row.title, row.approval_status]
+      .some((value) => String(value || "").toLowerCase().includes(searchText));
+  });
+  const safeOffset = Math.min(Math.max(offset, 0), Math.max(filteredRows.length - 1, 0));
+  const pageRows = filteredRows.slice(safeOffset, safeOffset + limit);
+  return { totalRows: salesOrders.length, allRows: enrichedRows, filteredRows, pageRows };
 }
 
 function mapLocalSalesOrder(row, today) {
@@ -1859,10 +1884,13 @@ function orderCenterPage(body, url) {
     queryBase.set("searchKey", current.searchKey);
   }
   queryBase.set("pageindex", String(current.pageindex || 1));
-  queryBase.set("pagesize", String(current.pagesize || 20));
+  queryBase.set("pagesize", String(current.pagesize || 100));
   queryBase.set("contract_limit", String(current.contract_limit || 20));
   queryBase.set("due_soon_days", String(current.due_soon_days || 7));
   queryBase.set("scan_size", String(current.scan_size || 100));
+  if (current.status) {
+    queryBase.set("status", current.status);
+  }
 
   const statusLinks = [
     ["全部", ""],
@@ -1873,8 +1901,11 @@ function orderCenterPage(body, url) {
   const statusNav = statusLinks
     .map(([label, status]) => {
       const next = new URLSearchParams(queryBase);
+      next.set("pageindex", "1");
       if (status) {
         next.set("status", status);
+      } else {
+        next.delete("status");
       }
       const active = (current.status || "") === status ? " active" : "";
       return `<a class="filter${active}" href="/orders?${escapeHtml(next.toString())}">${escapeHtml(label)}</a>`;
@@ -1915,6 +1946,8 @@ function orderCenterPage(body, url) {
     .toolbar { display: flex; justify-content: space-between; gap: 12px; align-items: flex-end; margin: 18px 0; }
     form { display: flex; gap: 8px; flex-wrap: wrap; }
     input { min-height: 36px; width: 280px; max-width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+    .pager { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+    .pager strong { color: var(--text); }
     .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
     .metric { padding: 13px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
     .metric span { display: block; color: var(--muted); font-size: 13px; }
@@ -1960,16 +1993,20 @@ function orderCenterPage(body, url) {
     <section class="toolbar">
       <form action="/orders" method="GET">
         <input name="searchKey" value="${escapeHtml(current.searchKey || "")}" placeholder="搜索订单号、客户、标题">
-        <input type="hidden" name="pagesize" value="${escapeHtml(current.pagesize || 20)}">
+        <input type="hidden" name="pageindex" value="1">
+        <input type="hidden" name="pagesize" value="${escapeHtml(current.pagesize || 100)}">
         <input type="hidden" name="contract_limit" value="${escapeHtml(current.contract_limit || 20)}">
         <input type="hidden" name="due_soon_days" value="${escapeHtml(current.due_soon_days || 7)}">
         <input type="hidden" name="scan_size" value="${escapeHtml(current.scan_size || 100)}">
+        ${current.status ? `<input type="hidden" name="status" value="${escapeHtml(current.status)}">` : ""}
         <button class="button primary" type="submit">查询</button>
       </form>
       <div class="filters">${statusNav}</div>
     </section>
     <section class="metrics">
-      ${orderMetric("当前行数", body.summary.visible_rows)}
+      ${orderMetric("SQLite订单总数", body.pagination?.total_sqlite_rows ?? body.summary.total_rows)}
+      ${orderMetric("筛选总数", body.summary.visible_rows)}
+      ${orderMetric("本页行数", body.pagination?.page_rows ?? body.rows.length)}
       ${orderMetric("红灯订单", body.summary.red_orders)}
       ${orderMetric("黄灯订单", body.summary.yellow_orders)}
       ${orderMetric("绿灯订单", body.summary.green_orders)}
@@ -1977,6 +2014,7 @@ function orderCenterPage(body, url) {
       ${orderMetric("阻塞订单", body.summary.blocked_orders)}
       ${orderMetric("临期订单", body.summary.due_soon_orders)}
     </section>
+    ${orderPaginationHtml(body.pagination, queryBase)}
     <section class="table-wrap">
       <table>
         <thead>
@@ -1997,6 +2035,33 @@ function orderCenterPage(body, url) {
 
 function orderMetric(label, value) {
   return `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
+}
+
+function orderPaginationHtml(pagination, queryBase) {
+  if (!pagination) {
+    return "";
+  }
+  const pageIndex = pagination.page_index || 1;
+  const totalPages = pagination.total_pages || 1;
+  const previous = new URLSearchParams(queryBase);
+  previous.set("pageindex", String(Math.max(1, pageIndex - 1)));
+  const next = new URLSearchParams(queryBase);
+  next.set("pageindex", String(Math.min(totalPages, pageIndex + 1)));
+  const pageSize100 = new URLSearchParams(queryBase);
+  pageSize100.set("pageindex", "1");
+  pageSize100.set("pagesize", "100");
+  const pageSize20 = new URLSearchParams(queryBase);
+  pageSize20.set("pageindex", "1");
+  pageSize20.set("pagesize", "20");
+  return `<section class="pager">
+    <div>当前第 <strong>${escapeHtml(pageIndex)}</strong> / <strong>${escapeHtml(totalPages)}</strong> 页，每页 <strong>${escapeHtml(pagination.page_size)}</strong> 条；SQLite 共 <strong>${escapeHtml(pagination.total_sqlite_rows)}</strong> 条，筛选后 <strong>${escapeHtml(pagination.filtered_rows)}</strong> 条。</div>
+    <div class="actions">
+      <a class="button" href="/orders?${escapeHtml(previous.toString())}">上一页</a>
+      <a class="button" href="/orders?${escapeHtml(next.toString())}">下一页</a>
+      <a class="button" href="/orders?${escapeHtml(pageSize100.toString())}">每页100条</a>
+      <a class="button" href="/orders?${escapeHtml(pageSize20.toString())}">每页20条</a>
+    </div>
+  </section>`;
 }
 
 function orderCenterJsonHref(url) {

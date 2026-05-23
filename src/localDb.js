@@ -356,8 +356,8 @@ export function replaceFinanceRecords(rows) {
   });
 }
 
-export function listSalesOrders({ limit = 100 } = {}) {
-  return initLocalDb().prepare("SELECT * FROM erp_sales_orders ORDER BY delivery_date IS NULL, delivery_date LIMIT ?").all(limit);
+export function listSalesOrders({ limit = 100, offset = 0 } = {}) {
+  return initLocalDb().prepare("SELECT * FROM erp_sales_orders ORDER BY delivery_date IS NULL, delivery_date, signed_date DESC LIMIT ? OFFSET ?").all(limit, offset);
 }
 
 export function listProcedurePlans({ limit = 100 } = {}) {
