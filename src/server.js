@@ -7,6 +7,7 @@ import { queryPendingQuotes } from "./pendingQuotes.js";
 import { initLocalDb, latestErpRequestLogs, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listMaterialAlerts, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, savePmcSnapshot } from "./localDb.js";
 import { syncCoreData } from "./syncService.js";
 import { buildSyncPolicyRows } from "./syncPolicy.js";
+import { buildErpHealthSummary } from "./erpHealth.js";
 import { buildLocalExceptionCenter, buildLocalFinanceCenter, buildLocalPmcDashboard, quoteOwnerSummaryForLocal } from "./localAnalytics.js";
 
 loadEnvFile();
@@ -158,6 +159,10 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/health") {
       return sendJson(res, 200, { ok: true, service: "erp-query-hub" });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/erp_health") {
+      return sendJson(res, 200, queryErpHealth());
     }
 
     if (req.method === "GET" && url.pathname === "/views") {
@@ -4190,6 +4195,26 @@ function erpRequestLogCsv(body) {
     ...body.rows.map((row) => [row.requested_at, row.method, row.path, row.status, row.duration_ms, row.error_message])
   ];
   return rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
+}
+
+function queryErpHealth() {
+  const syncRuns = latestSyncRuns();
+  const requestLogs = latestErpRequestLogs(20);
+  const queue = client.requestQueue.snapshot();
+  const syncPolicyRows = buildSyncPolicyRows({
+    latestRuns: syncRuns,
+    cooldownSeconds: DEFAULT_SYNC_COOLDOWN_SECONDS
+  });
+  const health = buildErpHealthSummary({ queue, requestLogs, syncPolicyRows });
+  return {
+    generated_at: new Date().toISOString(),
+    service: "erp-query-hub",
+    protection_mode: ERP_PROTECTION_MODE ? "enabled" : "disabled",
+    health,
+    queue,
+    sync_policy: syncPolicyRows,
+    recent_request_logs: requestLogs
+  };
 }
 
 async function querySystemStatus(params = {}) {
