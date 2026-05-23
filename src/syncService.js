@@ -273,20 +273,27 @@ function isTruthy(value) {
 }
 
 export function mapSalesOrder(row, index) {
+  const statusText = [
+    row.status_text || row.status,
+    row.warehouse_status || row.ckjz,
+    row.delivery_status || row.fhjz,
+    row.payment_status || row.skjz,
+    row.approval_status || row.spzt
+  ].map(text).filter(Boolean).join(" / ");
   return {
     erp_id: text(row.erp_id || row.ord || row.id || row.order_no || `sales-${index}`),
-    order_no: text(row.order_no),
-    customer: text(row.customer),
-    owner: text(row.owner),
+    order_no: text(row.order_no || row.htid),
+    customer: text(row.customer || row.khmc),
+    owner: text(row.owner || row.xsry),
     product_name: text(row.product_name),
     product_code: text(row.product_code),
     product_model: text(row.product_model),
     quantity: number(row.quantity),
     remaining_qty: number(row.remaining_qty),
     delivery_date: text(row.delivery_date),
-    signed_date: text(row.signed_date),
-    amount: number(row.amount),
-    status_text: text(row.status_text || row.status),
+    signed_date: text(row.signed_date || row.dateQD),
+    amount: number(row.amount || row.moneyall),
+    status_text: statusText,
     raw: row.raw || row,
     synced_at: new Date().toISOString()
   };
