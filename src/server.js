@@ -583,7 +583,6 @@ function roleWorkbenchesPage() {
       "这是内网免登录版，入口按角色分组但不做权限拦截。"
     ],
     actions: [
-      ["PMC驾驶舱", "/pmc"],
       ["首页", "/"]
     ]
   });
@@ -777,7 +776,7 @@ function formatCell(value) {
       return "";
     }
     if (value.every((item) => typeof item !== "object")) {
-      return value.map((item) => `<span class="pill">${escapeHtml(item)}</span>`).join("");
+      return value.map((item) => `<span class="pill">${escapeHtml(displayValue(item))}</span>`).join("");
     }
     return escapeHtml(`${value.length} 项`);
   }
@@ -787,7 +786,22 @@ function formatCell(value) {
   if (value === undefined || value === null || value === "") {
     return "";
   }
-  return escapeHtml(value);
+  return escapeHtml(displayValue(value));
+}
+
+function displayValue(value) {
+  const text = String(value);
+  const translations = {
+    due_soon: "7天内到期",
+    overdue: "逾期",
+    normal: "正常",
+    red: "红",
+    yellow: "黄",
+    green: "绿",
+    true: "是",
+    false: "否"
+  };
+  return translations[text] || text;
 }
 
 function viewTitle(viewName) {
@@ -820,6 +834,16 @@ function viewTitle(viewName) {
 function labelFor(key) {
   const labels = {
     section: "分区",
+    role: "角色",
+    focus: "工作重点",
+    primary_action: "建议动作",
+    entry_1: "入口1",
+    entry_2: "入口2",
+    entry_3: "入口3",
+    workflow: "流程",
+    step_1: "步骤1",
+    step_2: "步骤2",
+    step_3: "步骤3",
     order_no: "订单号",
     project_no: "项目编号",
     title: "标题",
@@ -1826,6 +1850,9 @@ function detailTablePanel(title, rows, columns, compact = false) {
 }
 
 function formatDetailCell(column, value) {
+  if (/^entry_\d+$/.test(column) && value) {
+    return `<a href="${escapeHtml(value)}">${escapeHtml(value)}</a>`;
+  }
   if (column === "risk_type") {
     const label = value === "overdue" ? "逾期" : value === "due_soon" ? "7天内到期" : value;
     const tone = value === "overdue" ? "red" : value === "due_soon" ? "yellow" : "green";
