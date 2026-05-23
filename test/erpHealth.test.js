@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildErpHealthSummary } from "../src/erpHealth.js";
+import { buildErpHealthSummary, shouldBlockErpBusinessQuery } from "../src/erpHealth.js";
 
 test("buildErpHealthSummary marks circuit open as critical", () => {
   const summary = buildErpHealthSummary({
@@ -23,4 +23,24 @@ test("buildErpHealthSummary marks local-only state as healthy", () => {
 
   assert.equal(summary.status, "healthy");
   assert.match(summary.message, /本地保护/);
+});
+
+test("shouldBlockErpBusinessQuery blocks critical health unless forced", () => {
+  assert.equal(shouldBlockErpBusinessQuery({
+    protectionMode: true,
+    health: { status: "critical" },
+    params: {}
+  }).blocked, true);
+
+  assert.equal(shouldBlockErpBusinessQuery({
+    protectionMode: true,
+    health: { status: "critical" },
+    params: { force_erp: "1" }
+  }).blocked, false);
+
+  assert.equal(shouldBlockErpBusinessQuery({
+    protectionMode: true,
+    health: { status: "warning" },
+    params: {}
+  }).blocked, false);
 });

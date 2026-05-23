@@ -7,7 +7,7 @@ import { queryPendingQuotes } from "./pendingQuotes.js";
 import { initLocalDb, latestErpRequestLogs, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listMaterialAlerts, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, savePmcSnapshot } from "./localDb.js";
 import { syncCoreData } from "./syncService.js";
 import { buildSyncPolicyRows } from "./syncPolicy.js";
-import { buildErpHealthSummary } from "./erpHealth.js";
+import { buildErpHealthSummary, shouldBlockErpBusinessQuery } from "./erpHealth.js";
 import { buildLocalExceptionCenter, buildLocalFinanceCenter, buildLocalPmcDashboard, quoteOwnerSummaryForLocal } from "./localAnalytics.js";
 
 loadEnvFile();
@@ -242,6 +242,21 @@ const server = http.createServer(async (req, res) => {
     if (viewMatch && (req.method === "GET" || req.method === "POST")) {
       const viewName = viewMatch[1];
       const params = req.method === "GET" ? Object.fromEntries(url.searchParams) : await readJson(req);
+      const healthPayload = queryErpHealth();
+      const apiGuard = shouldBlockErpBusinessQuery({
+        protectionMode: ERP_PROTECTION_MODE,
+        health: healthPayload.health,
+        params
+      });
+      if (apiGuard.blocked) {
+        return sendJson(res, 503, {
+          error: apiGuard.reason,
+          view: viewName,
+          health: healthPayload.health,
+          queue: healthPayload.queue,
+          hint: "先查看 /api/erp_health 或 /erp-logs；确认 ERP 稳定后可加 force_erp=1。"
+        });
+      }
 
       const result =
         viewName === "pmc_exceptions"

@@ -38,3 +38,27 @@ export function buildErpHealthSummary({ queue = {}, requestLogs = [], syncPolicy
     cooldown_sources: cooldownPolicies.length
   };
 }
+
+export function shouldBlockErpBusinessQuery({ protectionMode, health, params = {} } = {}) {
+  if (!protectionMode) {
+    return { blocked: false };
+  }
+  if (isTruthy(params.force_erp) || isTruthy(params.force)) {
+    return { blocked: false };
+  }
+  if (health?.status !== "critical") {
+    return { blocked: false };
+  }
+  return {
+    blocked: true,
+    reason: "ERP保护模式：当前健康状态为 critical，已阻止业务 API 实时查询；确认 ERP 稳定后可加 force_erp=1 强制执行。"
+  };
+}
+
+function isTruthy(value) {
+  if (value === true || value === 1) {
+    return true;
+  }
+  const text = value === undefined || value === null ? "" : String(value).trim().toLowerCase();
+  return text === "1" || text === "true" || text === "yes";
+}
