@@ -66,3 +66,27 @@ test("ErpRequestQueue reports queue metrics", async () => {
   assert.equal(queue.snapshot().failed, 1);
   assert.match(queue.snapshot().last_error, /boom/);
 });
+
+test("ErpRequestQueue opens circuit after repeated failures", async () => {
+  const queue = new ErpRequestQueue({
+    minIntervalMs: 0,
+    circuitFailureThreshold: 2,
+    circuitCooldownMs: 1000
+  });
+  let executedAfterOpen = false;
+
+  await assert.rejects(queue.run(async () => {
+    throw new Error("ERP HTTP 503");
+  }), /503/);
+  await assert.rejects(queue.run(async () => {
+    throw new Error("ERP HTTP 503");
+  }), /503/);
+  await assert.rejects(queue.run(async () => {
+    executedAfterOpen = true;
+  }), /熔断中/);
+
+  assert.equal(executedAfterOpen, false);
+  assert.equal(queue.snapshot().circuit_state, "open");
+  assert.equal(queue.snapshot().consecutive_failures, 2);
+  assert.ok(queue.snapshot().circuit_open_until);
+});

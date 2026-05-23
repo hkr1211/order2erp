@@ -265,7 +265,9 @@ export class ErpClient {
     this.serialnum = options.serialnum || process.env.ERP_SERIALNUM || "openclaw001";
     this.session = options.token || process.env.ERP_TOKEN || "";
     this.requestQueue = options.requestQueue || new ErpRequestQueue({
-      minIntervalMs: process.env.ERP_REQUEST_MIN_INTERVAL_MS || 800
+      minIntervalMs: process.env.ERP_REQUEST_MIN_INTERVAL_MS || 800,
+      circuitFailureThreshold: process.env.ERP_CIRCUIT_FAILURE_THRESHOLD || 3,
+      circuitCooldownMs: process.env.ERP_CIRCUIT_COOLDOWN_MS || 300000
     });
   }
 

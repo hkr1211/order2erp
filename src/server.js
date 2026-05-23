@@ -4185,6 +4185,7 @@ function systemStatusPage(body) {
       ["ERP排队", body.summary.erp_queue_queued],
       ["ERP运行中", body.summary.erp_queue_running],
       ["请求失败", body.summary.erp_request_failed],
+      ["熔断状态", body.sections.erp_queue[0]?.circuit_state || "closed"],
       ["本地快照", body.summary.has_snapshot ? "有" : "无"],
       ["同步源", body.summary.sync_sources],
       ["同步失败", body.summary.sync_failures],
@@ -4193,7 +4194,7 @@ function systemStatusPage(body) {
     ],
     panels: [
       modulePanel("ERP 登录状态", body.sections.erp_status, ["ok", "message", "latency_ms", "session_tail"]),
-      modulePanel("ERP 请求队列", body.sections.erp_queue, ["queued", "running", "completed", "failed", "min_interval_ms", "last_started_at", "last_finished_at", "last_error"]),
+      modulePanel("ERP 请求队列", body.sections.erp_queue, ["queued", "running", "completed", "failed", "consecutive_failures", "circuit_state", "circuit_failure_threshold", "circuit_cooldown_ms", "circuit_open_until", "min_interval_ms", "last_started_at", "last_finished_at", "last_error"]),
       modulePanel("最近驾驶舱快照", body.sections.snapshot, ["created_at", "today_orders", "month_orders", "overdue_orders", "shortage_orders", "low_stock"]),
       modulePanel("同步策略", body.sections.sync_policy, ["label", "recommended_interval", "risk_level", "last_status", "last_rows", "last_finished_at", "next_allowed_at", "health_status", "action"]),
       modulePanel("最近同步状态", body.sections.sync_runs, ["source_key", "started_at", "finished_at", "status", "rows_synced", "error_message"]),
