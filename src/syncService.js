@@ -89,13 +89,16 @@ async function runSync(sourceKey, action) {
   const run = startSyncRun(sourceKey);
   try {
     const rows = await action();
-    return finishSyncRun(run.id, { status: "success", rows_synced: rows });
+    return { source_key: sourceKey, ...finishSyncRun(run.id, { status: "success", rows_synced: rows }) };
   } catch (error) {
-    return finishSyncRun(run.id, {
-      status: "failed",
-      rows_synced: 0,
-      error_message: summarizeError(error)
-    });
+    return {
+      source_key: sourceKey,
+      ...finishSyncRun(run.id, {
+        status: "failed",
+        rows_synced: 0,
+        error_message: summarizeError(error)
+      })
+    };
   }
 }
 

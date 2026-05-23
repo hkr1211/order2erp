@@ -146,50 +146,47 @@ export function latestSyncRuns() {
 
 export function replaceSalesOrders(rows) {
   const database = initLocalDb();
-  const tx = database.transaction((items) => {
+  runInTransaction(database, () => {
     database.prepare("DELETE FROM erp_sales_orders").run();
     const stmt = database.prepare(`
       INSERT INTO erp_sales_orders
       (erp_id, order_no, customer, owner, product_name, product_code, product_model, quantity, remaining_qty, delivery_date, signed_date, amount, status_text, raw_json, synced_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    for (const row of items) {
+    for (const row of rows) {
       stmt.run(row.erp_id, row.order_no, row.customer, row.owner, row.product_name, row.product_code, row.product_model, row.quantity, row.remaining_qty, row.delivery_date, row.signed_date, row.amount, row.status_text, JSON.stringify(row.raw || row), row.synced_at);
     }
   });
-  tx(rows);
 }
 
 export function replaceProcedurePlans(rows) {
   const database = initLocalDb();
-  const tx = database.transaction((items) => {
+  runInTransaction(database, () => {
     database.prepare("DELETE FROM erp_procedure_plans").run();
     const stmt = database.prepare(`
       INSERT INTO erp_procedure_plans
       (erp_id, work_assignment_id, order_no, product_name, product_code, product_model, procedure_name, work_center_name, planned_qty, finished_qty, remaining_qty, planned_start_date, planned_finish_date, owner, state, raw_json, synced_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    for (const row of items) {
+    for (const row of rows) {
       stmt.run(row.erp_id, row.work_assignment_id, row.order_no, row.product_name, row.product_code, row.product_model, row.procedure_name, row.work_center_name, row.planned_qty, row.finished_qty, row.remaining_qty, row.planned_start_date, row.planned_finish_date, row.owner, row.state, JSON.stringify(row.raw || row), row.synced_at);
     }
   });
-  tx(rows);
 }
 
 export function replaceMaterialAlerts(rows) {
   const database = initLocalDb();
-  const tx = database.transaction((items) => {
+  runInTransaction(database, () => {
     database.prepare("DELETE FROM erp_material_alerts").run();
     const stmt = database.prepare(`
       INSERT INTO erp_material_alerts
       (alert_id, alert_type, order_no, customer, product_code, product_name, warehouse, demand_qty, available_qty, stock_qty, shortage_qty, priority, raw_json, synced_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    for (const row of items) {
+    for (const row of rows) {
       stmt.run(row.alert_id, row.alert_type, row.order_no, row.customer, row.product_code, row.product_name, row.warehouse, row.demand_qty, row.available_qty, row.stock_qty, row.shortage_qty, row.priority, JSON.stringify(row.raw || row), row.synced_at);
     }
   });
-  tx(rows);
 }
 
 export function listSalesOrders({ limit = 100 } = {}) {
@@ -202,4 +199,15 @@ export function listProcedurePlans({ limit = 100 } = {}) {
 
 export function listMaterialAlerts({ limit = 100 } = {}) {
   return initLocalDb().prepare("SELECT * FROM erp_material_alerts ORDER BY CASE priority WHEN '高' THEN 1 WHEN '中' THEN 2 ELSE 3 END, alert_type LIMIT ?").all(limit);
+}
+
+function runInTransaction(database, action) {
+  database.exec("BEGIN");
+  try {
+    action();
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
 }
