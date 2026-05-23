@@ -750,12 +750,18 @@ function labelFor(key) {
     due_days: "到期天数",
     risk_status: "风险状态",
     task_no: "待办编号",
+    followup_no: "跟催编号",
+    followup_type: "跟催类型",
     exception_type: "异常类型",
     priority: "优先级",
     related_no: "关联单号",
     item: "事项",
     responsible_role: "责任角色",
     action: "处理建议",
+    supplier: "供应商",
+    followup_tasks: "跟催事项",
+    urgent_followups: "紧急跟催",
+    latest_action: "最近建议",
     open_tasks: "未关闭待办",
     critical_tasks: "高优先级待办",
     records: "记录数",
@@ -1653,18 +1659,20 @@ function summarizeDataSourceError(error) {
 async function queryProcurementCenter(params = {}) {
   const pageindex = params.pageindex || 1;
   const pagesize = params.pagesize || 20;
+  const timeoutMs = clampInt(params.timeout_ms || 5000, 1000, 15000);
+  const today = startOfDay(parseDate(params.today) || new Date());
   const [stockInResult, payablesResult] = await Promise.allSettled([
-    client.queryView("stock_in_records", {
+    withTimeout(client.queryView("stock_in_records", {
       pageindex,
       pagesize,
       rkzt: params.rkzt || "",
       searchKey: params.searchKey || ""
-    }),
-    client.queryView("payables", {
+    }), timeoutMs),
+    withTimeout(client.queryView("payables", {
       pageindex,
       pagesize,
       searchKey: params.searchKey || ""
-    })
+    }), timeoutMs)
   ]);
   const sourceStatus = {
     stock_in_records: {
@@ -1682,6 +1690,9 @@ async function queryProcurementCenter(params = {}) {
   const stockInTable = stockInResult.status === "fulfilled" ? normalizeTable(stockInResult.value) : { rows: [], page: null };
   const stockInRows = stockInResult.status === "fulfilled" ? toBusinessView("stock_in_records", stockInTable).rows : [];
   const payableTable = payablesResult.status === "fulfilled" ? normalizeTable(payablesResult.value) : { rows: [], page: null };
+  const payableRows = payableTable.rows.map((row) => mapFinanceRow(row, "payable", today));
+  const followupRows = buildProcurementFollowups(stockInRows, payableRows, today);
+  const supplierRows = topProcurementSuppliers(followupRows);
 
   return {
     header: { status: 0, message: "ok" },
@@ -1690,22 +1701,108 @@ async function queryProcurementCenter(params = {}) {
       generated_at: new Date().toISOString(),
       offline: sourceNotes.length > 0,
       summary: {
+        followup_tasks: followupRows.length,
+        urgent_followups: followupRows.filter((row) => row.priority === "高").length,
         inbound_records: stockInRows.length,
-        payable_records: payableTable.rows.length,
+        payable_records: payableRows.length,
+        supplier_count: supplierRows.length,
         source_errors: sourceNotes.length
       },
       sections: {
         stock_in_records: stockInRows,
-        payables: payableTable.rows
+        payables: payableRows,
+        followups: followupRows,
+        suppliers: supplierRows
       },
       source_status: sourceStatus,
       notes: [
         ...sourceNotes,
-        "采购跟催中心 V1 先使用入库流水和应付付款作为采购到货/付款跟踪入口。",
-        "后续需要确认智邦采购订单接口和供应商联系人字段，再补采购单预计到货、跟催记录和一键邮件。"
+        "采购跟催中心先使用入库流水和应付付款生成跟催清单。",
+        "后续确认智邦采购订单接口和供应商联系人字段后，可补预计到货日、跟催记录和一键邮件。"
       ]
     }
   };
+}
+
+function buildProcurementFollowups(stockInRows, payableRows, today) {
+  const inboundTasks = stockInRows.map((row) => {
+    const confirmedDate = parseDate(row.confirmed_time);
+    const applicationDate = parseDate(row.application_time);
+    const ageDays = applicationDate ? daysBetween(startOfDay(applicationDate), today) : null;
+    const pendingInbound = !confirmedDate && !/完成|已入库|确认|关闭/.test(String(row.receipt_status || ""));
+    return {
+      followup_type: pendingInbound ? "待入库确认" : "入库记录",
+      priority: pendingInbound && ageDays !== null && ageDays >= 3 ? "高" : pendingInbound ? "中" : "低",
+      supplier: firstText(row.raw?.gysname, row.raw?.glgys, row.raw?.supplier, row.applicant, row.warehouse_keeper),
+      related_no: row.receipt_no,
+      item: row.title,
+      quantity: row.quantity,
+      amount: "",
+      status: row.receipt_status,
+      due_date: row.confirmed_time || row.application_time,
+      age_days: ageDays,
+      responsible_role: "采购/仓库",
+      action: pendingInbound ? "确认供应商到货与仓库入库状态" : "核对入库与应付是否匹配"
+    };
+  });
+  const payableTasks = payableRows
+    .filter((row) => parseNumber(row.unpaid_amount) > 0)
+    .map((row) => ({
+      followup_type: row.risk_status === "已逾期" ? "逾期应付" : row.risk_status === "7天内到期" ? "近期应付" : "未付应付",
+      priority: row.risk_status === "已逾期" ? "高" : row.risk_status === "7天内到期" ? "中" : "低",
+      supplier: row.counterparty,
+      related_no: row.bill_no,
+      item: row.business_title,
+      quantity: "",
+      amount: row.unpaid_amount,
+      status: row.risk_status,
+      due_date: row.due_date,
+      age_days: row.age_days,
+      responsible_role: "采购/财务",
+      action: row.risk_status === "已逾期" ? "确认付款安排并反馈供应商" : "跟进付款计划和发票/入库资料"
+    }));
+  return [...inboundTasks, ...payableTasks]
+    .filter((row) => row.followup_type !== "入库记录" || row.priority !== "低")
+    .sort((a, b) => procurementPriorityWeight(b.priority) - procurementPriorityWeight(a.priority) || (parseNumber(b.amount) || 0) - (parseNumber(a.amount) || 0))
+    .slice(0, 80)
+    .map((row, index) => ({ followup_no: `CG-${String(index + 1).padStart(3, "0")}`, ...row }));
+}
+
+function topProcurementSuppliers(followupRows) {
+  const grouped = new Map();
+  for (const row of followupRows) {
+    const supplier = row.supplier || "未识别供应商";
+    const current = grouped.get(supplier) || {
+      supplier,
+      followup_tasks: 0,
+      urgent_followups: 0,
+      unpaid_amount: 0,
+      latest_action: ""
+    };
+    current.followup_tasks += 1;
+    if (row.priority === "高") {
+      current.urgent_followups += 1;
+    }
+    current.unpaid_amount += parseNumber(row.amount) || 0;
+    if (!current.latest_action && row.action) {
+      current.latest_action = row.action;
+    }
+    grouped.set(supplier, current);
+  }
+  return [...grouped.values()]
+    .map((row) => ({ ...row, unpaid_amount: Number(row.unpaid_amount.toFixed(2)) }))
+    .sort((a, b) => b.urgent_followups - a.urgent_followups || b.unpaid_amount - a.unpaid_amount || b.followup_tasks - a.followup_tasks)
+    .slice(0, 20);
+}
+
+function procurementPriorityWeight(priority) {
+  if (priority === "高") {
+    return 3;
+  }
+  if (priority === "中") {
+    return 2;
+  }
+  return 1;
 }
 
 async function queryQuoteCenter(params = {}) {
@@ -2111,15 +2208,20 @@ function quoteCenterPage(body) {
 function procurementCenterPage(body) {
   return modulePage({
     title: "采购跟催中心",
-    subtitle: "先用入库流水和应付付款做采购到货/付款跟踪入口，后续补采购订单和供应商跟催。",
+    subtitle: "用入库流水和应付付款生成采购到货、付款和供应商跟催清单。",
     summary: [
+      ["跟催事项", body.summary.followup_tasks],
+      ["紧急跟催", body.summary.urgent_followups],
       ["入库记录", body.summary.inbound_records],
       ["应付记录", body.summary.payable_records],
+      ["供应商数", body.summary.supplier_count],
       ["数据源异常", body.summary.source_errors]
     ],
     panels: [
+      modulePanel("采购跟催清单", body.sections.followups, ["followup_no", "priority", "followup_type", "supplier", "related_no", "item", "quantity", "amount", "status", "due_date", "age_days", "responsible_role", "action"]),
+      modulePanel("供应商跟催汇总", body.sections.suppliers, ["supplier", "followup_tasks", "urgent_followups", "unpaid_amount", "latest_action"]),
       modulePanel("采购到货/入库记录", body.sections.stock_in_records, ["receipt_no", "title", "quantity", "receipt_status", "receipt_type", "warehouse_keeper", "applicant", "confirmed_time"]),
-      modulePanel("应付/付款记录", body.sections.payables, ["title", "supplier", "amount", "payment_status", "created_date", "owner"])
+      modulePanel("应付/付款记录", body.sections.payables, ["counterparty", "bill_no", "business_title", "amount", "paid_amount", "unpaid_amount", "due_date", "risk_status", "owner"])
     ],
     notes: body.notes,
     actions: [
@@ -2816,7 +2918,7 @@ function pmcGoalPage() {
     ["异常管理中心", "已完成V1", "交期、缺料、库存、报价统一异常待办池，含优先级和责任角色"],
     ["报表中心", "已完成V1", "管理指标汇总、打印版、CSV导出、Excel日报导出"],
     ["排产甘特图", "已完成V1入口", "按订单交期生成时间轴；工单/设备/工序排产待接入"],
-    ["采购跟催", "已完成V1入口", "先接入库流水和应付付款；采购订单/供应商联系人待确认"],
+    ["采购跟催", "已完成V1", "入库流水、应付付款、供应商汇总、跟催优先级和处理建议"],
     ["应收应付", "已完成V1", "聚合应收/应付、客户欠款排行、逾期应收、7天内应付、付款条件推算"],
     ["数据源状态", "已完成V1入口", "轻量检查 ERP 登录、本地快照、业务入口可用性"],
     ["权限登录", "暂缓", "当前按用户要求为内网免登录版"]
