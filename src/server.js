@@ -9,7 +9,7 @@ import { syncCoreData } from "./syncService.js";
 import { buildSyncPolicyRows } from "./syncPolicy.js";
 import { buildErpHealthSummary, shouldBlockErpBusinessQuery } from "./erpHealth.js";
 import { SQLITE_TABLES, buildSqliteCoverage } from "./sqliteCoverage.js";
-import { HISTORY_SYNC_SOURCES, buildHistorySyncProgress, defaultHistoryRange, historySyncParams, runHistorySyncBatch } from "./historySync.js";
+import { HISTORY_SYNC_SOURCES, buildHistorySyncProgress, defaultHistoryRange, historySyncDryRun, historySyncParams, runHistorySyncBatch } from "./historySync.js";
 import { buildLocalExceptionCenter, buildLocalFinanceCenter, buildLocalPmcDashboard, quoteOwnerSummaryForLocal } from "./localAnalytics.js";
 
 loadEnvFile();
@@ -164,6 +164,11 @@ const server = http.createServer(async (req, res) => {
       return sendHtml(res, 200, historySyncPage(queryHistorySyncCenter(params).body));
     }
 
+    if (req.method === "GET" && url.pathname === "/history-sync/dry-run") {
+      const params = Object.fromEntries(url.searchParams);
+      return sendHtml(res, 200, historySyncDryRunPage(historySyncDryRun(params)));
+    }
+
     if (req.method === "GET" && url.pathname === "/history-sync/run") {
       const params = Object.fromEntries(url.searchParams);
       const guard = shouldBlockErpBusinessQuery({
@@ -193,6 +198,11 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 503, { error: guard.reason, health: queryErpHealth().health });
       }
       return sendJson(res, 200, await runHistorySyncBatchWithRecord(params));
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/history_sync/dry-run") {
+      const params = Object.fromEntries(url.searchParams);
+      return sendJson(res, 200, historySyncDryRun(params));
     }
 
     if (req.method === "GET" && url.pathname === "/erp-logs") {
@@ -1176,6 +1186,28 @@ function labelFor(key) {
     payable_unpaid: "未付合计",
     overdue_receivables: "逾期应收",
     due_soon_payables: "7天内应付",
+    source: "数据源",
+    label: "名称",
+    date_support: "日期条件",
+    start_date: "开始日期",
+    end_date: "结束日期",
+    page_size: "每页条数",
+    suggested_range: "建议范围",
+    safety: "安全说明",
+    latest_progress: "最近进度",
+    last_status: "最近状态",
+    last_rows_synced: "最近同步行数",
+    last_page_index: "最近页码",
+    finished_at: "完成时间",
+    error_message: "错误信息",
+    next_page_index: "下一页",
+    next_run: "继续执行",
+    dry_run: "预演",
+    run: "执行",
+    view_name: "ERP视图",
+    page_index: "页码",
+    erp_params_json: "ERP请求参数",
+    will_access_erp: "是否访问ERP",
     status: "状态",
     warehouse_status: "出库状态",
     delivery_status: "发货状态",
@@ -4420,7 +4452,9 @@ function queryHistorySyncCenter(params = {}) {
       pageindex: 1,
       pagesize: params.pagesize || 20
     });
-    const runHref = `/history-sync/run?source=${encodeURIComponent(source.source)}&start_date=${encodeURIComponent(plan.range.start_date)}&end_date=${encodeURIComponent(plan.range.end_date)}&pageindex=1&pagesize=${plan.pageSize}`;
+    const queryString = `source=${encodeURIComponent(source.source)}&start_date=${encodeURIComponent(plan.range.start_date)}&end_date=${encodeURIComponent(plan.range.end_date)}&pageindex=1&pagesize=${plan.pageSize}`;
+    const dryRunHref = `/history-sync/dry-run?${queryString}`;
+    const runHref = `/history-sync/run?${queryString}`;
     return {
       source: source.source,
       label: source.label,
@@ -4431,6 +4465,7 @@ function queryHistorySyncCenter(params = {}) {
       end_date: plan.range.end_date,
       safety: source.riskNote,
       latest_progress: progressRows.find((row) => row.source === source.source)?.next_action || "从第 1 页开始",
+      dry_run: dryRunHref,
       run: runHref
     };
   });
@@ -4470,13 +4505,37 @@ function historySyncPage(body) {
     ],
     panels: [
       modulePanel("最近进度", body.progress, ["label", "source", "last_status", "last_rows_synced", "last_page_index", "page_size", "start_date", "end_date", "finished_at", "next_page_index", "next_action", "next_run", "error_message"]),
-      modulePanel("可执行同步源", body.rows, ["label", "source", "date_support", "start_date", "end_date", "page_size", "suggested_range", "latest_progress", "safety", "run"])
+      modulePanel("可执行同步源", body.rows, ["label", "source", "date_support", "start_date", "end_date", "page_size", "suggested_range", "latest_progress", "safety", "dry_run", "run"])
     ],
     notes: body.notes,
     actions: [
       ["SQLite覆盖率", "/sqlite-coverage"],
       ["ERP健康状态", "/api/erp_health"],
       ["ERP请求日志", "/erp-logs"]
+    ]
+  });
+}
+
+function historySyncDryRunPage(result) {
+  const queryString = `source=${encodeURIComponent(result.source)}&start_date=${encodeURIComponent(result.start_date)}&end_date=${encodeURIComponent(result.end_date)}&pageindex=${result.page_index}&pagesize=${result.page_size}`;
+  return modulePage({
+    title: "历史同步预演",
+    subtitle: `${result.label} 第 ${result.page_index} 页预演，不访问 ERP，不写 SQLite。`,
+    summary: [
+      ["同步源", result.label],
+      ["页码", result.page_index],
+      ["页大小", result.page_size],
+      ["日期范围", `${result.start_date} 至 ${result.end_date}`],
+      ["是否访问ERP", result.will_access_erp]
+    ],
+    panels: [
+      modulePanel("预演参数", [result], ["source", "label", "view_name", "page_index", "page_size", "start_date", "end_date", "erp_params_json", "will_access_erp", "safety"])
+    ],
+    notes: result.notes,
+    actions: [
+      ["确认执行这一页", `/history-sync/run?${queryString}`],
+      ["返回历史同步", "/history-sync"],
+      ["ERP健康状态", "/api/erp_health"]
     ]
   });
 }

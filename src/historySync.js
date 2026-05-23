@@ -61,6 +61,28 @@ export function historySyncParams(options = {}) {
   };
 }
 
+export function historySyncDryRun(options = {}) {
+  const plan = historySyncParams(options);
+  return {
+    generated_at: new Date().toISOString(),
+    source: plan.source,
+    label: plan.label,
+    view_name: plan.viewName,
+    page_index: plan.pageIndex,
+    page_size: plan.pageSize,
+    start_date: plan.range.start_date,
+    end_date: plan.range.end_date,
+    erp_params_json: JSON.stringify(plan.erpParams),
+    safety: plan.riskNote,
+    will_access_erp: "否",
+    notes: [
+      "这是预演模式，不访问 ERP，不写 SQLite。",
+      "确认参数无误后，再点击执行单页同步。",
+      "真实执行仍会经过队列、请求间隔、冷却和熔断保护。"
+    ]
+  };
+}
+
 export async function runHistorySyncBatch(client, options = {}) {
   const plan = historySyncParams(options);
   const response = await client.queryView(plan.viewName, plan.erpParams);
