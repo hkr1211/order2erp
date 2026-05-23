@@ -96,6 +96,31 @@ export async function runHistorySyncBatch(client, options = {}) {
   };
 }
 
+export function buildHistorySyncProgress({ sources = HISTORY_SYNC_SOURCES, latestRuns = [] } = {}) {
+  return sources.map((source) => {
+    const latest = latestRuns.find((row) => row.source === source.source);
+    const lastStatus = latest?.status || "未执行";
+    const rowsSynced = Number(latest?.rows_synced) || 0;
+    const pageIndex = Number(latest?.page_index) || 0;
+    const pageSize = Number(latest?.page_size) || 20;
+    const hasNext = lastStatus === "success" && rowsSynced >= pageSize;
+    return {
+      source: source.source,
+      label: source.label,
+      last_status: lastStatus,
+      last_rows_synced: latest?.rows_synced ?? "",
+      last_page_index: latest?.page_index ?? "",
+      page_size: latest?.page_size ?? "",
+      start_date: latest?.start_date || "",
+      end_date: latest?.end_date || "",
+      finished_at: latest?.finished_at || "",
+      error_message: latest?.error_message || "",
+      next_page_index: hasNext ? pageIndex + 1 : "",
+      next_action: hasNext ? `继续第 ${pageIndex + 1} 页` : lastStatus === "failed" ? "检查错误后重试当前页" : "从第 1 页开始"
+    };
+  });
+}
+
 function startOfDay(date) {
   const copy = new Date(date);
   copy.setHours(0, 0, 0, 0);

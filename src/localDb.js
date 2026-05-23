@@ -40,6 +40,20 @@ export function initLocalDb(dbPath = process.env.PMC_DB_PATH || DEFAULT_DB_PATH)
       error_message TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS history_sync_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      status TEXT NOT NULL,
+      rows_synced INTEGER NOT NULL DEFAULT 0,
+      page_index INTEGER NOT NULL DEFAULT 1,
+      page_size INTEGER NOT NULL DEFAULT 20,
+      start_date TEXT,
+      end_date TEXT,
+      error_message TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS erp_sales_orders (
       erp_id TEXT PRIMARY KEY,
       order_no TEXT,
@@ -233,6 +247,38 @@ export function latestErpRequestLogs(options = 20) {
        LIMIT ?`
     )
     .all(...values, limit);
+}
+
+export function startHistorySyncRun({ source, page_index = 1, page_size = 20, start_date = "", end_date = "" }) {
+  const database = initLocalDb();
+  const startedAt = new Date().toISOString();
+  const result = database
+    .prepare(
+      "INSERT INTO history_sync_runs (source, started_at, status, page_index, page_size, start_date, end_date) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    )
+    .run(source, startedAt, "running", page_index, page_size, start_date, end_date);
+  return { id: result.lastInsertRowid, source, started_at: startedAt };
+}
+
+export function finishHistorySyncRun(id, { status, rows_synced = 0, error_message = "" }) {
+  const database = initLocalDb();
+  const finishedAt = new Date().toISOString();
+  database
+    .prepare("UPDATE history_sync_runs SET finished_at = ?, status = ?, rows_synced = ?, error_message = ? WHERE id = ?")
+    .run(finishedAt, status, rows_synced, error_message, id);
+  return { id, finished_at: finishedAt, status, rows_synced, error_message };
+}
+
+export function latestHistorySyncRuns() {
+  const database = initLocalDb();
+  return database
+    .prepare(
+      `SELECT source, started_at, finished_at, status, rows_synced, page_index, page_size, start_date, end_date, error_message
+       FROM history_sync_runs
+       WHERE id IN (SELECT MAX(id) FROM history_sync_runs GROUP BY source)
+       ORDER BY source`
+    )
+    .all();
 }
 
 export function replaceSalesOrders(rows) {

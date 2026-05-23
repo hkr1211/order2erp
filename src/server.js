@@ -4,12 +4,12 @@ import { ErpClient, ERP_VIEWS, normalizeTable, toBusinessView } from "./erpClien
 import { queryOrderDeliveryRisks } from "./orderDeliveryRisks.js";
 import { queryOrderShortages } from "./orderShortages.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
-import { initLocalDb, latestErpRequestLogs, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listMaterialAlerts, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, savePmcSnapshot, tableStats } from "./localDb.js";
+import { finishHistorySyncRun, initLocalDb, latestErpRequestLogs, latestHistorySyncRuns, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listMaterialAlerts, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, savePmcSnapshot, startHistorySyncRun, tableStats } from "./localDb.js";
 import { syncCoreData } from "./syncService.js";
 import { buildSyncPolicyRows } from "./syncPolicy.js";
 import { buildErpHealthSummary, shouldBlockErpBusinessQuery } from "./erpHealth.js";
 import { SQLITE_TABLES, buildSqliteCoverage } from "./sqliteCoverage.js";
-import { HISTORY_SYNC_SOURCES, defaultHistoryRange, historySyncParams, runHistorySyncBatch } from "./historySync.js";
+import { HISTORY_SYNC_SOURCES, buildHistorySyncProgress, defaultHistoryRange, historySyncParams, runHistorySyncBatch } from "./historySync.js";
 import { buildLocalExceptionCenter, buildLocalFinanceCenter, buildLocalPmcDashboard, quoteOwnerSummaryForLocal } from "./localAnalytics.js";
 
 loadEnvFile();
@@ -174,7 +174,7 @@ const server = http.createServer(async (req, res) => {
       if (guard.blocked) {
         return sendHtml(res, 503, historySyncBlockedPage(guard.reason));
       }
-      const result = await runHistorySyncBatch(client, params);
+      const result = await runHistorySyncBatchWithRecord(params);
       return sendHtml(res, 200, historySyncResultPage(result));
     }
 
@@ -188,7 +188,7 @@ const server = http.createServer(async (req, res) => {
       if (guard.blocked) {
         return sendJson(res, 503, { error: guard.reason, health: queryErpHealth().health });
       }
-      return sendJson(res, 200, await runHistorySyncBatch(client, params));
+      return sendJson(res, 200, await runHistorySyncBatchWithRecord(params));
     }
 
     if (req.method === "GET" && url.pathname === "/erp-logs") {
@@ -4401,6 +4401,10 @@ function sqliteCoveragePage(body) {
 
 function queryHistorySyncCenter(params = {}) {
   const range = defaultHistoryRange(params.today ? new Date(params.today) : new Date());
+  const progressRows = buildHistorySyncProgress({
+    sources: HISTORY_SYNC_SOURCES,
+    latestRuns: latestHistorySyncRuns()
+  });
   const sourceRows = HISTORY_SYNC_SOURCES.map((source) => {
     const plan = historySyncParams({
       source: source.source,
@@ -4419,6 +4423,7 @@ function queryHistorySyncCenter(params = {}) {
       start_date: plan.range.start_date,
       end_date: plan.range.end_date,
       safety: source.riskNote,
+      latest_progress: progressRows.find((row) => row.source === source.source)?.next_action || "从第 1 页开始",
       run: runHref
     };
   });
@@ -4435,6 +4440,7 @@ function queryHistorySyncCenter(params = {}) {
         circuit_breaker: "开启"
       },
       rows: sourceRows,
+      progress: progressRows,
       notes: [
         "本页默认不执行同步，只生成安全补数入口。",
         "点击执行时每次只同步一页，最大20条；成功后再点下一页继续。",
@@ -4456,7 +4462,8 @@ function historySyncPage(body) {
       ["熔断保护", body.summary.circuit_breaker]
     ],
     panels: [
-      modulePanel("可执行同步源", body.rows, ["label", "source", "date_support", "start_date", "end_date", "page_size", "suggested_range", "safety", "run"])
+      modulePanel("最近进度", body.progress, ["label", "source", "last_status", "last_rows_synced", "last_page_index", "page_size", "start_date", "end_date", "finished_at", "next_page_index", "next_action", "error_message"]),
+      modulePanel("可执行同步源", body.rows, ["label", "source", "date_support", "start_date", "end_date", "page_size", "suggested_range", "latest_progress", "safety", "run"])
     ],
     notes: body.notes,
     actions: [
@@ -4465,6 +4472,25 @@ function historySyncPage(body) {
       ["ERP请求日志", "/erp-logs"]
     ]
   });
+}
+
+async function runHistorySyncBatchWithRecord(params = {}) {
+  const plan = historySyncParams(params);
+  const run = startHistorySyncRun({
+    source: plan.source,
+    page_index: plan.pageIndex,
+    page_size: plan.pageSize,
+    start_date: plan.range.start_date,
+    end_date: plan.range.end_date
+  });
+  try {
+    const result = await runHistorySyncBatch(client, params);
+    finishHistorySyncRun(run.id, { status: "success", rows_synced: result.rows_synced });
+    return result;
+  } catch (error) {
+    finishHistorySyncRun(run.id, { status: "failed", rows_synced: 0, error_message: summarizeDataSourceError(error) });
+    throw error;
+  }
 }
 
 function historySyncResultPage(result) {
