@@ -400,6 +400,7 @@ function homePage() {
   ];
   const apiLinks = [
     ["健康检查", "/health", "确认本地中台是否正在运行"],
+    ["ERP健康状态", "/api/erp_health", "只读本地状态，判断 ERP 请求是否熔断或异常"],
     ["全部视图", "/views", "查看可调用的 ERP 查询视图"],
     ["Agent 工具定义", "/agent/tool-schema", "给 OpenClaw 或 Hermes 注册工具时使用"],
     ["PMC 综合看板", "/api/pmc_dashboard?scan_pages=1&scan_size=20&contract_limit=3&alert_limit=10&low_stock_threshold=5&old_stock_days=180&due_soon_days=7&quote_limit=10", "库存、缺料、交期、待报价项目汇总"],
@@ -4799,7 +4800,7 @@ async function queryPmcDashboard(params) {
 function agentToolSchema() {
   return {
     name: "query_erp",
-    description: "查询智邦 ERP 的只读业务视图，返回适合对话分析的结构化 business 数据。",
+    description: "查询智邦 ERP 的只读业务视图和本地保护状态，返回适合对话分析的结构化数据。",
     input_schema: {
       type: "object",
       required: ["view"],
@@ -4832,7 +4833,8 @@ function agentToolSchema() {
             "pmc_dashboard",
             "pmc_console",
             "order_center",
-            "order_detail"
+            "order_detail",
+            "erp_health"
           ],
           description: "要查询的业务视图。"
         },
@@ -4843,6 +4845,10 @@ function agentToolSchema() {
       }
     },
     examples: [
+      {
+        user: "先检查 ERP 中台现在是否适合查询",
+        call: { view: "erp_health", filters: {} }
+      },
       {
         user: "查一下今天最新的销售订单",
         call: { view: "sales_orders", filters: { pageindex: 1, pagesize: 10 } }
