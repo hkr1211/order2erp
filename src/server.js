@@ -4,7 +4,7 @@ import { ErpClient, ERP_VIEWS, normalizeTable, toBusinessView } from "./erpClien
 import { queryOrderDeliveryRisks } from "./orderDeliveryRisks.js";
 import { queryOrderShortages } from "./orderShortages.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
-import { initLocalDb, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listMaterialAlerts, listProcedurePlans, listQuoteFollowups, listSalesOrders, savePmcSnapshot } from "./localDb.js";
+import { initLocalDb, latestErpRequestLogs, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listMaterialAlerts, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, savePmcSnapshot } from "./localDb.js";
 import { syncCoreData } from "./syncService.js";
 import { buildSyncPolicyRows } from "./syncPolicy.js";
 import { buildLocalExceptionCenter, buildLocalFinanceCenter, buildLocalPmcDashboard, quoteOwnerSummaryForLocal } from "./localAnalytics.js";
@@ -18,7 +18,7 @@ const ERP_PROTECTION_MODE = process.env.ERP_PROTECTION_MODE !== "0";
 const DEFAULT_SYNC_PAGE_SIZE = Number.parseInt(process.env.DEFAULT_SYNC_PAGE_SIZE || "20", 10) || 20;
 const DEFAULT_SYNC_COOLDOWN_SECONDS = Number.parseInt(process.env.SYNC_COOLDOWN_SECONDS || "300", 10) || 300;
 const ERP_REQUEST_MIN_INTERVAL_MS = Number.parseInt(process.env.ERP_REQUEST_MIN_INTERVAL_MS || "800", 10) || 800;
-const client = new ErpClient();
+const client = new ErpClient({ requestLogger: logErpRequest });
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -4108,6 +4108,7 @@ async function querySystemStatus(params = {}) {
   }
   const snapshot = latestPmcSnapshot();
   const syncRuns = latestSyncRuns();
+  const erpRequestLogs = latestErpRequestLogs(20);
   const erpQueue = client.requestQueue.snapshot();
   const syncPolicyRows = buildSyncPolicyRows({
     latestRuns: syncRuns,
@@ -4139,6 +4140,7 @@ async function querySystemStatus(params = {}) {
         erp_queue_queued: erpQueue.queued,
         erp_queue_running: erpQueue.running,
         erp_request_failed: erpQueue.failed,
+        erp_request_log_failures: erpRequestLogs.filter((row) => row.status === "failed").length,
         has_snapshot: snapshot ? 1 : 0,
         module_count: modules.length,
         sync_sources: syncRuns.length,
@@ -4148,6 +4150,7 @@ async function querySystemStatus(params = {}) {
       sections: {
         erp_status: [erpStatus],
         erp_queue: [erpQueue],
+        erp_request_logs: erpRequestLogs,
         snapshot: snapshot
           ? [{
               created_at: snapshot.created_at,
@@ -4185,6 +4188,7 @@ function systemStatusPage(body) {
       ["ERP排队", body.summary.erp_queue_queued],
       ["ERP运行中", body.summary.erp_queue_running],
       ["请求失败", body.summary.erp_request_failed],
+      ["日志失败", body.summary.erp_request_log_failures],
       ["熔断状态", body.sections.erp_queue[0]?.circuit_state || "closed"],
       ["本地快照", body.summary.has_snapshot ? "有" : "无"],
       ["同步源", body.summary.sync_sources],
@@ -4195,6 +4199,7 @@ function systemStatusPage(body) {
     panels: [
       modulePanel("ERP 登录状态", body.sections.erp_status, ["ok", "message", "latency_ms", "session_tail"]),
       modulePanel("ERP 请求队列", body.sections.erp_queue, ["queued", "running", "completed", "failed", "consecutive_failures", "circuit_state", "circuit_failure_threshold", "circuit_cooldown_ms", "circuit_open_until", "min_interval_ms", "last_started_at", "last_finished_at", "last_error"]),
+      modulePanel("最近 ERP 请求日志", body.sections.erp_request_logs, ["requested_at", "method", "path", "status", "duration_ms", "error_message"]),
       modulePanel("最近驾驶舱快照", body.sections.snapshot, ["created_at", "today_orders", "month_orders", "overdue_orders", "shortage_orders", "low_stock"]),
       modulePanel("同步策略", body.sections.sync_policy, ["label", "recommended_interval", "risk_level", "last_status", "last_rows", "last_finished_at", "next_allowed_at", "health_status", "action"]),
       modulePanel("最近同步状态", body.sections.sync_runs, ["source_key", "started_at", "finished_at", "status", "rows_synced", "error_message"]),

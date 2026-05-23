@@ -264,6 +264,7 @@ export class ErpClient {
     this.password = options.password || process.env.ERP_PASSWORD;
     this.serialnum = options.serialnum || process.env.ERP_SERIALNUM || "openclaw001";
     this.session = options.token || process.env.ERP_TOKEN || "";
+    this.requestLogger = options.requestLogger || null;
     this.requestQueue = options.requestQueue || new ErpRequestQueue({
       minIntervalMs: process.env.ERP_REQUEST_MIN_INTERVAL_MS || 800,
       circuitFailureThreshold: process.env.ERP_CIRCUIT_FAILURE_THRESHOLD || 3,
@@ -637,7 +638,29 @@ export class ErpClient {
   }
 
   async postJson(path, payload, headers = {}) {
-    return this.requestQueue.run(() => this.postJsonNow(path, payload, headers));
+    return this.requestQueue.run(async () => {
+      const startedAt = Date.now();
+      try {
+        const result = await this.postJsonNow(path, payload, headers);
+        this.logRequest({
+          path,
+          method: "POST",
+          status: "success",
+          duration_ms: Date.now() - startedAt,
+          error_message: ""
+        });
+        return result;
+      } catch (error) {
+        this.logRequest({
+          path,
+          method: "POST",
+          status: "failed",
+          duration_ms: Date.now() - startedAt,
+          error_message: summarizeClientError(error)
+        });
+        throw error;
+      }
+    });
   }
 
   async postJsonNow(path, payload, headers = {}) {
@@ -662,6 +685,20 @@ export class ErpClient {
       throw new Error(`ERP HTTP ${response.status} from ${path}: ${JSON.stringify(data).slice(0, 300)}`);
     }
     return data;
+  }
+
+  logRequest(entry) {
+    if (typeof this.requestLogger !== "function") {
+      return;
+    }
+    try {
+      this.requestLogger({
+        requested_at: new Date().toISOString(),
+        ...entry
+      });
+    } catch {
+      // Logging must never break ERP calls.
+    }
   }
 
   async scanInventorySummary(params = {}) {
@@ -1259,4 +1296,9 @@ function stripTrailingSlash(value) {
 function withTxtPrefix(value) {
   const text = String(value);
   return text.startsWith("txt:") ? text : `txt:${text}`;
+}
+
+function summarizeClientError(error) {
+  const message = error?.message || String(error);
+  return message.length > 300 ? `${message.slice(0, 300)}...` : message;
 }

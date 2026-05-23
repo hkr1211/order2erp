@@ -30,6 +30,16 @@ export function initLocalDb(dbPath = process.env.PMC_DB_PATH || DEFAULT_DB_PATH)
       error_message TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS erp_request_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      requested_at TEXT NOT NULL,
+      method TEXT NOT NULL,
+      path TEXT NOT NULL,
+      status TEXT NOT NULL,
+      duration_ms INTEGER NOT NULL DEFAULT 0,
+      error_message TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS erp_sales_orders (
       erp_id TEXT PRIMARY KEY,
       order_no TEXT,
@@ -181,6 +191,34 @@ export function latestSyncRuns() {
        ORDER BY source_key`
     )
     .all();
+}
+
+export function logErpRequest(entry) {
+  const database = initLocalDb();
+  database
+    .prepare(
+      "INSERT INTO erp_request_logs (requested_at, method, path, status, duration_ms, error_message) VALUES (?, ?, ?, ?, ?, ?)"
+    )
+    .run(
+      entry.requested_at || new Date().toISOString(),
+      entry.method || "POST",
+      entry.path || "",
+      entry.status || "unknown",
+      Number(entry.duration_ms) || 0,
+      entry.error_message || ""
+    );
+}
+
+export function latestErpRequestLogs(limit = 20) {
+  const database = initLocalDb();
+  return database
+    .prepare(
+      `SELECT requested_at, method, path, status, duration_ms, error_message
+       FROM erp_request_logs
+       ORDER BY id DESC
+       LIMIT ?`
+    )
+    .all(Math.max(1, Math.min(Number(limit) || 20, 100)));
 }
 
 export function replaceSalesOrders(rows) {
