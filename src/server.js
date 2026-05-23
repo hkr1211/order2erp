@@ -4,7 +4,7 @@ import { ErpClient, ERP_VIEWS, normalizeTable, toBusinessView } from "./erpClien
 import { queryOrderDeliveryRisks } from "./orderDeliveryRisks.js";
 import { queryOrderShortages } from "./orderShortages.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
-import { initLocalDb, latestPmcSnapshot, latestSyncRuns, listProcedurePlans, savePmcSnapshot } from "./localDb.js";
+import { initLocalDb, latestPmcSnapshot, latestSyncRuns, listMaterialAlerts, listProcedurePlans, listSalesOrders, savePmcSnapshot } from "./localDb.js";
 import { syncCoreData } from "./syncService.js";
 
 loadEnvFile();
@@ -1147,6 +1147,38 @@ async function queryOrderCenter(params = {}) {
   const refresh = parseBoolean(params.refresh);
   const snapshot = latestPmcSnapshot();
 
+  if (!refresh && !searchKey) {
+    const localRows = localOrderCenterRows({ limit: pageSize, statusFilter });
+    if (localRows.allRows.length) {
+      return {
+        header: { status: 0, message: "ok" },
+        body: {
+          model: "order_center",
+          cached: true,
+          scan: {
+            pageindex: pageIndex,
+            pagesize: pageSize,
+            contract_limit: contractLimit,
+            due_soon_days: dueSoonDays,
+            scan_size: scanSize,
+            searchKey,
+            status: statusFilter
+          },
+          page: null,
+          summary: orderCenterSummary(localRows.allRows, localRows.filteredRows),
+          rows: localRows.filteredRows,
+          source_status: {
+            sqlite_sales_orders: { ok: true, rows: localRows.allRows.length }
+          },
+          notes: [
+            "当前读取本地 SQLite 销售订单表。",
+            "点击“刷新实时订单”可重新扫描 ERP；点击“立即同步订单”可更新本地 SQLite。"
+          ]
+        }
+      };
+    }
+  }
+
   if (snapshot && !refresh && !searchKey) {
     const rows = orderCenterRowsFromSnapshot(snapshot.payload);
     const filteredRows = statusFilter ? rows.filter((row) => row.status_code === statusFilter) : rows;
@@ -1261,6 +1293,49 @@ async function queryOrderCenter(params = {}) {
       })
     };
   }
+}
+
+function localOrderCenterRows({ limit, statusFilter }) {
+  const today = startOfDay(new Date());
+  const salesOrders = listSalesOrders({ limit }).map((row) => mapLocalSalesOrder(row, today));
+  const materialAlerts = listMaterialAlerts({ limit: 500 }).filter((row) => row.alert_type === "shortage");
+  const shortageIndex = indexOrderShortages(materialAlerts);
+  const rows = salesOrders.map((order) => mapOrderCenterRow(order, new Map(), shortageIndex));
+  const enrichedRows = rows.map((row) => {
+    if (row.due_status !== "正常" || !row.delivery_date) {
+      return row;
+    }
+    const deliveryDate = parseDate(row.delivery_date);
+    if (!deliveryDate) {
+      return row;
+    }
+    const days = daysBetween(today, startOfDay(deliveryDate));
+    const dueStatus = days < 0 ? "逾期" : days <= 7 ? "7天内到期" : "正常";
+    return enrichOrderCenterAction({ ...row, due_status: dueStatus, days_from_today: days });
+  });
+  const filteredRows = statusFilter ? enrichedRows.filter((row) => row.status_code === statusFilter) : enrichedRows;
+  return { allRows: enrichedRows, filteredRows };
+}
+
+function mapLocalSalesOrder(row, today) {
+  const deliveryDate = row.delivery_date || "";
+  const parsedDelivery = parseDate(deliveryDate);
+  return {
+    erp_id: row.erp_id,
+    order_no: row.order_no,
+    title: row.product_name || row.order_no,
+    customer: row.customer,
+    owner: row.owner,
+    amount: row.amount,
+    signed_date: row.signed_date,
+    delivery_date: deliveryDate,
+    days_from_today: parsedDelivery ? daysBetween(today, startOfDay(parsedDelivery)) : null,
+    warehouse_status: "",
+    delivery_status: "",
+    payment_status: "",
+    approval_status: row.status_text,
+    raw: parseJson(row.raw_json, row)
+  };
 }
 
 function orderCenterRowsFromSnapshot(payload) {
@@ -1427,8 +1502,8 @@ function mapOrderCenterRow(order, riskIndex, shortageIndex) {
     owner: order.owner,
     amount: order.amount,
     signed_date: order.signed_date,
-    delivery_date: risk.nearestDeliveryDate || null,
-    days_from_today: risk.earliestDays,
+    delivery_date: risk.nearestDeliveryDate || order.delivery_date || null,
+    days_from_today: risk.earliestDays ?? order.days_from_today,
     due_status: dueStatus,
     shortage_status: shortageStatus,
     shortage_rows: shortage.rows || 0,
@@ -1591,6 +1666,7 @@ function orderCenterPage(body, url) {
       <div class="actions">
         <a class="button" href="/pmc">PMC 驾驶舱</a>
         <a class="button" href="/">首页</a>
+        <a class="button" href="/sync?sources=sales_orders,material_alerts">立即同步订单</a>
         <a class="button" href="/orders?refresh=1">刷新实时订单</a>
         <a class="button primary" href="${escapeHtml(orderCenterJsonHref(url))}">查看 JSON</a>
       </div>
@@ -1942,6 +2018,47 @@ async function queryMaterialControl(params = {}) {
   let cached = false;
   let shortageResult;
   let inventoryResult;
+  if (params.refresh !== "1") {
+    const localAlerts = listMaterialAlerts({ limit: clampInt(params.pagesize || 100, 1, 500) });
+    if (localAlerts.length) {
+      const shortageRows = localAlerts.filter((row) => row.alert_type === "shortage");
+      const lowStockRows = localAlerts.filter((row) => row.alert_type === "low_stock");
+      const materialTasks = buildMaterialTasks({ shortageRows, lowStockRows, frozenStockRows: [], oldStockRows: [] });
+      return {
+        header: { status: 0, message: "ok" },
+        body: {
+          model: "material_control",
+          generated_at: new Date().toISOString(),
+          cached: true,
+          summary: {
+            material_tasks: materialTasks.length,
+            urgent_material_tasks: materialTasks.filter((row) => row.priority === "高").length,
+            shortage_orders: uniqueCount(shortageRows, "order_no"),
+            shortage_rows: shortageRows.length,
+            low_stock: lowStockRows.length,
+            frozen_stock: 0,
+            old_stock: 0,
+            source_errors: 0
+          },
+          sections: {
+            material_tasks: materialTasks,
+            shortage_rows: shortageRows,
+            low_stock: lowStockRows,
+            frozen_stock: [],
+            old_stock: []
+          },
+          source_status: {
+            sqlite_material_alerts: { ok: true, rows: localAlerts.length }
+          },
+          notes: [
+            "当前读取本地 SQLite 物料告警表。",
+            "点击“立即同步”可从 ERP 重新同步缺料和低库存。"
+          ]
+        }
+      };
+    }
+  }
+
   if (snapshot && params.refresh !== "1") {
     cached = true;
     shortageResult = { status: "rejected", reason: new Error("使用本地快照") };
@@ -2869,7 +2986,7 @@ function materialControlPage(body) {
       modulePanel("长库龄库存", body.sections.old_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"])
     ],
     notes: body.notes,
-    actions: [["查看 JSON", "/api/pmc_dashboard?format=json"]]
+    actions: [["立即同步", "/sync?sources=material_alerts"], ["刷新实时ERP", "/materials?refresh=1"], ["查看 JSON", "/api/pmc_dashboard?format=json"]]
   });
 }
 
@@ -4039,6 +4156,17 @@ function parseNumber(value) {
   }
   const number = Number(String(value).replace(/,/g, ""));
   return Number.isFinite(number) ? number : null;
+}
+
+function parseJson(value, fallback = null) {
+  if (!value) {
+    return fallback;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
 }
 
 function formatNumber(value) {

@@ -56,15 +56,30 @@ export async function syncProcedurePlans(client, options = {}) {
 
 export async function syncMaterialAlerts(client, options = {}) {
   return runSync("material_alerts", async () => {
-    const shortageResult = await queryOrderShortages(client, {
-      pageindex: options.pageindex || 1,
-      pagesize: options.shortage_pagesize || 20,
-      contract_limit: options.contract_limit || 5,
-      scan_size: options.scan_size || 100,
-      cks: options.cks || ""
-    });
-    const shortageRows = shortageResult?.body?.rows || [];
-    const rows = shortageRows.map((row, index) => ({
+    const [shortageResult, inventoryResult] = await Promise.allSettled([
+      queryOrderShortages(client, {
+        pageindex: options.pageindex || 1,
+        pagesize: options.shortage_pagesize || 20,
+        contract_limit: options.contract_limit || 5,
+        scan_size: options.scan_size || 100,
+        cks: options.cks || ""
+      }),
+      client.queryInventoryAlerts({
+        scan_pages: options.scan_pages || 1,
+        scan_size: options.inventory_scan_size || options.scan_size || 20,
+        alert_limit: options.alert_limit || 20,
+        low_stock_threshold: options.low_stock_threshold || 5,
+        old_stock_days: options.old_stock_days || 180,
+        cks: options.cks || ""
+      })
+    ]);
+    if (shortageResult.status === "rejected" && inventoryResult.status === "rejected") {
+      throw new Error(`${summarizeError(shortageResult.reason)}；${summarizeError(inventoryResult.reason)}`);
+    }
+    const shortageRows = shortageResult.status === "fulfilled" ? shortageResult.value?.body?.rows || [] : [];
+    const lowStockRows = inventoryResult.status === "fulfilled" ? inventoryResult.value?.body?.sections?.low_stock || [] : [];
+    const rows = [
+      ...shortageRows.map((row, index) => ({
       alert_id: `shortage-${row.order_no || index}-${row.product_code || index}`,
       alert_type: "shortage",
       order_no: text(row.order_no),
@@ -79,7 +94,27 @@ export async function syncMaterialAlerts(client, options = {}) {
       priority: "高",
       raw: row,
       synced_at: new Date().toISOString()
-    }));
+      })),
+      ...lowStockRows.map((row, index) => ({
+        alert_id: `low_stock-${row.product_code || index}-${row.warehouse || index}`,
+        alert_type: "low_stock",
+        order_no: "",
+        customer: "",
+        product_code: text(row.product_code),
+        product_name: text(row.product_name),
+        warehouse: text(row.warehouse),
+        demand_qty: null,
+        available_qty: number(row.available_qty),
+        stock_qty: number(row.stock_qty),
+        shortage_qty: null,
+        priority: number(row.available_qty) <= 0 ? "高" : "中",
+        raw: row,
+        synced_at: new Date().toISOString()
+      }))
+    ];
+    if (!rows.length) {
+      throw new Error("ERP 本次未返回缺料或低库存告警，保留本地旧物料告警数据。");
+    }
     replaceMaterialAlerts(rows);
     return rows.length;
   });
