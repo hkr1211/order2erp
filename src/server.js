@@ -778,6 +778,9 @@ function labelFor(key) {
     followup_tasks: "跟催事项",
     urgent_followups: "紧急跟催",
     latest_action: "最近建议",
+    blocked_orders: "阻塞订单",
+    blocker: "阻塞点",
+    next_action: "下一步动作",
     work_centers: "工作中心",
     work_center_name: "工作中心",
     bom_id: "BOM ID",
@@ -965,28 +968,63 @@ async function queryOrderCenter(params = {}) {
   const scanSize = clampInt(params.scan_size || 100, 1, 500);
   const searchKey = params.searchKey || "";
   const statusFilter = params.status || "";
+  const refresh = parseBoolean(params.refresh);
+  const snapshot = latestPmcSnapshot();
+
+  if (snapshot && !refresh && !searchKey) {
+    const rows = orderCenterRowsFromSnapshot(snapshot.payload);
+    const filteredRows = statusFilter ? rows.filter((row) => row.status_code === statusFilter) : rows;
+    return {
+      header: { status: 0, message: "ok" },
+      body: {
+        model: "order_center",
+        cached: true,
+        cache_created_at: snapshot.created_at,
+        scan: {
+          pageindex: pageIndex,
+          pagesize: pageSize,
+          contract_limit: contractLimit,
+          due_soon_days: dueSoonDays,
+          scan_size: scanSize,
+          searchKey,
+          status: statusFilter
+        },
+        page: null,
+        summary: orderCenterSummary(rows, filteredRows),
+        rows: filteredRows,
+        source_status: {
+          pmc_snapshot: { ok: true, created_at: snapshot.created_at }
+        },
+        notes: [
+          `当前读取本地驾驶舱快照：${formatDateTime(snapshot.created_at)}。`,
+          "点击“刷新实时订单”可重新扫描 ERP 销售订单、合同明细、交期风险和缺料风险。"
+        ]
+      }
+    };
+  }
 
   try {
+    const timeoutMs = clampInt(params.timeout_ms || 12000, 1000, 30000);
     const [salesResult, deliveryRisks, shortages] = await Promise.all([
-      client.queryView("sales_orders", {
+      withTimeout(client.queryView("sales_orders", {
         searchKey,
         pageindex: String(pageIndex),
         pagesize: String(pageSize)
-      }),
-      queryOrderDeliveryRisks(client, {
+      }), timeoutMs),
+      withTimeout(queryOrderDeliveryRisks(client, {
         searchKey,
         pageindex: String(pageIndex),
         pagesize: String(pageSize),
         contract_limit: String(contractLimit),
         due_soon_days: String(dueSoonDays)
-      }),
-      queryOrderShortages(client, {
+      }), timeoutMs),
+      withTimeout(queryOrderShortages(client, {
         searchKey,
         pageindex: String(pageIndex),
         pagesize: String(pageSize),
         contract_limit: String(contractLimit),
         scan_size: String(scanSize)
-      })
+      }), timeoutMs)
     ]);
 
     const salesTable = normalizeTable(salesResult);
@@ -1010,16 +1048,7 @@ async function queryOrderCenter(params = {}) {
           status: statusFilter
         },
         page: salesTable.page,
-        summary: {
-          total_rows: rows.length,
-          visible_rows: filteredRows.length,
-          red_orders: rows.filter((row) => row.status_code === "red").length,
-          yellow_orders: rows.filter((row) => row.status_code === "yellow").length,
-          green_orders: rows.filter((row) => row.status_code === "green").length,
-          shortage_orders: rows.filter((row) => row.shortage_status === "缺料").length,
-          overdue_orders: rows.filter((row) => row.due_status === "逾期").length,
-          due_soon_orders: rows.filter((row) => row.due_status === "7天内到期").length
-        },
+        summary: orderCenterSummary(rows, filteredRows),
         rows: filteredRows,
         source_status: {
           sales_orders: { ok: true, rows: salesOrders.length, page: salesTable.page },
@@ -1036,7 +1065,8 @@ async function queryOrderCenter(params = {}) {
         },
         notes: [
           "订单管理中心第一版按销售订单列表聚合交期风险和缺料风险。",
-          "PO 编号后续从合同明细提取；当前列表先显示 ERP 合同号。"
+          "PO 编号后续从合同明细提取；当前列表先显示 ERP 合同号。",
+          "每条订单会按交期和缺料状态推导阻塞点、优先级和下一步动作。"
         ]
       }
     };
@@ -1055,6 +1085,70 @@ async function queryOrderCenter(params = {}) {
       })
     };
   }
+}
+
+function orderCenterRowsFromSnapshot(payload) {
+  const rows = [
+    ...(payload?.sections?.overdue_orders || []).map((row) => ({ ...row, due_status: "逾期" })),
+    ...(payload?.sections?.due_soon_orders || []).map((row) => ({ ...row, due_status: "7天内到期" })),
+    ...(payload?.sections?.shortage_orders || []).map((row) => ({ ...row, shortage_status: "缺料" }))
+  ];
+  const merged = new Map();
+  for (const row of rows) {
+    const key = row.order_no || `${row.customer || ""}-${row.product_name || ""}-${row.delivery_date || ""}`;
+    const current = merged.get(key) || {
+      erp_id: row.erp_id,
+      order_no: row.order_no,
+      title: row.title,
+      customer: row.customer,
+      owner: row.owner,
+      amount: row.amount,
+      signed_date: row.signed_date,
+      delivery_date: row.delivery_date,
+      days_from_today: row.days_from_today,
+      due_status: row.due_status || "正常",
+      shortage_status: row.shortage_status || "未发现缺料",
+      shortage_rows: 0,
+      shortage_qty: 0,
+      risk_products: [],
+      warehouse_status: row.warehouse_status,
+      delivery_status: row.delivery_status,
+      payment_status: row.payment_status,
+      approval_status: row.approval_status,
+      raw: row.raw || row
+    };
+    if (row.due_status === "逾期" || row.risk_type === "overdue") {
+      current.due_status = "逾期";
+    } else if (row.due_status === "7天内到期" || row.risk_type === "due_soon") {
+      current.due_status = current.due_status === "逾期" ? "逾期" : "7天内到期";
+    }
+    if (row.shortage_status === "缺料" || parseNumber(row.shortage_qty) > 0) {
+      current.shortage_status = "缺料";
+      current.shortage_rows += 1;
+      current.shortage_qty += parseNumber(row.shortage_qty) || 0;
+    }
+    if (row.product_name) {
+      current.risk_products.push(row.product_name);
+    }
+    current.delivery_date = current.delivery_date || row.delivery_date;
+    current.days_from_today = current.days_from_today ?? row.days_from_today;
+    merged.set(key, current);
+  }
+  return [...merged.values()].map((row) => enrichOrderCenterAction(row));
+}
+
+function orderCenterSummary(rows, filteredRows) {
+  return {
+    total_rows: rows.length,
+    visible_rows: filteredRows.length,
+    red_orders: rows.filter((row) => row.status_code === "red").length,
+    yellow_orders: rows.filter((row) => row.status_code === "yellow").length,
+    green_orders: rows.filter((row) => row.status_code === "green").length,
+    shortage_orders: rows.filter((row) => row.shortage_status === "缺料").length,
+    overdue_orders: rows.filter((row) => row.due_status === "逾期").length,
+    due_soon_orders: rows.filter((row) => row.due_status === "7天内到期").length,
+    blocked_orders: rows.filter((row) => row.blocker && row.blocker !== "无").length
+  };
 }
 
 function emptyOrderCenterBody({ pageIndex, pageSize, contractLimit, dueSoonDays, scanSize, searchKey, statusFilter, message }) {
@@ -1145,7 +1239,7 @@ function mapOrderCenterRow(order, riskIndex, shortageIndex) {
   const shortageStatus = shortage.rows > 0 ? "缺料" : "未发现缺料";
   const statusCode = dueStatus === "逾期" || shortageStatus === "缺料" ? "red" : dueStatus === "7天内到期" ? "yellow" : "green";
   const statusText = statusCode === "red" ? "紧急" : statusCode === "yellow" ? "预警" : "正常";
-  return {
+  return enrichOrderCenterAction({
     erp_id: order.erp_id,
     status_light: statusCode === "red" ? "红" : statusCode === "yellow" ? "黄" : "绿",
     status_code: statusCode,
@@ -1169,7 +1263,52 @@ function mapOrderCenterRow(order, riskIndex, shortageIndex) {
     payment_status: order.payment_status,
     approval_status: order.approval_status,
     raw: order.raw
+  });
+}
+
+function enrichOrderCenterAction(row) {
+  const dueStatus = row.due_status || "正常";
+  const shortageStatus = row.shortage_status || "未发现缺料";
+  const statusCode = dueStatus === "逾期" || shortageStatus === "缺料" ? "red" : dueStatus === "7天内到期" ? "yellow" : "green";
+  const blocker = shortageStatus === "缺料" ? "缺料" : dueStatus === "逾期" ? "交期逾期" : dueStatus === "7天内到期" ? "临期交付" : "无";
+  const nextAction = orderNextAction(blocker);
+  return {
+    ...row,
+    status_light: statusCode === "red" ? "红" : statusCode === "yellow" ? "黄" : "绿",
+    status_code: statusCode,
+    status_text: statusCode === "red" ? "紧急" : statusCode === "yellow" ? "预警" : "正常",
+    priority: statusCode === "red" ? "高" : statusCode === "yellow" ? "中" : "低",
+    blocker,
+    next_action: nextAction,
+    responsible_role: orderResponsibleRole(blocker),
+    risk_products: uniqueList(row.risk_products || []).slice(0, 5)
   };
+}
+
+function orderNextAction(blocker) {
+  if (blocker === "缺料") {
+    return "先确认库存/采购到货，再排生产或调整交期";
+  }
+  if (blocker === "交期逾期") {
+    return "确认延期原因并同步销售/客户";
+  }
+  if (blocker === "临期交付") {
+    return "锁定生产、质检和发货资源";
+  }
+  return "按计划跟进";
+}
+
+function orderResponsibleRole(blocker) {
+  if (blocker === "缺料") {
+    return "PMC/采购";
+  }
+  if (blocker === "交期逾期") {
+    return "PMC/销售";
+  }
+  if (blocker === "临期交付") {
+    return "PMC";
+  }
+  return "销售/PMC";
 }
 
 function uniqueList(values) {
@@ -1276,6 +1415,7 @@ function orderCenterPage(body, url) {
       <div class="actions">
         <a class="button" href="/pmc">PMC 驾驶舱</a>
         <a class="button" href="/">首页</a>
+        <a class="button" href="/orders?refresh=1">刷新实时订单</a>
         <a class="button primary" href="${escapeHtml(orderCenterJsonHref(url))}">查看 JSON</a>
       </div>
     </header>
@@ -1296,13 +1436,14 @@ function orderCenterPage(body, url) {
       ${orderMetric("黄灯订单", body.summary.yellow_orders)}
       ${orderMetric("绿灯订单", body.summary.green_orders)}
       ${orderMetric("缺料订单", body.summary.shortage_orders)}
+      ${orderMetric("阻塞订单", body.summary.blocked_orders)}
       ${orderMetric("临期订单", body.summary.due_soon_orders)}
     </section>
     <section class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>状态灯</th><th>订单号</th><th>客户</th><th>负责人</th><th>金额</th><th>签订日期</th><th>最近交期</th><th>距今天数</th><th>交期状态</th><th>缺料状态</th><th>相关产品</th><th>出库</th><th>发货</th><th>收款</th><th>审批</th>
+            <th>状态灯</th><th>优先级</th><th>订单号</th><th>客户</th><th>负责人</th><th>最近交期</th><th>距今天数</th><th>阻塞点</th><th>下一步动作</th><th>责任角色</th><th>交期状态</th><th>缺料状态</th><th>相关产品</th><th>金额</th><th>审批</th>
           </tr>
         </thead>
         <tbody>
@@ -1333,20 +1474,20 @@ function orderCenterRowHtml(row) {
     : escapeHtml(row.order_no);
   return `<tr>
     <td><span class="light"><span class="dot ${tone}"></span>${escapeHtml(row.status_text)}</span></td>
+    <td><span class="pill ${tone}">${escapeHtml(row.priority || "")}</span></td>
     <td>${orderLink}</td>
     <td>${escapeHtml(row.customer)}</td>
     <td>${escapeHtml(row.owner)}</td>
-    <td>${escapeHtml(row.amount)}</td>
-    <td>${escapeHtml(row.signed_date)}</td>
     <td>${escapeHtml(row.delivery_date || "")}</td>
     <td>${escapeHtml(row.days_from_today ?? "")}</td>
+    <td>${escapeHtml(row.blocker || "")}</td>
+    <td>${escapeHtml(row.next_action || "")}</td>
+    <td>${escapeHtml(row.responsible_role || "")}</td>
     <td><span class="pill ${row.due_status === "逾期" ? "red" : row.due_status === "7天内到期" ? "yellow" : "green"}">${escapeHtml(row.due_status)}</span></td>
     <td><span class="pill ${row.shortage_status === "缺料" ? "red" : "green"}">${escapeHtml(row.shortage_status)}</span></td>
     <td>${(row.risk_products || []).map((item) => `<span class="pill ${tone}">${escapeHtml(item)}</span>`).join("")}</td>
-    <td>${escapeHtml(row.warehouse_status)}</td>
-    <td>${escapeHtml(row.delivery_status)}</td>
-    <td>${escapeHtml(row.payment_status)}</td>
-    <td>${escapeHtml(row.approval_status)}</td>
+    <td>${escapeHtml(row.amount ?? "")}</td>
+    <td>${escapeHtml(row.approval_status ?? "")}</td>
   </tr>`;
 }
 
@@ -3386,7 +3527,7 @@ function systemStatusPage(body) {
 function pmcGoalPage() {
   const rows = [
     ["PMC驾驶舱首页", "已完成V1", "KPI、逾期、临期、缺料、待报价、低库存"],
-    ["订单管理中心", "已完成V1", "订单状态灯、搜索、过滤、订单详情穿透"],
+    ["订单管理中心", "已完成V1", "订单作战清单、状态灯、阻塞点、下一步动作、订单详情穿透"],
     ["物料控制中心", "已完成V1", "缺料、低库存、冻结、长库龄统一物料处理清单"],
     ["待报价中心", "已完成V1", "项目/商机报价跟进池，含优先级、负责人汇总和处理建议"],
     ["生产进度中心", "已完成V1", "ERP生产进度、领料、BOM、工序计划，含延期工序和工作中心负荷"],
