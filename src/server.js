@@ -73,6 +73,12 @@ const server = http.createServer(async (req, res) => {
       return sendHtml(res, 200, productionCenterPage(result.body));
     }
 
+    if (req.method === "GET" && url.pathname === "/dispatch") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = await queryProductionCenter(params);
+      return sendHtml(res, 200, dispatchTrackingPage(result.body));
+    }
+
     if (req.method === "GET" && url.pathname === "/scheduling") {
       const params = Object.fromEntries(url.searchParams);
       const result = await querySchedulingCenter(params);
@@ -333,6 +339,7 @@ function homePage() {
     ["排产甘特视图", "/scheduling", "交期时间轴、压力分布、插单影响评估"],
     ["采购跟催中心", "/procurement", "供应商跟催、入库、应付付款跟踪"],
     ["生产进度中心", "/production", "延期工序、工作中心负荷、BOM 数据"],
+    ["派工进度追踪", "/dispatch", "查看派工单ID、工序计划、完工数量和延期派工"],
     ["待报价中心", "/quotes", "销售报价跟进池、负责人汇总"],
     ["应收应付中心", "/finance", "客户欠款、逾期应收、近期应付"]
   ];
@@ -539,7 +546,8 @@ function roleWorkbenchesPage() {
       primary_action: "先看 PMC 驾驶舱，再看报表和应收应付。",
       entry_1: "/pmc",
       entry_2: "/reports",
-      entry_3: "/finance"
+      entry_3: "/finance",
+      entry_4: ""
     },
     {
       role: "PMC",
@@ -547,7 +555,8 @@ function roleWorkbenchesPage() {
       primary_action: "先处理异常待办，再看订单、物料和排产压力。",
       entry_1: "/exceptions",
       entry_2: "/orders",
-      entry_3: "/materials"
+      entry_3: "/materials",
+      entry_4: "/dispatch"
     },
     {
       role: "销售",
@@ -555,12 +564,13 @@ function roleWorkbenchesPage() {
       primary_action: "先看待报价和订单阻塞，再同步客户和收款风险。",
       entry_1: "/quotes",
       entry_2: "/orders",
-      entry_3: "/finance"
+      entry_3: "/finance",
+      entry_4: ""
     }
   ];
   const workflowRows = [
     { workflow: "每日晨会", owner: "PMC", step_1: "打开 /pmc 看总览", step_2: "进入 /exceptions 处理高优先级", step_3: "必要时进入 /scheduling 看插单影响" },
-    { workflow: "客户交期沟通", owner: "销售", step_1: "打开 /orders 查看阻塞点", step_2: "确认 /materials 缺料或 /production 进度", step_3: "同步客户交期和下一步动作" },
+    { workflow: "客户交期沟通", owner: "销售", step_1: "打开 /orders 查看阻塞点", step_2: "确认 /materials 缺料或 /dispatch 派工", step_3: "同步客户交期和下一步动作" },
     { workflow: "采购跟催", owner: "PMC/采购", step_1: "打开 /procurement 看跟催清单", step_2: "结合 /materials 缺料任务排序", step_3: "反馈预计到货和替代方案" },
     { workflow: "老板日报", owner: "老板/PMC", step_1: "打开 /reports 看指标", step_2: "导出 /reports/export.xls", step_3: "必要时打印 /reports/print" }
   ];
@@ -575,7 +585,7 @@ function roleWorkbenchesPage() {
       ["低库存", summary.low_stock ?? "--"]
     ],
     panels: [
-      modulePanel("角色入口", roleRows, ["role", "focus", "primary_action", "entry_1", "entry_2", "entry_3"]),
+      modulePanel("角色入口", roleRows, ["role", "focus", "primary_action", "entry_1", "entry_2", "entry_3", "entry_4"]),
       modulePanel("日常流程", workflowRows, ["workflow", "owner", "step_1", "step_2", "step_3"])
     ],
     notes: [
@@ -840,6 +850,7 @@ function labelFor(key) {
     entry_1: "入口1",
     entry_2: "入口2",
     entry_3: "入口3",
+    entry_4: "入口4",
     workflow: "流程",
     step_1: "步骤1",
     step_2: "步骤2",
@@ -922,11 +933,14 @@ function labelFor(key) {
     followup_tasks: "跟催事项",
     urgent_followups: "紧急跟催",
     latest_action: "最近建议",
+    dispatch_records: "派工记录",
+    delayed_dispatches: "延期派工",
     blocked_orders: "阻塞订单",
     blocker: "阻塞点",
     next_action: "下一步动作",
     work_centers: "工作中心",
     work_center_name: "工作中心",
+    work_assignment_id: "派工单ID",
     bom_id: "BOM ID",
     bom_title: "清单主题",
     bom_no: "清单编号",
@@ -2421,6 +2435,7 @@ function settledStatus(result) {
 
 function mapProcedurePlanForCenter(row) {
   return {
+    work_assignment_id: firstText(row.workAssignmentId, row.work_assignment_id, row["派工单ID"], row["派工单号"]),
     order_no: firstText(row.orderNo, row.OrderNo, row["订单编号"], row["生产单号"], row["派工单号"]),
     product_name: firstText(row.productName, row.product_name, row["产品名称"], row.title),
     product_code: firstText(row.productCode, row.product_code, row["产品编号"], row.order1),
@@ -3337,15 +3352,40 @@ function productionCenterPage(body) {
       ["数据源异常", body.summary.source_errors]
     ],
     panels: [
-      modulePanel("延期工序", body.sections.delayed_procedures, ["order_no", "product_name", "procedure_name", "work_center_name", "remaining_qty", "planned_finish_date", "owner", "state"]),
+      modulePanel("延期工序", body.sections.delayed_procedures, ["work_assignment_id", "order_no", "product_name", "procedure_name", "work_center_name", "remaining_qty", "planned_finish_date", "owner", "state"]),
       modulePanel("工作中心负荷", body.sections.workload_by_center, ["work_center_name", "procedure_count", "planned_qty", "finished_qty", "remaining_qty", "delayed_procedures"]),
       modulePanel("生产进度", body.sections.progress, ["orderNo", "productName", "procedureName", "planNum", "finishNum", "state"]),
       modulePanel("领料记录", body.sections.material_orders, ["orderNo", "productName", "materialName", "num", "state"]),
       modulePanel("BOM 数据", body.sections.boms, ["bom_no", "bom_title", "parent_product", "effective_status", "enabled_status", "bom_type", "customer_scope", "owner", "created_date"]),
-      modulePanel("工序计划", body.sections.procedure_plans, ["order_no", "product_name", "procedure_name", "work_center_name", "planned_qty", "finished_qty", "remaining_qty", "planned_start_date", "planned_finish_date", "owner"])
+      modulePanel("工序计划", body.sections.procedure_plans, ["work_assignment_id", "order_no", "product_name", "procedure_name", "work_center_name", "planned_qty", "finished_qty", "remaining_qty", "planned_start_date", "planned_finish_date", "owner"])
     ],
     notes: body.notes,
-    actions: [["刷新", "/production"]]
+    actions: [["派工追踪", "/dispatch"], ["刷新", "/production"]]
+  });
+}
+
+function dispatchTrackingPage(body) {
+  return modulePage({
+    title: "派工进度追踪",
+    subtitle: "基于 ERP 工序计划表显示派工单ID、工序、计划起止、完成数量、剩余数量和延期状态。",
+    summary: [
+      ["派工记录", body.summary.procedure_plan_rows],
+      ["延期派工", body.summary.delayed_procedures],
+      ["工作中心", body.summary.work_centers],
+      ["生产进度", body.summary.progress_rows],
+      ["数据源异常", body.summary.source_errors]
+    ],
+    panels: [
+      modulePanel("延期派工", body.sections.delayed_procedures, ["work_assignment_id", "order_no", "product_name", "procedure_name", "work_center_name", "remaining_qty", "planned_finish_date", "owner", "state"]),
+      modulePanel("派工进度追踪表", body.sections.procedure_plans, ["work_assignment_id", "order_no", "product_name", "procedure_name", "work_center_name", "planned_qty", "finished_qty", "remaining_qty", "planned_start_date", "planned_finish_date", "owner", "state"]),
+      modulePanel("工作中心负荷", body.sections.workload_by_center, ["work_center_name", "procedure_count", "planned_qty", "finished_qty", "remaining_qty", "delayed_procedures"]),
+      modulePanel("ERP生产进度原始表", body.sections.progress, ["orderNo", "productName", "procedureName", "planNum", "finishNum", "state"])
+    ],
+    notes: [
+      ...body.notes,
+      "当前 ERP 的 production_progress 接口返回 0 行时，本页优先使用 procedure_plans 工序计划作为派工追踪主数据。"
+    ],
+    actions: [["返回生产中心", "/production"], ["刷新", "/dispatch?refresh=1"]]
   });
 }
 
@@ -3611,6 +3651,7 @@ async function querySystemStatus() {
     ["采购跟催中心", "/procurement", "可用：入库/应付数据源局部容错"],
     ["应收应付中心", "/finance", "可用：应收/应付数据源局部容错"],
     ["排产甘特视图", "/scheduling", "可用：默认读取本地快照，支持插单影响评估"],
+    ["派工进度追踪", "/dispatch", "可用：读取 ERP 工序计划，显示派工单ID和延期派工"],
     ["异常管理中心", "/exceptions", "可用：默认读取本地快照，支持统一待办"],
     ["报表中心", "/reports", "可用：支持快照、CSV、Excel、打印版"]
   ];
@@ -3680,6 +3721,7 @@ function pmcGoalPage() {
     ["物料控制中心", "已完成V1", "缺料、低库存、冻结、长库龄统一物料处理清单"],
     ["待报价中心", "已完成V1", "项目/商机报价跟进池，含优先级、负责人汇总和处理建议"],
     ["生产进度中心", "已完成V1", "ERP生产进度、领料、BOM、工序计划，含延期工序和工作中心负荷"],
+    ["派工进度追踪", "已完成V1", "基于 ERP 工序计划显示派工单ID、工序计划、完成数量、剩余数量和延期派工"],
     ["异常管理中心", "已完成V1", "交期、缺料、库存、报价统一异常待办池，含优先级和责任角色"],
     ["报表中心", "已完成V1", "管理指标汇总、打印版、CSV导出、Excel日报导出"],
     ["排产甘特图", "已完成V1", "按订单交期生成时间轴、交期压力分布和插单影响评估"],
@@ -3693,7 +3735,7 @@ function pmcGoalPage() {
     title: "PMC 全功能路线",
     subtitle: "目标是逐步实现 KIMI 设计文档中的完整 PMC 平台；先用智邦 ERP API 和 SQLite 做内网免登录 V1。",
     summary: [
-      ["已完成V1", 14],
+      ["已完成V1", 15],
       ["待开发V2", 0],
       ["暂缓项", 1]
     ],

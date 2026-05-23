@@ -59,6 +59,7 @@ open 'http://localhost:3000/procurement'
 open 'http://localhost:3000/finance'
 open 'http://localhost:3000/quotes'
 open 'http://localhost:3000/production'
+open 'http://localhost:3000/dispatch'
 open 'http://localhost:3000/scheduling'
 open 'http://localhost:3000/exceptions'
 open 'http://localhost:3000/reports'
@@ -186,6 +187,7 @@ curl 'http://localhost:3000/agent/tool-schema'
 - 应收应付中心：`http://localhost:3000/finance`
 - 待报价中心：`http://localhost:3000/quotes`
 - 生产进度中心：`http://localhost:3000/production`
+- 派工进度追踪：`http://localhost:3000/dispatch`
 - 排产甘特视图：`http://localhost:3000/scheduling`
 - 异常管理中心：`http://localhost:3000/exceptions`
 - 报表中心：`http://localhost:3000/reports`
@@ -205,6 +207,7 @@ curl 'http://localhost:3000/agent/tool-schema'
 - 应收应付中心：客户欠款排行、逾期应收、7 天内应付、供应商未付排行、未收未付合计
 - 待报价中心：项目/商机报价跟进池，自动生成优先级、负责人汇总和处理建议
 - 生产中心：ERP 生产进度、领料、BOM、工序计划，自动汇总延期工序和工作中心负荷
+- 派工进度追踪：基于 ERP 工序计划显示派工单ID、工序、计划起止、完成数量、剩余数量和延期派工
 - 排产甘特视图：按订单最近交期生成时间轴、交期压力分布和插单影响评估
 - 异常中心：交期、缺料、待报价、低库存统一待办池，自动生成优先级、责任角色和处理建议
 - 报表中心：订单、交期、缺料、报价、库存管理指标汇总，支持 CSV、Excel 日报和打印版
