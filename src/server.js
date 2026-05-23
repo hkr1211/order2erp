@@ -20,6 +20,23 @@ const DEFAULT_SYNC_PAGE_SIZE = Number.parseInt(process.env.DEFAULT_SYNC_PAGE_SIZ
 const DEFAULT_SYNC_COOLDOWN_SECONDS = Number.parseInt(process.env.SYNC_COOLDOWN_SECONDS || "300", 10) || 300;
 const ERP_REQUEST_MIN_INTERVAL_MS = Number.parseInt(process.env.ERP_REQUEST_MIN_INTERVAL_MS || "800", 10) || 800;
 const client = new ErpClient({ requestLogger: logErpRequest });
+const NAV_ITEMS = [
+  ["首页", "/"],
+  ["角色", "/roles"],
+  ["PMC", "/pmc"],
+  ["订单", "/orders"],
+  ["物料", "/materials"],
+  ["生产", "/production"],
+  ["派工", "/dispatch"],
+  ["排产", "/scheduling"],
+  ["采购", "/procurement"],
+  ["报价", "/quotes"],
+  ["财务", "/finance"],
+  ["异常", "/exceptions"],
+  ["报表", "/reports"],
+  ["系统", "/system"],
+  ["日志", "/erp-logs"]
+];
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -388,6 +405,80 @@ function sendExcel(res, filename, html) {
   res.end(`\ufeff${html}`);
 }
 
+function sharedNavCss() {
+  return `
+    .global-nav {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin: 0 0 18px;
+      padding: 10px;
+      border: 1px solid var(--border, #d9dee7);
+      border-radius: 8px;
+      background: var(--panel, #ffffff);
+    }
+    .global-nav a {
+      min-height: 32px;
+      padding: 7px 10px;
+      border-radius: 6px;
+      color: var(--text, #172033);
+      text-decoration: none;
+      font-size: 13px;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+    .global-nav a:hover {
+      background: #eef2f6;
+    }
+    .global-nav a.active {
+      background: var(--accent, var(--green, #176b58));
+      color: #ffffff;
+      font-weight: 650;
+    }
+    @media print {
+      .global-nav { display: none; }
+    }`;
+}
+
+function renderTopNav(activePath = "") {
+  const normalized = normalizeNavPath(activePath);
+  return `<nav class="global-nav" aria-label="主导航">${NAV_ITEMS.map(([label, href]) => {
+    const active = normalizeNavPath(href) === normalized ? " active" : "";
+    return `<a class="${active.trim()}" href="${escapeHtml(href)}">${escapeHtml(label)}</a>`;
+  }).join("")}</nav>`;
+}
+
+function normalizeNavPath(value) {
+  const path = String(value || "/").split("?")[0] || "/";
+  if (path === "/order") {
+    return "/orders";
+  }
+  if (path.startsWith("/reports/")) {
+    return "/reports";
+  }
+  return path;
+}
+
+function modulePathForTitle(title) {
+  const text = String(title || "");
+  if (text.includes("角色")) return "/roles";
+  if (text.includes("物料")) return "/materials";
+  if (text.includes("待报价")) return "/quotes";
+  if (text.includes("采购")) return "/procurement";
+  if (text.includes("应收应付")) return "/finance";
+  if (text.includes("排产")) return "/scheduling";
+  if (text.includes("生产")) return "/production";
+  if (text.includes("派工")) return "/dispatch";
+  if (text.includes("异常")) return "/exceptions";
+  if (text.includes("报表")) return "/reports";
+  if (text.includes("数据源")) return "/system";
+  if (text.includes("同步")) return "/system";
+  if (text.includes("ERP 请求日志")) return "/erp-logs";
+  if (text.includes("全功能")) return "/goal";
+  return "/";
+}
+
 function homePage() {
   const snapshot = latestPmcSnapshot();
   const summary = snapshot?.summary || {};
@@ -561,10 +652,12 @@ function homePage() {
       .status { display: inline-block; margin-top: 16px; }
       h1 { font-size: 26px; }
     }
+    ${sharedNavCss()}
   </style>
 </head>
 <body>
   <main>
+    ${renderTopNav("/")}
     <header>
       <div>
         <h1>ERP 查询中台</h1>
@@ -735,10 +828,12 @@ function apiResultPage(payload, url) {
       .actions { justify-content: flex-start; margin-top: 14px; }
       h1 { font-size: 24px; }
     }
+    ${sharedNavCss()}
   </style>
 </head>
 <body>
   <main>
+    ${renderTopNav(url.pathname)}
     <div class="topbar">
       <div>
         <h1>${escapeHtml(title)}</h1>
@@ -1128,21 +1223,18 @@ function pmcConsolePage(body) {
       .actions { justify-content: flex-start; margin-top: 14px; }
       h1 { font-size: 24px; }
     }
+    ${sharedNavCss()}
   </style>
 </head>
 <body>
   <main>
+    ${renderTopNav("/pmc")}
     <header>
       <div>
         <h1>蕴杰金属数字 PMC 控制台</h1>
         <div class="sub">内网免登录版 · 老板 / PMC / 销售共用 · 更新时间 ${escapeHtml(formatDateTime(body.generated_at))}${body.cached ? " · 读取本地快照" : ""}</div>
       </div>
       <div class="actions">
-        <a class="button" href="/">首页</a>
-        <a class="button" href="/orders">订单中心</a>
-        <a class="button" href="/materials">物料中心</a>
-        <a class="button" href="/exceptions">异常中心</a>
-        <a class="button" href="/reports">报表中心</a>
         <a class="button" href="/api/pmc_console?format=json">查看 JSON</a>
         <a class="button primary" href="/pmc?refresh=1">刷新驾驶舱</a>
       </div>
@@ -1715,18 +1807,18 @@ function orderCenterPage(body, url) {
       .actions, .filters { margin-top: 12px; justify-content: flex-start; }
       h1 { font-size: 24px; }
     }
+    ${sharedNavCss()}
   </style>
 </head>
 <body>
   <main>
+    ${renderTopNav("/orders")}
     <header>
       <div>
         <h1>订单管理中心</h1>
         <div class="sub">按销售订单产品库存口径聚合缺料，按合同明细交期识别逾期和临期。</div>
       </div>
       <div class="actions">
-        <a class="button" href="/pmc">PMC 驾驶舱</a>
-        <a class="button" href="/">首页</a>
         <a class="button" href="/sync?sources=sales_orders&pagesize=20">谨慎同步订单20条</a>
         <a class="button" href="/orders?refresh=1">刷新实时订单</a>
         <a class="button primary" href="${escapeHtml(orderCenterJsonHref(url))}">查看 JSON</a>
@@ -1962,18 +2054,18 @@ function orderDetailPage(body, url) {
     .notes { margin-top: 12px; color: var(--muted); font-size: 13px; line-height: 1.7; }
     @media (max-width: 900px) { header { display: block; } .actions { justify-content: flex-start; margin-top: 14px; } .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } h1 { font-size: 24px; } }
     @media (max-width: 560px) { main { width: min(100% - 24px, 1440px); } .grid { grid-template-columns: 1fr; } }
+    ${sharedNavCss()}
   </style>
 </head>
 <body>
   <main>
+    ${renderTopNav("/orders")}
     <header>
       <div>
         <h1>${escapeHtml(title)}</h1>
         <div class="sub">订单穿透详情 · 合同 ord ${escapeHtml(body.scan?.ord || "")}</div>
       </div>
       <div class="actions">
-        <a class="button" href="/orders">订单中心</a>
-        <a class="button" href="/pmc">PMC 驾驶舱</a>
         <a class="button primary" href="/api/order_detail?${escapeHtml(jsonParams.toString())}">查看 JSON</a>
       </div>
     </header>
@@ -3183,19 +3275,18 @@ function modulePage({ title, subtitle, summary = [], panels = [], notes = [], ac
     .timeline-dot.green { background: var(--green); }
     .timeline-text { position: absolute; top: 22px; color: var(--muted); font-size: 12px; white-space: nowrap; }
     @media (max-width: 980px) { header, .grid { display: block; } .actions { justify-content: flex-start; margin-top: 14px; } .panel { margin-top: 12px; } h1 { font-size: 24px; } }
+    ${sharedNavCss()}
   </style>
 </head>
 <body>
   <main>
+    ${renderTopNav(modulePathForTitle(title))}
     <header>
       <div>
         <h1>${escapeHtml(title)}</h1>
         <div class="sub">${escapeHtml(subtitle)}</div>
       </div>
       <div class="actions">
-        <a class="button" href="/pmc">PMC 驾驶舱</a>
-        <a class="button" href="/orders">订单中心</a>
-        <a class="button" href="/goal">全功能路线</a>
         ${actions.map(([label, href]) => `<a class="button primary" href="${escapeHtml(href)}">${escapeHtml(label)}</a>`).join("")}
       </div>
     </header>
@@ -3969,16 +4060,18 @@ function reportPrintPage(body) {
     .notes { margin-top: 18px; color: var(--muted); font-size: 12px; line-height: 1.7; }
     .toolbar { margin-bottom: 12px; text-align: right; }
     .button { display: inline-block; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); text-decoration: none; font-size: 13px; background: #ffffff; }
+    ${sharedNavCss()}
     @media print {
       body { background: #ffffff; }
       main { width: 100%; margin: 0; padding: 0; border: 0; }
-      .toolbar { display: none; }
+      .toolbar, .global-nav { display: none; }
       h2 { page-break-after: avoid; }
     }
   </style>
 </head>
 <body>
   <main>
+    ${renderTopNav("/reports")}
     <div class="toolbar"><a class="button" href="/reports">返回报表中心</a> <a class="button" href="javascript:window.print()">打印</a></div>
     <header>
       <div>
