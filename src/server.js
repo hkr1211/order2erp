@@ -318,25 +318,31 @@ function sendExcel(res, filename, html) {
 }
 
 function homePage() {
-  const links = [
-    ["健康检查", "/health", "确认本地中台是否正在运行"],
-    ["数据源状态中心", "/system", "查看 ERP 连通性、本地快照和系统状态"],
-    ["全部视图", "/views", "查看可调用的 ERP 查询视图"],
-    ["Agent 工具定义", "/agent/tool-schema", "给 OpenClaw 或 Hermes 注册工具时使用"],
-    ["PMC 全功能路线", "/goal", "查看完整 PMC 平台实施目标和当前完成度"],
+  const snapshot = latestPmcSnapshot();
+  const summary = snapshot?.summary || {};
+  const businessLinks = [
     ["PMC 驾驶舱", "/pmc", "老板、PMC、销售共用的一屏总览"],
-    ["订单管理中心", "/orders", "订单状态灯、交期风险、缺料标记"],
-    ["物料控制中心", "/materials", "缺料订单、低库存、冻结库存和长库龄预警"],
-    ["采购跟催中心", "/procurement", "采购到货、入库、应付付款跟踪入口"],
-    ["应收应付中心", "/finance", "客户欠款、收款状态、供应商付款跟踪"],
-    ["待报价中心", "/quotes", "集中查看项目/商机中的待报价项目"],
-    ["生产进度中心", "/production", "生产进度、领料、BOM 和工序计划数据入口"],
-    ["排产甘特视图", "/scheduling", "按订单交期生成排产时间轴 V1"],
-    ["异常管理中心", "/exceptions", "交期、缺料、库存、报价异常统一待办"],
+    ["订单管理中心", "/orders", "订单作战清单、阻塞点、下一步动作"],
+    ["物料控制中心", "/materials", "缺料、低库存、冻结、长库龄统一处理"],
+    ["异常管理中心", "/exceptions", "交期、缺料、报价、库存异常待办池"],
+    ["排产甘特视图", "/scheduling", "交期时间轴、压力分布、插单影响评估"],
+    ["采购跟催中心", "/procurement", "供应商跟催、入库、应付付款跟踪"],
+    ["生产进度中心", "/production", "延期工序、工作中心负荷、BOM 数据"],
+    ["待报价中心", "/quotes", "销售报价跟进池、负责人汇总"],
+    ["应收应付中心", "/finance", "客户欠款、逾期应收、近期应付"]
+  ];
+  const outputLinks = [
     ["报表中心", "/reports", "订单、交期、缺料、报价、库存指标汇总"],
     ["报表导出", "/reports/export.csv", "导出 Excel 可打开的 PMC 指标 CSV"],
     ["Excel报表", "/reports/export.xls", "导出带格式的 PMC 日报 Excel 文件"],
     ["报表打印版", "/reports/print", "适合打印成 PDF 的 PMC 日报"],
+    ["PMC 全功能路线", "/goal", "查看完整 PMC 平台实施目标和当前完成度"],
+    ["数据源状态中心", "/system", "查看 ERP 连通性、本地快照和系统状态"]
+  ];
+  const apiLinks = [
+    ["健康检查", "/health", "确认本地中台是否正在运行"],
+    ["全部视图", "/views", "查看可调用的 ERP 查询视图"],
+    ["Agent 工具定义", "/agent/tool-schema", "给 OpenClaw 或 Hermes 注册工具时使用"],
     ["PMC 综合看板", "/api/pmc_dashboard?scan_pages=1&scan_size=20&contract_limit=3&alert_limit=10&low_stock_threshold=5&old_stock_days=180&due_soon_days=7&quote_limit=10", "库存、缺料、交期、待报价项目汇总"],
     ["销售订单", "/api/sales_orders?pageindex=1&pagesize=10", "查询最近销售合同/订单"],
     ["订单缺料", "/api/order_shortages?pageindex=1&pagesize=10&contract_limit=3&scan_size=100", "扫描最近未发货订单缺料情况"],
@@ -344,6 +350,15 @@ function homePage() {
     ["待报价项目", "/api/pending_quotes?pageindex=1&pagesize=20&limit=20", "查看项目/商机中的待报价项目"],
     ["库存查询", "/api/inventory?pageindex=1&pagesize=20", "查询库存余额汇总"],
     ["库存异常", "/api/inventory_alerts?scan_pages=1&scan_size=20&alert_limit=10&low_stock_threshold=5&old_stock_days=180", "低库存、冻结库存、长库龄库存"]
+  ];
+  const metricRows = [
+    ["今日订单", summary.today_orders ?? "--"],
+    ["本月订单", summary.month_orders ?? "--"],
+    ["逾期订单", summary.overdue_orders ?? "--"],
+    ["7天内交期", summary.due_soon_orders ?? "--"],
+    ["缺料订单", summary.shortage_orders ?? "--"],
+    ["待报价", summary.pending_quote_projects ?? "--"],
+    ["低库存", summary.low_stock ?? "--"]
   ];
 
   return `<!doctype html>
@@ -408,7 +423,36 @@ function homePage() {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
       gap: 12px;
-      margin-top: 24px;
+      margin-top: 14px;
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 10px;
+      margin: 22px 0 18px;
+    }
+    .metric {
+      min-height: 82px;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .metric strong {
+      display: block;
+      margin-top: 8px;
+      font-size: 24px;
+      line-height: 1;
+    }
+    h2 {
+      margin: 24px 0 0;
+      font-size: 18px;
+      line-height: 1.3;
     }
     a.card {
       display: block;
@@ -449,10 +493,24 @@ function homePage() {
     <header>
       <div>
         <h1>ERP 查询中台</h1>
-        <p>本地只读 API 入口，用于连接智邦 ERP，并提供给 OpenClaw、Hermes 或对话系统调用。</p>
+        <p>蕴杰金属数字 PMC 控制台，本地内网免登录版。优先打开图形化业务页面，API 入口放在底部。</p>
       </div>
       <div class="status">Running on ${HOST}:${PORT}</div>
     </header>
+    <section class="metrics">
+      ${metricRows.map(([label, value]) => `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("")}
+    </section>
+    ${snapshot ? `<p>最近快照：${escapeHtml(formatDateTime(snapshot.created_at))}。多数页面默认读取快照，点击刷新按钮时再实时扫描 ERP。</p>` : `<p>当前还没有本地快照，打开 PMC 驾驶舱后会自动生成。</p>`}
+    ${homeSection("日常业务", businessLinks)}
+    ${homeSection("管理输出", outputLinks)}
+    ${homeSection("系统与 API", apiLinks)}
+  </main>
+</body>
+</html>`;
+}
+
+function homeSection(title, links) {
+  return `<h2>${escapeHtml(title)}</h2>
     <section class="grid">
       ${links
         .map(
@@ -463,10 +521,7 @@ function homePage() {
       </a>`
         )
         .join("\n")}
-    </section>
-  </main>
-</body>
-</html>`;
+    </section>`;
 }
 
 function escapeHtml(value) {
@@ -3458,13 +3513,13 @@ async function querySystemStatus() {
   const snapshot = latestPmcSnapshot();
   const modules = [
     ["PMC 驾驶舱", "/pmc", snapshot ? "可用：支持本地快照" : "可用：无快照时显示离线空看板"],
-    ["订单管理中心", "/orders", "可用：ERP 离线时显示空表和提示"],
-    ["物料控制中心", "/materials", "可用：数据源局部失败不影响整页"],
+    ["订单管理中心", "/orders", "可用：默认读取本地快照，支持刷新实时订单"],
+    ["物料控制中心", "/materials", "可用：默认读取本地快照，支持统一物料任务"],
     ["采购跟催中心", "/procurement", "可用：入库/应付数据源局部容错"],
     ["应收应付中心", "/finance", "可用：应收/应付数据源局部容错"],
-    ["排产甘特视图", "/scheduling", "可用：基于订单中心容错"],
-    ["异常管理中心", "/exceptions", "可用：ERP 离线时显示空待办和提示"],
-    ["报表中心", "/reports", "可用：支持快照、CSV、打印版"]
+    ["排产甘特视图", "/scheduling", "可用：默认读取本地快照，支持插单影响评估"],
+    ["异常管理中心", "/exceptions", "可用：默认读取本地快照，支持统一待办"],
+    ["报表中心", "/reports", "可用：支持快照、CSV、Excel、打印版"]
   ];
 
   return {
@@ -3508,8 +3563,8 @@ function systemStatusPage(body) {
     summary: [
       ["ERP在线", body.summary.erp_online ? "是" : "否"],
       ["ERP耗时ms", body.summary.erp_latency_ms],
-      ["本地快照", body.summary.has_snapshot ? "有" : "无"],
-      ["业务入口", body.summary.module_count]
+    ["本地快照", body.summary.has_snapshot ? "有" : "无"],
+    ["业务入口", body.summary.module_count]
     ],
     panels: [
       modulePanel("ERP 登录状态", body.sections.erp_status, ["ok", "message", "latency_ms", "session_tail"]),
@@ -3537,14 +3592,15 @@ function pmcGoalPage() {
     ["采购跟催", "已完成V1", "入库流水、应付付款、供应商汇总、跟催优先级和处理建议"],
     ["应收应付", "已完成V1", "聚合应收/应付、客户欠款排行、逾期应收、7天内应付、付款条件推算"],
     ["数据源状态", "已完成V1入口", "轻量检查 ERP 登录、本地快照、业务入口可用性"],
+    ["图形化首页", "已完成V1", "按日常业务、管理输出、系统/API 分组，并显示关键快照指标"],
     ["权限登录", "暂缓", "当前按用户要求为内网免登录版"]
   ];
   return modulePage({
     title: "PMC 全功能路线",
     subtitle: "目标是逐步实现 KIMI 设计文档中的完整 PMC 平台；先用智邦 ERP API 和 SQLite 做内网免登录 V1。",
     summary: [
-      ["已完成V1", 9],
-      ["待开发V2", 1],
+      ["已完成V1", 13],
+      ["待开发V2", 0],
       ["暂缓项", 1]
     ],
     panels: [
