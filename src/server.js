@@ -4,7 +4,8 @@ import { ErpClient, ERP_VIEWS, normalizeTable, toBusinessView } from "./erpClien
 import { queryOrderDeliveryRisks } from "./orderDeliveryRisks.js";
 import { queryOrderShortages } from "./orderShortages.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
-import { initLocalDb, latestPmcSnapshot, savePmcSnapshot } from "./localDb.js";
+import { initLocalDb, latestPmcSnapshot, latestSyncRuns, savePmcSnapshot } from "./localDb.js";
+import { syncCoreData } from "./syncService.js";
 
 loadEnvFile();
 initLocalDb();
@@ -122,6 +123,18 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/system") {
       const result = await querySystemStatus();
       return sendHtml(res, 200, systemStatusPage(result.body));
+    }
+
+    if (req.method === "GET" && url.pathname === "/sync") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = await syncCoreData(client, params);
+      return sendHtml(res, 200, syncStatusPage(result));
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/sync") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = await syncCoreData(client, params);
+      return sendJson(res, 200, result);
     }
 
     if (req.method === "GET" && url.pathname === "/health") {
@@ -266,6 +279,11 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`ERP query hub listening on http://${HOST}:${PORT}`);
+  syncCoreData(client, { pagesize: 100 }).then((result) => {
+    console.log(`Startup sync finished: ${result.results.map((row) => `${row.status}:${row.rows_synced}`).join(", ")}`);
+  }).catch((error) => {
+    console.error("Startup sync failed", error);
+  });
 });
 
 function describeView(view) {
@@ -3710,6 +3728,28 @@ function systemStatusPage(body) {
       ["刷新状态", "/system"],
       ["PMC驾驶舱", "/pmc"]
     ]
+  });
+}
+
+function syncStatusPage(body) {
+  return modulePage({
+    title: "数据同步",
+    subtitle: "手动同步 ERP 核心数据到本地 SQLite，页面优先读取本地业务表。",
+    summary: [
+      ["同步源", body.results.length],
+      ["成功", body.results.filter((row) => row.status === "success").length],
+      ["失败", body.results.filter((row) => row.status === "failed").length],
+      ["同步行数", body.results.reduce((sum, row) => sum + (Number(row.rows_synced) || 0), 0)]
+    ],
+    panels: [
+      modulePanel("本次同步", body.results, ["source_key", "started_at", "finished_at", "status", "rows_synced", "error_message"]),
+      modulePanel("最近同步状态", body.latest || latestSyncRuns(), ["source_key", "started_at", "finished_at", "status", "rows_synced", "error_message"])
+    ],
+    notes: [
+      "服务启动时会自动同步一次；之后由本页手动触发同步。",
+      "同步失败不会清空旧数据，业务页面继续显示最近一次成功数据。"
+    ],
+    actions: [["再次同步", "/sync"], ["系统状态", "/system"]]
   });
 }
 
