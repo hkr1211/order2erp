@@ -176,6 +176,7 @@ curl 'http://localhost:3000/agent/tool-schema'
 ## PMC 控制台 V1
 
 - 图形化首页：`http://localhost:3000/`，按日常业务、管理输出、系统/API 分组
+- 角色工作台：`http://localhost:3000/roles`，按老板、PMC、销售分组常用入口和处理流程
 - PMC 驾驶舱：`http://localhost:3000/pmc`
 - 数据源状态中心：`http://localhost:3000/system`
 - 订单中心入口：`http://localhost:3000/orders`

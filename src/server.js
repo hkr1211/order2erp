@@ -21,6 +21,10 @@ const server = http.createServer(async (req, res) => {
       return sendHtml(res, 200, homePage());
     }
 
+    if (req.method === "GET" && url.pathname === "/roles") {
+      return sendHtml(res, 200, roleWorkbenchesPage());
+    }
+
     if (req.method === "GET" && url.pathname === "/pmc") {
       const params = Object.fromEntries(url.searchParams);
       const result = await queryPmcConsole(params);
@@ -321,6 +325,7 @@ function homePage() {
   const snapshot = latestPmcSnapshot();
   const summary = snapshot?.summary || {};
   const businessLinks = [
+    ["角色工作台", "/roles", "老板、PMC、销售的常用入口和处理重点"],
     ["PMC 驾驶舱", "/pmc", "老板、PMC、销售共用的一屏总览"],
     ["订单管理中心", "/orders", "订单作战清单、阻塞点、下一步动作"],
     ["物料控制中心", "/materials", "缺料、低库存、冻结、长库龄统一处理"],
@@ -522,6 +527,66 @@ function homeSection(title, links) {
         )
         .join("\n")}
     </section>`;
+}
+
+function roleWorkbenchesPage() {
+  const snapshot = latestPmcSnapshot();
+  const summary = snapshot?.summary || {};
+  const roleRows = [
+    {
+      role: "老板",
+      focus: `看交付风险和经营结果：本月订单 ${summary.month_orders ?? "--"}，缺料订单 ${summary.shortage_orders ?? "--"}，低库存 ${summary.low_stock ?? "--"}。`,
+      primary_action: "先看 PMC 驾驶舱，再看报表和应收应付。",
+      entry_1: "/pmc",
+      entry_2: "/reports",
+      entry_3: "/finance"
+    },
+    {
+      role: "PMC",
+      focus: `处理生产交付阻塞：7天内交期 ${summary.due_soon_orders ?? "--"}，缺料订单 ${summary.shortage_orders ?? "--"}。`,
+      primary_action: "先处理异常待办，再看订单、物料和排产压力。",
+      entry_1: "/exceptions",
+      entry_2: "/orders",
+      entry_3: "/materials"
+    },
+    {
+      role: "销售",
+      focus: `跟进客户交期和报价：待报价 ${summary.pending_quote_projects ?? "--"}，7天内交期 ${summary.due_soon_orders ?? "--"}。`,
+      primary_action: "先看待报价和订单阻塞，再同步客户和收款风险。",
+      entry_1: "/quotes",
+      entry_2: "/orders",
+      entry_3: "/finance"
+    }
+  ];
+  const workflowRows = [
+    { workflow: "每日晨会", owner: "PMC", step_1: "打开 /pmc 看总览", step_2: "进入 /exceptions 处理高优先级", step_3: "必要时进入 /scheduling 看插单影响" },
+    { workflow: "客户交期沟通", owner: "销售", step_1: "打开 /orders 查看阻塞点", step_2: "确认 /materials 缺料或 /production 进度", step_3: "同步客户交期和下一步动作" },
+    { workflow: "采购跟催", owner: "PMC/采购", step_1: "打开 /procurement 看跟催清单", step_2: "结合 /materials 缺料任务排序", step_3: "反馈预计到货和替代方案" },
+    { workflow: "老板日报", owner: "老板/PMC", step_1: "打开 /reports 看指标", step_2: "导出 /reports/export.xls", step_3: "必要时打印 /reports/print" }
+  ];
+  return modulePage({
+    title: "角色工作台",
+    subtitle: "按老板、PMC、销售三类用户组织常用入口和日常处理流程。",
+    summary: [
+      ["今日订单", summary.today_orders ?? "--"],
+      ["本月订单", summary.month_orders ?? "--"],
+      ["缺料订单", summary.shortage_orders ?? "--"],
+      ["待报价", summary.pending_quote_projects ?? "--"],
+      ["低库存", summary.low_stock ?? "--"]
+    ],
+    panels: [
+      modulePanel("角色入口", roleRows, ["role", "focus", "primary_action", "entry_1", "entry_2", "entry_3"]),
+      modulePanel("日常流程", workflowRows, ["workflow", "owner", "step_1", "step_2", "step_3"])
+    ],
+    notes: [
+      snapshot ? `当前角色工作台读取本地快照：${formatDateTime(snapshot.created_at)}。` : "当前没有本地快照，打开 PMC 驾驶舱后会自动生成。",
+      "这是内网免登录版，入口按角色分组但不做权限拦截。"
+    ],
+    actions: [
+      ["PMC驾驶舱", "/pmc"],
+      ["首页", "/"]
+    ]
+  });
 }
 
 function escapeHtml(value) {
@@ -3513,6 +3578,7 @@ async function querySystemStatus() {
   const snapshot = latestPmcSnapshot();
   const modules = [
     ["PMC 驾驶舱", "/pmc", snapshot ? "可用：支持本地快照" : "可用：无快照时显示离线空看板"],
+    ["角色工作台", "/roles", "可用：老板/PMC/销售入口和日常流程"],
     ["订单管理中心", "/orders", "可用：默认读取本地快照，支持刷新实时订单"],
     ["物料控制中心", "/materials", "可用：默认读取本地快照，支持统一物料任务"],
     ["采购跟催中心", "/procurement", "可用：入库/应付数据源局部容错"],
@@ -3582,6 +3648,7 @@ function systemStatusPage(body) {
 function pmcGoalPage() {
   const rows = [
     ["PMC驾驶舱首页", "已完成V1", "KPI、逾期、临期、缺料、待报价、低库存"],
+    ["角色工作台", "已完成V1", "老板、PMC、销售常用入口和日常处理流程"],
     ["订单管理中心", "已完成V1", "订单作战清单、状态灯、阻塞点、下一步动作、订单详情穿透"],
     ["物料控制中心", "已完成V1", "缺料、低库存、冻结、长库龄统一物料处理清单"],
     ["待报价中心", "已完成V1", "项目/商机报价跟进池，含优先级、负责人汇总和处理建议"],
@@ -3599,7 +3666,7 @@ function pmcGoalPage() {
     title: "PMC 全功能路线",
     subtitle: "目标是逐步实现 KIMI 设计文档中的完整 PMC 平台；先用智邦 ERP API 和 SQLite 做内网免登录 V1。",
     summary: [
-      ["已完成V1", 13],
+      ["已完成V1", 14],
       ["待开发V2", 0],
       ["暂缓项", 1]
     ],
