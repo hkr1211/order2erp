@@ -188,6 +188,7 @@ curl 'http://localhost:3000/agent/tool-schema'
 - 待报价中心：`http://localhost:3000/quotes`
 - 生产进度中心：`http://localhost:3000/production`
 - 派工进度追踪：`http://localhost:3000/dispatch`
+- 数据同步：`http://localhost:3000/sync`，手动同步 ERP 核心数据到 SQLite
 - 排产甘特视图：`http://localhost:3000/scheduling`
 - 异常管理中心：`http://localhost:3000/exceptions`
 - 报表中心：`http://localhost:3000/reports`
@@ -198,6 +199,7 @@ curl 'http://localhost:3000/agent/tool-schema'
 - 用户范围：老板、PMC、销售
 - 运行方式：内网免登录
 - 数据库：SQLite，默认保存到 `data/pmc.db`
+- 同步策略：服务启动时自动同步一次，之后手动同步；同步失败保留旧数据
 - 首屏指标：今日订单、本月订单、逾期订单、7 天内交期订单、缺料订单、待报价项目、低库存预警
 - 订单中心：订单作战清单，含状态灯、客户、负责人、交期风险、缺料状态、阻塞点和下一步动作
 - 数据源状态中心：ERP 登录接口、本地 SQLite 快照、关键业务入口可用性

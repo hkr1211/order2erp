@@ -3704,6 +3704,7 @@ async function querySystemStatus() {
     };
   }
   const snapshot = latestPmcSnapshot();
+  const syncRuns = latestSyncRuns();
   const modules = [
     ["PMC 驾驶舱", "/pmc", snapshot ? "可用：支持本地快照" : "可用：无快照时显示离线空看板"],
     ["角色工作台", "/roles", "可用：老板/PMC/销售入口和日常流程"],
@@ -3726,7 +3727,9 @@ async function querySystemStatus() {
         erp_online: erpStatus.ok ? 1 : 0,
         erp_latency_ms: erpStatus.latency_ms,
         has_snapshot: snapshot ? 1 : 0,
-        module_count: modules.length
+        module_count: modules.length,
+        sync_sources: syncRuns.length,
+        sync_failures: syncRuns.filter((row) => row.status === "failed").length
       },
       sections: {
         erp_status: [erpStatus],
@@ -3740,11 +3743,13 @@ async function querySystemStatus() {
               low_stock: snapshot.summary.low_stock
             }]
           : [],
-        modules: modules.map(([name, path, status]) => ({ name, path, status }))
+        modules: modules.map(([name, path, status]) => ({ name, path, status })),
+        sync_runs: syncRuns
       },
       notes: [
         erpStatus.ok ? "ERP 实时接口当前可用。" : `ERP 实时接口当前不可用：${erpStatus.message}`,
         snapshot ? `最近本地快照时间：${formatDateTime(snapshot.created_at)}。` : "当前没有本地驾驶舱快照。",
+        syncRuns.length ? "最近同步状态来自本地 SQLite sync_runs 表。" : "当前还没有业务数据同步记录。",
         "此页面只做轻量状态检查，不扫描订单、库存和合同明细。"
       ]
     }
@@ -3758,16 +3763,20 @@ function systemStatusPage(body) {
     summary: [
       ["ERP在线", body.summary.erp_online ? "是" : "否"],
       ["ERP耗时ms", body.summary.erp_latency_ms],
-    ["本地快照", body.summary.has_snapshot ? "有" : "无"],
-    ["业务入口", body.summary.module_count]
+      ["本地快照", body.summary.has_snapshot ? "有" : "无"],
+      ["同步源", body.summary.sync_sources],
+      ["同步失败", body.summary.sync_failures],
+      ["业务入口", body.summary.module_count]
     ],
     panels: [
       modulePanel("ERP 登录状态", body.sections.erp_status, ["ok", "message", "latency_ms", "session_tail"]),
       modulePanel("最近驾驶舱快照", body.sections.snapshot, ["created_at", "today_orders", "month_orders", "overdue_orders", "shortage_orders", "low_stock"]),
+      modulePanel("最近同步状态", body.sections.sync_runs, ["source_key", "started_at", "finished_at", "status", "rows_synced", "error_message"]),
       modulePanel("业务入口状态", body.sections.modules, ["name", "path", "status"])
     ],
     notes: body.notes,
     actions: [
+      ["立即同步", "/sync"],
       ["刷新状态", "/system"],
       ["PMC驾驶舱", "/pmc"]
     ]
