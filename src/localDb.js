@@ -330,6 +330,28 @@ export function listFinanceRecords({ limit = 100 } = {}) {
   return initLocalDb().prepare("SELECT * FROM erp_finance_records ORDER BY CASE risk_status WHEN '已逾期' THEN 1 WHEN '7天内到期' THEN 2 WHEN '未清' THEN 3 ELSE 4 END, due_days LIMIT ?").all(limit);
 }
 
+export function tableStats(tableName, timestampColumn = null) {
+  const database = initLocalDb();
+  assertSafeIdentifier(tableName);
+  const rowCount = database.prepare(`SELECT COUNT(*) AS row_count FROM ${tableName}`).get()?.row_count || 0;
+  let latestAt = "";
+  if (timestampColumn) {
+    assertSafeIdentifier(timestampColumn);
+    latestAt = database.prepare(`SELECT MAX(${timestampColumn}) AS latest_at FROM ${tableName}`).get()?.latest_at || "";
+  }
+  return {
+    table_name: tableName,
+    row_count: rowCount,
+    latest_at: latestAt
+  };
+}
+
+function assertSafeIdentifier(value) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(value))) {
+    throw new Error(`Unsafe SQLite identifier: ${value}`);
+  }
+}
+
 function runInTransaction(database, action) {
   database.exec("BEGIN");
   try {

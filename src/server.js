@@ -4,10 +4,11 @@ import { ErpClient, ERP_VIEWS, normalizeTable, toBusinessView } from "./erpClien
 import { queryOrderDeliveryRisks } from "./orderDeliveryRisks.js";
 import { queryOrderShortages } from "./orderShortages.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
-import { initLocalDb, latestErpRequestLogs, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listMaterialAlerts, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, savePmcSnapshot } from "./localDb.js";
+import { initLocalDb, latestErpRequestLogs, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listMaterialAlerts, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, savePmcSnapshot, tableStats } from "./localDb.js";
 import { syncCoreData } from "./syncService.js";
 import { buildSyncPolicyRows } from "./syncPolicy.js";
 import { buildErpHealthSummary, shouldBlockErpBusinessQuery } from "./erpHealth.js";
+import { SQLITE_TABLES, buildSqliteCoverage } from "./sqliteCoverage.js";
 import { buildLocalExceptionCenter, buildLocalFinanceCenter, buildLocalPmcDashboard, quoteOwnerSummaryForLocal } from "./localAnalytics.js";
 
 loadEnvFile();
@@ -35,6 +36,7 @@ const NAV_ITEMS = [
   ["异常", "/exceptions"],
   ["报表", "/reports"],
   ["系统", "/system"],
+  ["覆盖率", "/sqlite-coverage"],
   ["日志", "/erp-logs"]
 ];
 
@@ -148,6 +150,11 @@ const server = http.createServer(async (req, res) => {
       const params = Object.fromEntries(url.searchParams);
       const result = await querySystemStatus(params);
       return sendHtml(res, 200, systemStatusPage(result.body));
+    }
+
+    if (req.method === "GET" && url.pathname === "/sqlite-coverage") {
+      const result = querySqliteCoverage();
+      return sendHtml(res, 200, sqliteCoveragePage(result.body));
     }
 
     if (req.method === "GET" && url.pathname === "/erp-logs") {
@@ -473,6 +480,7 @@ function modulePathForTitle(title) {
   if (text.includes("异常")) return "/exceptions";
   if (text.includes("报表")) return "/reports";
   if (text.includes("数据源")) return "/system";
+  if (text.includes("SQLite")) return "/sqlite-coverage";
   if (text.includes("同步")) return "/system";
   if (text.includes("ERP 请求日志")) return "/erp-logs";
   if (text.includes("全功能")) return "/goal";
@@ -502,6 +510,7 @@ function homePage() {
     ["报表打印版", "/reports/print", "适合打印成 PDF 的 PMC 日报"],
     ["PMC 全功能路线", "/goal", "查看完整 PMC 平台实施目标和当前完成度"],
     ["数据源状态中心", "/system", "查看 ERP 连通性、本地快照和系统状态"],
+    ["SQLite覆盖率", "/sqlite-coverage", "查看各页面依赖的本地表、同步行数和缺口"],
     ["ERP 请求日志", "/erp-logs", "查看本地记录的 ERP 请求成败和耗时"]
   ];
   const apiLinks = [
@@ -4304,6 +4313,54 @@ function erpRequestLogCsv(body) {
     ...body.rows.map((row) => [row.requested_at, row.method, row.path, row.status, row.duration_ms, row.error_message])
   ];
   return rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
+}
+
+function querySqliteCoverage() {
+  const stats = Object.fromEntries(SQLITE_TABLES.map((table) => [
+    table.table_name,
+    tableStats(table.table_name, table.timestamp_column)
+  ]));
+  const coverage = buildSqliteCoverage({
+    tableStats: stats,
+    latestSyncRuns: latestSyncRuns()
+  });
+  return {
+    header: { status: 0, message: "ok" },
+    body: {
+      model: "sqlite_coverage",
+      generated_at: new Date().toISOString(),
+      ...coverage,
+      notes: [
+        "本页只读取本地 SQLite 元数据和同步记录，不访问 ERP。",
+        "覆盖率为“缺数据”不代表页面不能打开，而是说明该页面仍有数据源缺口或本地表为空。",
+        "下一步可按本页建议范围开发低频、分批、可恢复的历史同步任务。"
+      ]
+    }
+  };
+}
+
+function sqliteCoveragePage(body) {
+  return modulePage({
+    title: "SQLite 数据覆盖率",
+    subtitle: "查看每个页面依赖哪些本地表、当前同步行数、最近同步时间、增量能力和缺失数据源。",
+    summary: [
+      ["页面数", body.summary.pages],
+      ["本地表", body.summary.tables],
+      ["可用页面", body.summary.available_pages],
+      ["缺数据页面", body.summary.missing_pages],
+      ["空表", body.summary.empty_tables]
+    ],
+    panels: [
+      modulePanel("页面覆盖率", body.pages, ["page_name", "page_path", "coverage_status", "sqlite_tables", "table_rows", "latest_sync_at", "incremental_support", "suggested_range", "missing_sources"]),
+      modulePanel("SQLite 表状态", body.tables, ["label", "table_name", "row_count", "latest_at", "sync_source", "last_sync_status", "last_sync_finished_at", "incremental", "suggested_range", "last_sync_error"])
+    ],
+    notes: body.notes,
+    actions: [
+      ["系统状态", "/system"],
+      ["同步状态", "/sync"],
+      ["ERP请求日志", "/erp-logs"]
+    ]
+  });
 }
 
 function queryErpHealth() {
