@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildLocalPmcDashboard, mapQuoteFollowupForLocal } from "../src/localAnalytics.js";
+import { buildLocalFinanceCenter, buildLocalPmcDashboard, mapFinanceRowForLocal, mapQuoteFollowupForLocal } from "../src/localAnalytics.js";
 
 test("buildLocalPmcDashboard summarizes SQLite orders and material alerts", () => {
   const body = buildLocalPmcDashboard({
@@ -26,6 +26,41 @@ test("buildLocalPmcDashboard summarizes SQLite orders and material alerts", () =
   assert.equal(body.sections.due_soon_orders[0].order_no, "SO-2");
   assert.equal(body.sections.shortage_orders[0].order_no, "SO-2");
   assert.equal(body.sections.low_stock[0].product_code, "MO-1");
+});
+
+test("buildLocalFinanceCenter summarizes receivables and payables by risk", () => {
+  const today = new Date("2026-05-23T08:00:00+08:00");
+  const receivable = mapFinanceRowForLocal({
+    counterparty: "客户A",
+    bill_no: "R-1",
+    business_title: "钼板订单",
+    amount: 1000,
+    paid_amount: 200,
+    unpaid_amount: 800,
+    bill_date: "2026-05-01",
+    due_date: "2026-05-10"
+  }, "receivable", today);
+  const payable = mapFinanceRowForLocal({
+    counterparty: "供应商B",
+    bill_no: "P-1",
+    business_title: "原料采购",
+    amount: 500,
+    paid_amount: 100,
+    unpaid_amount: 400,
+    bill_date: "2026-05-20",
+    due_date: "2026-05-28"
+  }, "payable", today);
+
+  const body = buildLocalFinanceCenter({ financeRows: [receivable, payable] });
+
+  assert.equal(body.summary.receivable_records, 1);
+  assert.equal(body.summary.payable_records, 1);
+  assert.equal(body.summary.receivable_unpaid, 800);
+  assert.equal(body.summary.payable_unpaid, 400);
+  assert.equal(body.summary.overdue_receivables, 1);
+  assert.equal(body.summary.due_soon_payables, 1);
+  assert.equal(body.sections.receivable_debts[0].counterparty, "客户A");
+  assert.equal(body.sections.due_soon_payables[0].risk_status, "7天内到期");
 });
 
 test("mapQuoteFollowupForLocal marks old or high value quote items urgent", () => {

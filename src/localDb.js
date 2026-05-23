@@ -102,6 +102,27 @@ export function initLocalDb(dbPath = process.env.PMC_DB_PATH || DEFAULT_DB_PATH)
       raw_json TEXT NOT NULL,
       synced_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS erp_finance_records (
+      record_id TEXT PRIMARY KEY,
+      direction TEXT NOT NULL,
+      counterparty TEXT,
+      bill_no TEXT,
+      business_title TEXT,
+      amount REAL,
+      paid_amount REAL,
+      unpaid_amount REAL,
+      bill_date TEXT,
+      due_date TEXT,
+      payment_terms TEXT,
+      age_days INTEGER,
+      due_days INTEGER,
+      risk_status TEXT,
+      status TEXT,
+      owner TEXT,
+      raw_json TEXT NOT NULL,
+      synced_at TEXT NOT NULL
+    );
   `);
   return db;
 }
@@ -222,6 +243,21 @@ export function replaceQuoteFollowups(rows) {
   });
 }
 
+export function replaceFinanceRecords(rows) {
+  const database = initLocalDb();
+  runInTransaction(database, () => {
+    database.prepare("DELETE FROM erp_finance_records").run();
+    const stmt = database.prepare(`
+      INSERT INTO erp_finance_records
+      (record_id, direction, counterparty, bill_no, business_title, amount, paid_amount, unpaid_amount, bill_date, due_date, payment_terms, age_days, due_days, risk_status, status, owner, raw_json, synced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const row of rows) {
+      stmt.run(row.record_id, row.direction, row.counterparty, row.bill_no, row.business_title, row.amount, row.paid_amount, row.unpaid_amount, row.bill_date, row.due_date, row.payment_terms, row.age_days, row.due_days, row.risk_status, row.status, row.owner, JSON.stringify(row.raw || row), row.synced_at);
+    }
+  });
+}
+
 export function listSalesOrders({ limit = 100 } = {}) {
   return initLocalDb().prepare("SELECT * FROM erp_sales_orders ORDER BY delivery_date IS NULL, delivery_date LIMIT ?").all(limit);
 }
@@ -236,6 +272,10 @@ export function listMaterialAlerts({ limit = 100 } = {}) {
 
 export function listQuoteFollowups({ limit = 100 } = {}) {
   return initLocalDb().prepare("SELECT * FROM erp_quote_followups ORDER BY CASE priority WHEN '高' THEN 1 WHEN '中' THEN 2 ELSE 3 END, age_days DESC LIMIT ?").all(limit);
+}
+
+export function listFinanceRecords({ limit = 100 } = {}) {
+  return initLocalDb().prepare("SELECT * FROM erp_finance_records ORDER BY CASE risk_status WHEN '已逾期' THEN 1 WHEN '7天内到期' THEN 2 WHEN '未清' THEN 3 ELSE 4 END, due_days LIMIT ?").all(limit);
 }
 
 function runInTransaction(database, action) {

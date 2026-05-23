@@ -1,10 +1,11 @@
 import { normalizeTable, toBusinessView } from "./erpClient.js";
 import { queryOrderShortages } from "./orderShortages.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
-import { mapQuoteFollowupForLocal } from "./localAnalytics.js";
+import { mapFinanceRowForLocal, mapQuoteFollowupForLocal } from "./localAnalytics.js";
 import {
   finishSyncRun,
   latestSyncRuns,
+  replaceFinanceRecords,
   replaceMaterialAlerts,
   replaceProcedurePlans,
   replaceQuoteFollowups,
@@ -27,6 +28,9 @@ export async function syncCoreData(client, options = {}) {
     }
     if (source === "quote_projects") {
       results.push(await syncQuoteProjects(client, options));
+    }
+    if (source === "finance_records") {
+      results.push(await syncFinanceRecords(client, options));
     }
   }
   return { generated_at: new Date().toISOString(), results, latest: latestSyncRuns() };
@@ -145,6 +149,46 @@ export async function syncQuoteProjects(client, options = {}) {
   });
 }
 
+export async function syncFinanceRecords(client, options = {}) {
+  return runSync("finance_records", async () => {
+    const today = options.today ? new Date(options.today) : new Date();
+    const [receivableResult, payableResult] = await Promise.allSettled([
+      client.queryView("receivables", {
+        pageindex: options.pageindex || 1,
+        pagesize: options.finance_pagesize || options.pagesize || 100,
+        searchKey: options.searchKey || ""
+      }),
+      client.queryView("payables", {
+        pageindex: options.pageindex || 1,
+        pagesize: options.finance_pagesize || options.pagesize || 100,
+        searchKey: options.searchKey || ""
+      })
+    ]);
+    if (receivableResult.status === "rejected" && payableResult.status === "rejected") {
+      throw new Error(`${summarizeError(receivableResult.reason)}；${summarizeError(payableResult.reason)}`);
+    }
+    const receivableRows = receivableResult.status === "fulfilled" ? normalizeTable(receivableResult.value).rows : [];
+    const payableRows = payableResult.status === "fulfilled" ? normalizeTable(payableResult.value).rows : [];
+    const rows = [
+      ...receivableRows.map((row, index) => ({
+        record_id: `receivable-${row.id || row.billno || row.order1 || index}`,
+        ...mapFinanceRowForLocal(row, "receivable", today),
+        synced_at: new Date().toISOString()
+      })),
+      ...payableRows.map((row, index) => ({
+        record_id: `payable-${row.id || row.billno || row.order1 || index}`,
+        ...mapFinanceRowForLocal(row, "payable", today),
+        synced_at: new Date().toISOString()
+      }))
+    ];
+    if (!rows.length) {
+      throw new Error("ERP 本次未返回应收或应付记录，保留本地旧财务数据。");
+    }
+    replaceFinanceRecords(rows);
+    return rows.length;
+  });
+}
+
 async function runSync(sourceKey, action) {
   const run = startSyncRun(sourceKey);
   try {
@@ -164,7 +208,7 @@ async function runSync(sourceKey, action) {
 
 function normalizeSources(value) {
   if (!value) {
-    return ["sales_orders", "procedure_plans", "material_alerts", "quote_projects"];
+    return ["sales_orders", "procedure_plans", "material_alerts", "quote_projects", "finance_records"];
   }
   if (Array.isArray(value)) {
     return value;

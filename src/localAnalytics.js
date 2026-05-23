@@ -136,6 +136,79 @@ export function quoteOwnerSummaryForLocal(rows) {
     .slice(0, 20);
 }
 
+export function mapFinanceRowForLocal(row, direction, today = new Date()) {
+  const currentDay = startOfDay(today);
+  const amount = number(firstPresent(row.amount, row.moneyall, row.MoneyAll, row.money1, row.Money1, row.money, row.Money, row.cmoney, row.CMoney));
+  const paidAmount = number(firstPresent(row.paid_amount, row.hkmoney, row.HkMoney, row.money2, row.Money2, row.paymoney, row.PayMoney));
+  const unpaidAmount = number(firstPresent(row.unpaid_amount, row.wsmoney, row.WsMoney, row.leftmoney, row.LeftMoney, amount !== null && paidAmount !== null ? amount - paidAmount : null));
+  const billDateText = firstPresent(row.bill_date, row.date1, row.Date1, row.dateadd, row.DateAdd, row.tdate, row.TDate);
+  const paymentTermsDays = number(firstPresent(row.paydays, row.PayDays, row.daynum, row.DayNum, row.zq, row.Zq));
+  const dueDateText = firstPresent(row.due_date, row.date2, row.Date2, row.dateend, row.DateEnd);
+  const billDate = parseDate(billDateText);
+  const dueDate = parseDate(dueDateText) || (billDate && paymentTermsDays !== null ? addDays(billDate, paymentTermsDays) : null);
+  const dueDays = dueDate ? daysBetween(currentDay, startOfDay(dueDate)) : null;
+  const ageDays = billDate ? daysBetween(startOfDay(billDate), currentDay) : null;
+  return {
+    direction,
+    counterparty: firstPresent(row.counterparty, row.khmc, row.gysname, row.cateName, row.CateName, row.title2),
+    bill_no: firstPresent(row.bill_no, row.htid, row.rkbh, row.billno, row.BillNo, row.order1, row.Order1),
+    business_title: firstPresent(row.business_title, row.title, row.Title, row.intro, row.Intro),
+    amount,
+    paid_amount: paidAmount,
+    unpaid_amount: unpaidAmount,
+    bill_date: billDate ? formatDate(billDate) : billDateText,
+    due_date: dueDate ? formatDate(dueDate) : dueDateText,
+    payment_terms: paymentTermsDays !== null ? `${paymentTermsDays}天` : firstPresent(row.payment_terms, row.paytype, row.PayType),
+    age_days: ageDays,
+    due_days: dueDays,
+    risk_status: financeRiskStatus(unpaidAmount, dueDays),
+    status: firstPresent(row.status, row.Status, row.zt, row.Zt, row.skzt, row.fkzt),
+    owner: firstPresent(row.owner, row.xsry, row.person, row.Person),
+    raw: row.raw || row
+  };
+}
+
+export function buildLocalFinanceCenter({ financeRows = [] } = {}) {
+  const receivableRows = financeRows.filter((row) => row.direction === "receivable");
+  const payableRows = financeRows.filter((row) => row.direction === "payable");
+  const receivableDebtRows = topFinanceCounterpartiesForLocal(receivableRows);
+  const payableDebtRows = topFinanceCounterpartiesForLocal(payableRows);
+  const overdueReceivables = financeRowsByRiskForLocal(receivableRows, "已逾期");
+  const upcomingPayables = payableRows
+    .filter((row) => number(row.unpaid_amount) > 0 && row.due_days !== null && row.due_days <= 7)
+    .sort(compareFinanceDueRowsForLocal);
+
+  return {
+    model: "finance_center",
+    generated_at: new Date().toISOString(),
+    cached: true,
+    summary: {
+      receivable_records: receivableRows.length,
+      payable_records: payableRows.length,
+      receivable_unpaid: sumAmount(receivableRows, "unpaid_amount"),
+      payable_unpaid: sumAmount(payableRows, "unpaid_amount"),
+      overdue_receivables: overdueReceivables.length,
+      due_soon_payables: upcomingPayables.length,
+      source_errors: 0
+    },
+    sections: {
+      receivables: receivableRows,
+      payables: payableRows,
+      receivable_debts: receivableDebtRows,
+      overdue_receivables: overdueReceivables,
+      due_soon_payables: upcomingPayables,
+      payable_debts: payableDebtRows
+    },
+    source_status: {
+      sqlite_finance_records: { ok: true, rows: financeRows.length }
+    },
+    notes: [
+      "当前读取本地 SQLite 应收应付数据。",
+      "ERP 不可用时，应收应付中心继续使用最近同步成功的数据。"
+    ]
+  };
+}
+
 function normalizeOrder(row, today) {
   const deliveryDate = parseDate(row.delivery_date);
   return {
@@ -225,6 +298,67 @@ function priorityWeight(priority) {
   return 1;
 }
 
+function financeRiskStatus(unpaidAmount, dueDays) {
+  const unpaid = number(unpaidAmount) || 0;
+  if (unpaid <= 0) return "已结清";
+  if (dueDays === null) return "未清";
+  if (dueDays < 0) return "已逾期";
+  if (dueDays <= 7) return "7天内到期";
+  return "未到期";
+}
+
+function financeRowsByRiskForLocal(rows, riskStatus) {
+  return rows
+    .filter((row) => row.risk_status === riskStatus && number(row.unpaid_amount) > 0)
+    .sort(compareFinanceDueRowsForLocal);
+}
+
+function compareFinanceDueRowsForLocal(a, b) {
+  const aDays = a.due_days === null ? Number.POSITIVE_INFINITY : a.due_days;
+  const bDays = b.due_days === null ? Number.POSITIVE_INFINITY : b.due_days;
+  if (aDays !== bDays) return aDays - bDays;
+  return (number(b.unpaid_amount) || 0) - (number(a.unpaid_amount) || 0);
+}
+
+function topFinanceCounterpartiesForLocal(rows) {
+  const grouped = new Map();
+  for (const row of rows) {
+    const unpaid = number(row.unpaid_amount) || 0;
+    if (unpaid <= 0) continue;
+    const key = row.counterparty || "未识别往来单位";
+    const current = grouped.get(key) || {
+      counterparty: key,
+      unpaid_amount: 0,
+      records: 0,
+      overdue_records: 0,
+      earliest_due_date: null,
+      earliest_due_days: null,
+      risk_status: "未清"
+    };
+    current.unpaid_amount += unpaid;
+    current.records += 1;
+    if (row.risk_status === "已逾期") current.overdue_records += 1;
+    if (row.due_days !== null && (current.earliest_due_days === null || row.due_days < current.earliest_due_days)) {
+      current.earliest_due_days = row.due_days;
+      current.earliest_due_date = row.due_date;
+    }
+    if (current.overdue_records > 0) {
+      current.risk_status = "已逾期";
+    } else if (current.earliest_due_days !== null && current.earliest_due_days <= 7) {
+      current.risk_status = "7天内到期";
+    }
+    grouped.set(key, current);
+  }
+  return [...grouped.values()]
+    .map((row) => ({ ...row, unpaid_amount: Number(row.unpaid_amount.toFixed(2)) }))
+    .sort((a, b) => b.unpaid_amount - a.unpaid_amount)
+    .slice(0, 20);
+}
+
+function sumAmount(rows, key) {
+  return Number(rows.reduce((sum, row) => sum + (number(row[key]) || 0), 0).toFixed(2));
+}
+
 function quotePriority(ageDays, amount, stageText) {
   if (ageDays !== null && ageDays >= 7) return "高";
   if (amount >= 100000 || /核价|定价/.test(stageText)) return "高";
@@ -254,6 +388,12 @@ function startOfDay(date) {
   return copy;
 }
 
+function addDays(date, days) {
+  const copy = new Date(date);
+  copy.setDate(copy.getDate() + days);
+  return copy;
+}
+
 function sameDay(left, right) {
   return Boolean(left) && startOfDay(left).getTime() === startOfDay(right).getTime();
 }
@@ -268,10 +408,24 @@ function daysBetween(start, end) {
   return Math.round((end.getTime() - start.getTime()) / 86400000);
 }
 
+function formatDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function number(value) {
   if (value === undefined || value === null || value === "") return null;
   const parsed = Number(String(value).replace(/,/g, ""));
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function firstPresent(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && String(value).trim() !== "") return value;
+  }
+  return "";
 }
 
 function parseJson(value, fallback = null) {

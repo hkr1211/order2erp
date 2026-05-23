@@ -4,9 +4,9 @@ import { ErpClient, ERP_VIEWS, normalizeTable, toBusinessView } from "./erpClien
 import { queryOrderDeliveryRisks } from "./orderDeliveryRisks.js";
 import { queryOrderShortages } from "./orderShortages.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
-import { initLocalDb, latestPmcSnapshot, latestSyncRuns, listMaterialAlerts, listProcedurePlans, listQuoteFollowups, listSalesOrders, savePmcSnapshot } from "./localDb.js";
+import { initLocalDb, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listMaterialAlerts, listProcedurePlans, listQuoteFollowups, listSalesOrders, savePmcSnapshot } from "./localDb.js";
 import { syncCoreData } from "./syncService.js";
-import { buildLocalExceptionCenter, buildLocalPmcDashboard, quoteOwnerSummaryForLocal } from "./localAnalytics.js";
+import { buildLocalExceptionCenter, buildLocalFinanceCenter, buildLocalPmcDashboard, quoteOwnerSummaryForLocal } from "./localAnalytics.js";
 
 loadEnvFile();
 initLocalDb();
@@ -3125,6 +3125,19 @@ function procurementCenterPage(body) {
 }
 
 async function queryFinanceCenter(params = {}) {
+  if (params.refresh !== "1" && !params.searchKey) {
+    const financeRows = listFinanceRecords({ limit: clampInt(params.pagesize || 200, 1, 1000) }).map((row) => ({
+      ...row,
+      raw: parseJson(row.raw_json, row)
+    }));
+    if (financeRows.length) {
+      return {
+        header: { status: 0, message: "ok" },
+        body: buildLocalFinanceCenter({ financeRows })
+      };
+    }
+  }
+
   const pageindex = params.pageindex || 1;
   const pagesize = params.pagesize || 20;
   const today = startOfDay(parseDate(params.today) || new Date());
@@ -3337,6 +3350,8 @@ function financeCenterPage(body) {
     ],
     notes: body.notes,
     actions: [
+      ["立即同步", "/sync?sources=finance_records"],
+      ["刷新实时ERP", "/finance?refresh=1"],
       ["应收接口", "/api/receivables?pageindex=1&pagesize=20"],
       ["应付接口", "/api/payables?pageindex=1&pagesize=20"]
     ]
