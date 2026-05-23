@@ -752,6 +752,12 @@ function labelFor(key) {
     task_no: "待办编号",
     followup_no: "跟催编号",
     followup_type: "跟催类型",
+    quote_no: "报价编号",
+    quote_status: "报价状态",
+    quote_followups: "报价跟进",
+    urgent_quotes: "紧急报价",
+    owner_count: "负责人数",
+    max_age_days: "最长停留天数",
     exception_type: "异常类型",
     priority: "优先级",
     related_no: "关联单号",
@@ -1825,17 +1831,21 @@ function procurementPriorityWeight(priority) {
 async function queryQuoteCenter(params = {}) {
   let pending;
   let sourceError = null;
+  const timeoutMs = clampInt(params.timeout_ms || 5000, 1000, 15000);
+  const today = startOfDay(parseDate(params.today) || new Date());
   try {
-    pending = await queryPendingQuotes(client, {
+    pending = await withTimeout(queryPendingQuotes(client, {
       pageindex: params.pageindex || 1,
       pagesize: params.pagesize || 20,
       limit: params.limit || 30,
       searchKey: params.searchKey || "",
       include_all: params.include_all || ""
-    });
+    }), timeoutMs);
   } catch (error) {
     sourceError = summarizeDataSourceError(error);
   }
+  const quoteRows = (pending?.body?.rows || []).map((row) => mapQuoteFollowup(row, today));
+  const ownerRows = quoteOwnerSummary(quoteRows);
   return {
     header: { status: 0, message: "ok" },
     body: {
@@ -1844,19 +1854,104 @@ async function queryQuoteCenter(params = {}) {
       offline: Boolean(sourceError),
       summary: {
         scanned_projects: pending?.body?.summary?.scanned_projects ?? 0,
-        pending_quote_projects: pending?.body?.summary?.pending_quote_projects ?? 0
+        pending_quote_projects: pending?.body?.summary?.pending_quote_projects ?? 0,
+        quote_followups: quoteRows.length,
+        urgent_quotes: quoteRows.filter((row) => row.priority === "高").length,
+        owner_count: ownerRows.length
       },
-      rows: pending?.body?.rows || [],
+      rows: quoteRows,
+      sections: {
+        quote_followups: quoteRows,
+        owner_summary: ownerRows
+      },
       source_status: {
         pending_quotes: { ok: !sourceError, message: sourceError }
       },
       notes: [
         ...(sourceError ? [`ERP 数据源暂不可用：${sourceError}`] : []),
-        "待报价中心第一版基于项目/商机阶段和金额状态识别。",
-        "后续可补充报价责任人、报价截止时间、跟进记录和一键提醒。"
+        "待报价中心基于项目/商机阶段、金额状态和创建日期生成报价跟进池。",
+        "后续可补充报价截止时间、跟进记录和一键提醒。"
       ]
     }
   };
+}
+
+function mapQuoteFollowup(row, today) {
+  const createdDate = parseDate(row.created_date);
+  const ageDays = createdDate ? daysBetween(startOfDay(createdDate), today) : null;
+  const estimatedAmount = parseNumber(row.estimated_amount) || 0;
+  const quotedAmount = parseNumber(row.quoted_amount) || 0;
+  const stageText = [row.follow_stage, row.project_stage, row.approval_status, row.lead_status].filter(Boolean).join(" ");
+  const priority = quotePriority(ageDays, estimatedAmount, stageText);
+  const quoteStatus = quotedAmount > 0 ? "已报价待确认" : /询价|报价|核价|定价/.test(stageText) ? "待报价" : "待确认需求";
+  return {
+    quote_no: row.project_no || row.erp_id,
+    priority,
+    quote_status: quoteStatus,
+    customer: row.customer,
+    title: row.title,
+    owner: row.owner || "未分配",
+    project_stage: row.project_stage || row.follow_stage,
+    estimated_amount: row.estimated_amount,
+    quoted_amount: row.quoted_amount,
+    created_date: row.created_date,
+    age_days: ageDays,
+    action: quoteAction(priority, quoteStatus),
+    risk_flags: row.risk_flags,
+    raw: row.raw || row
+  };
+}
+
+function quotePriority(ageDays, amount, stageText) {
+  if (ageDays !== null && ageDays >= 7) {
+    return "高";
+  }
+  if (amount >= 100000 || /核价|定价/.test(stageText)) {
+    return "高";
+  }
+  if (ageDays !== null && ageDays >= 3) {
+    return "中";
+  }
+  return "低";
+}
+
+function quoteAction(priority, quoteStatus) {
+  if (quoteStatus === "已报价待确认") {
+    return "跟进客户反馈并推动确认";
+  }
+  if (priority === "高") {
+    return "优先确认规格、成本和报价截止时间";
+  }
+  return "补齐需求资料并安排报价";
+}
+
+function quoteOwnerSummary(rows) {
+  const grouped = new Map();
+  for (const row of rows) {
+    const owner = row.owner || "未分配";
+    const current = grouped.get(owner) || {
+      owner,
+      quote_followups: 0,
+      urgent_quotes: 0,
+      estimated_amount: 0,
+      max_age_days: 0,
+      latest_action: ""
+    };
+    current.quote_followups += 1;
+    if (row.priority === "高") {
+      current.urgent_quotes += 1;
+    }
+    current.estimated_amount += parseNumber(row.estimated_amount) || 0;
+    current.max_age_days = Math.max(current.max_age_days, parseNumber(row.age_days) || 0);
+    if (!current.latest_action && row.action) {
+      current.latest_action = row.action;
+    }
+    grouped.set(owner, current);
+  }
+  return [...grouped.values()]
+    .map((row) => ({ ...row, estimated_amount: Number(row.estimated_amount.toFixed(2)) }))
+    .sort((a, b) => b.urgent_quotes - a.urgent_quotes || b.max_age_days - a.max_age_days || b.estimated_amount - a.estimated_amount)
+    .slice(0, 20);
 }
 
 async function queryProductionCenter(params = {}) {
@@ -2305,13 +2400,17 @@ function materialControlPage(body) {
 function quoteCenterPage(body) {
   return modulePage({
     title: "待报价中心",
-    subtitle: "集中查看项目/商机中的待报价项目，后续承接报价责任人和跟催动作。",
+    subtitle: "集中查看项目/商机中的待报价项目，按优先级生成销售报价跟进池。",
     summary: [
       ["扫描项目", body.summary.scanned_projects],
-      ["待报价项目", body.summary.pending_quote_projects]
+      ["待报价项目", body.summary.pending_quote_projects],
+      ["报价跟进", body.summary.quote_followups],
+      ["紧急报价", body.summary.urgent_quotes],
+      ["负责人数", body.summary.owner_count]
     ],
     panels: [
-      modulePanel("待报价项目", body.rows, ["project_no", "title", "customer", "owner", "project_stage", "estimated_amount", "quoted_amount", "created_date"])
+      modulePanel("报价跟进池", body.sections.quote_followups, ["quote_no", "priority", "quote_status", "customer", "title", "owner", "project_stage", "estimated_amount", "quoted_amount", "created_date", "age_days", "action"]),
+      modulePanel("负责人汇总", body.sections.owner_summary, ["owner", "quote_followups", "urgent_quotes", "estimated_amount", "max_age_days", "latest_action"])
     ],
     notes: body.notes,
     actions: [["查看 JSON", "/api/pending_quotes?format=json&pageindex=1&pagesize=20&limit=20"]]
@@ -3031,7 +3130,7 @@ function pmcGoalPage() {
     ["PMC驾驶舱首页", "已完成V1", "KPI、逾期、临期、缺料、待报价、低库存"],
     ["订单管理中心", "已完成V1", "订单状态灯、搜索、过滤、订单详情穿透"],
     ["物料控制中心", "已完成V1入口", "缺料订单、低库存、冻结库存、长库龄"],
-    ["待报价中心", "已完成V1入口", "项目/商机待报价清单"],
+    ["待报价中心", "已完成V1", "项目/商机报价跟进池，含优先级、负责人汇总和处理建议"],
     ["生产进度中心", "已完成V1", "ERP生产进度、领料、BOM、工序计划，含延期工序和工作中心负荷"],
     ["异常管理中心", "已完成V1", "交期、缺料、库存、报价统一异常待办池，含优先级和责任角色"],
     ["报表中心", "已完成V1", "管理指标汇总、打印版、CSV导出、Excel日报导出"],
