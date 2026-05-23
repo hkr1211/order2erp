@@ -40,7 +40,7 @@ export async function syncSalesOrders(client, options = {}) {
   return runSync("sales_orders", async () => {
     const response = await client.queryView("sales_orders", {
       pageindex: options.pageindex || 1,
-      pagesize: options.sales_pagesize || options.pagesize || 100,
+      pagesize: options.sales_pagesize || options.pagesize || 20,
       searchKey: options.searchKey || ""
     });
     const table = normalizeTable(response);
@@ -54,7 +54,7 @@ export async function syncProcedurePlans(client, options = {}) {
   return runSync("procedure_plans", async () => {
     const response = await client.queryView("procedure_plans", {
       page_index: options.page_index || options.pageindex || 1,
-      page_size: options.procedure_pagesize || options.pagesize || 100,
+      page_size: options.procedure_pagesize || options.pagesize || 20,
       searchKey: options.searchKey || ""
     });
     const table = normalizeTable(response);
@@ -70,8 +70,8 @@ export async function syncMaterialAlerts(client, options = {}) {
       queryOrderShortages(client, {
         pageindex: options.pageindex || 1,
         pagesize: options.shortage_pagesize || 20,
-        contract_limit: options.contract_limit || 5,
-        scan_size: options.scan_size || 100,
+        contract_limit: options.contract_limit || 3,
+        scan_size: options.scan_size || 20,
         cks: options.cks || ""
       }),
       client.queryInventoryAlerts({
@@ -134,8 +134,8 @@ export async function syncQuoteProjects(client, options = {}) {
   return runSync("quote_projects", async () => {
     const pending = await queryPendingQuotes(client, {
       pageindex: options.pageindex || 1,
-      pagesize: options.quote_pagesize || options.pagesize || 50,
-      limit: options.quote_limit || options.limit || 50,
+      pagesize: options.quote_pagesize || options.pagesize || 20,
+      limit: options.quote_limit || options.limit || 20,
       searchKey: options.searchKey || "",
       include_all: options.include_all || ""
     });
@@ -155,12 +155,12 @@ export async function syncFinanceRecords(client, options = {}) {
     const [receivableResult, payableResult] = await Promise.allSettled([
       client.queryView("receivables", {
         pageindex: options.pageindex || 1,
-        pagesize: options.finance_pagesize || options.pagesize || 100,
+        pagesize: options.finance_pagesize || options.pagesize || 20,
         searchKey: options.searchKey || ""
       }),
       client.queryView("payables", {
         pageindex: options.pageindex || 1,
-        pagesize: options.finance_pagesize || options.pagesize || 100,
+        pagesize: options.finance_pagesize || options.pagesize || 20,
         searchKey: options.searchKey || ""
       })
     ]);
@@ -208,7 +208,7 @@ async function runSync(sourceKey, action) {
 
 function normalizeSources(value) {
   if (!value) {
-    return ["sales_orders", "procedure_plans", "material_alerts", "quote_projects", "finance_records"];
+    return ["sales_orders"];
   }
   if (Array.isArray(value)) {
     return value;

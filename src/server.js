@@ -13,6 +13,8 @@ initLocalDb();
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "127.0.0.1";
+const ERP_PROTECTION_MODE = process.env.ERP_PROTECTION_MODE !== "0";
+const DEFAULT_SYNC_PAGE_SIZE = Number.parseInt(process.env.DEFAULT_SYNC_PAGE_SIZE || "20", 10) || 20;
 const client = new ErpClient();
 
 const server = http.createServer(async (req, res) => {
@@ -122,18 +124,19 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/system") {
-      const result = await querySystemStatus();
+      const params = Object.fromEntries(url.searchParams);
+      const result = await querySystemStatus(params);
       return sendHtml(res, 200, systemStatusPage(result.body));
     }
 
     if (req.method === "GET" && url.pathname === "/sync") {
-      const params = Object.fromEntries(url.searchParams);
+      const params = { pagesize: DEFAULT_SYNC_PAGE_SIZE, ...Object.fromEntries(url.searchParams) };
       const result = await syncCoreData(client, params);
       return sendHtml(res, 200, syncStatusPage(result));
     }
 
     if (req.method === "GET" && url.pathname === "/api/sync") {
-      const params = Object.fromEntries(url.searchParams);
+      const params = { pagesize: DEFAULT_SYNC_PAGE_SIZE, ...Object.fromEntries(url.searchParams) };
       const result = await syncCoreData(client, params);
       return sendJson(res, 200, result);
     }
@@ -280,7 +283,11 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`ERP query hub listening on http://${HOST}:${PORT}`);
-  syncCoreData(client, { pagesize: 100 }).then((result) => {
+  if (ERP_PROTECTION_MODE) {
+    console.log("ERP protection mode enabled: startup sync and automatic ERP status login are disabled.");
+    return;
+  }
+  syncCoreData(client, { pagesize: DEFAULT_SYNC_PAGE_SIZE, sources: "sales_orders" }).then((result) => {
     console.log(`Startup sync finished: ${result.results.map((row) => `${row.status}:${row.rows_synced}`).join(", ")}`);
   }).catch((error) => {
     console.error("Startup sync failed", error);
@@ -1173,7 +1180,7 @@ async function queryOrderCenter(params = {}) {
           },
           notes: [
             "当前读取本地 SQLite 销售订单表。",
-            "点击“刷新实时订单”可重新扫描 ERP；点击“立即同步订单”可更新本地 SQLite。"
+            "点击“刷新实时订单”会直接访问 ERP；点击“谨慎同步订单20条”可小批量更新本地 SQLite。"
           ]
         }
       };
@@ -1209,6 +1216,22 @@ async function queryOrderCenter(params = {}) {
           "点击“刷新实时订单”可重新扫描 ERP 销售订单、合同明细、交期风险和缺料风险。"
         ]
       }
+    };
+  }
+
+  if (ERP_PROTECTION_MODE && !refresh && !searchKey) {
+    return {
+      header: { status: 0, message: "offline order center" },
+      body: emptyOrderCenterBody({
+        pageIndex,
+        pageSize,
+        contractLimit,
+        dueSoonDays,
+        scanSize,
+        searchKey,
+        statusFilter,
+        message: "ERP保护模式已开启，订单中心未找到本地 SQLite/快照数据时不再自动请求 ERP。"
+      })
     };
   }
 
@@ -1667,7 +1690,7 @@ function orderCenterPage(body, url) {
       <div class="actions">
         <a class="button" href="/pmc">PMC 驾驶舱</a>
         <a class="button" href="/">首页</a>
-        <a class="button" href="/sync?sources=sales_orders,material_alerts">立即同步订单</a>
+        <a class="button" href="/sync?sources=sales_orders&pagesize=20">谨慎同步订单20条</a>
         <a class="button" href="/orders?refresh=1">刷新实时订单</a>
         <a class="button primary" href="${escapeHtml(orderCenterJsonHref(url))}">查看 JSON</a>
       </div>
@@ -2053,7 +2076,7 @@ async function queryMaterialControl(params = {}) {
           },
           notes: [
             "当前读取本地 SQLite 物料告警表。",
-            "点击“立即同步”可从 ERP 重新同步缺料和低库存。"
+            "点击“谨慎同步物料20条”可从 ERP 小批量更新缺料和低库存。"
           ]
         }
       };
@@ -2064,6 +2087,11 @@ async function queryMaterialControl(params = {}) {
     cached = true;
     shortageResult = { status: "rejected", reason: new Error("使用本地快照") };
     inventoryResult = { status: "rejected", reason: new Error("使用本地快照") };
+  } else if (ERP_PROTECTION_MODE && params.refresh !== "1" && !params.searchKey) {
+    return {
+      header: { status: 0, message: "ok" },
+      body: emptyMaterialControlBody("ERP保护模式已开启，物料中心未找到本地 SQLite/快照数据时不再自动请求 ERP。")
+    };
   } else {
     [shortageResult, inventoryResult] = await Promise.allSettled([
       withTimeout(queryOrderShortages(client, {
@@ -2137,6 +2165,38 @@ async function queryMaterialControl(params = {}) {
         "齐套口径沿用销售订单产品库存，后续可接 BOM 展开和采购在途。"
       ]
     }
+  };
+}
+
+function emptyMaterialControlBody(message) {
+  return {
+    model: "material_control",
+    generated_at: new Date().toISOString(),
+    cached: true,
+    summary: {
+      material_tasks: 0,
+      urgent_material_tasks: 0,
+      shortage_orders: 0,
+      shortage_rows: 0,
+      low_stock: 0,
+      frozen_stock: 0,
+      old_stock: 0,
+      source_errors: 0
+    },
+    sections: {
+      material_tasks: [],
+      shortage_rows: [],
+      low_stock: [],
+      frozen_stock: [],
+      old_stock: []
+    },
+    source_status: {
+      erp_protection_mode: { ok: true, message }
+    },
+    notes: [
+      message,
+      "请在 ERP 稳定时点击“谨慎同步物料20条”更新本地物料告警。"
+    ]
   };
 }
 
@@ -2227,6 +2287,12 @@ function summarizeDataSourceError(error) {
 }
 
 async function queryProcurementCenter(params = {}) {
+  if (ERP_PROTECTION_MODE && params.refresh !== "1" && !params.searchKey) {
+    return {
+      header: { status: 0, message: "ok" },
+      body: emptyProcurementCenterBody("ERP保护模式已开启，采购跟催中心暂不自动访问 ERP；请确认 ERP 稳定后再使用实时刷新或接口按钮。")
+    };
+  }
   const pageindex = params.pageindex || 1;
   const pagesize = params.pagesize || 20;
   const timeoutMs = clampInt(params.timeout_ms || 5000, 1000, 15000);
@@ -2291,6 +2357,36 @@ async function queryProcurementCenter(params = {}) {
         "后续确认智邦采购订单接口和供应商联系人字段后，可补预计到货日、跟催记录和一键邮件。"
       ]
     }
+  };
+}
+
+function emptyProcurementCenterBody(message) {
+  return {
+    model: "procurement_center",
+    generated_at: new Date().toISOString(),
+    cached: true,
+    offline: true,
+    summary: {
+      followup_tasks: 0,
+      urgent_followups: 0,
+      inbound_records: 0,
+      payable_records: 0,
+      supplier_count: 0,
+      source_errors: 0
+    },
+    sections: {
+      stock_in_records: [],
+      payables: [],
+      followups: [],
+      suppliers: []
+    },
+    source_status: {
+      erp_protection_mode: { ok: true, message }
+    },
+    notes: [
+      message,
+      "后续把采购订单/供应商跟催同步到 SQLite 后，本页会默认读取本地数据。"
+    ]
   };
 }
 
@@ -2406,9 +2502,15 @@ async function queryQuoteCenter(params = {}) {
           },
           notes: [
             "当前读取本地 SQLite 待报价项目。",
-            "点击“立即同步”可从 ERP 更新本地待报价数据。"
+            "点击“谨慎同步报价20条”可从 ERP 小批量更新本地待报价数据。"
           ]
         }
+      };
+    }
+    if (ERP_PROTECTION_MODE) {
+      return {
+        header: { status: 0, message: "ok" },
+        body: emptyQuoteCenterBody("ERP保护模式已开启，待报价中心未找到本地 SQLite 数据时不再自动请求 ERP。")
       };
     }
   }
@@ -2457,6 +2559,34 @@ async function queryQuoteCenter(params = {}) {
         "后续可补充报价截止时间、跟进记录和一键提醒。"
       ]
     }
+  };
+}
+
+function emptyQuoteCenterBody(message) {
+  return {
+    model: "quote_center",
+    generated_at: new Date().toISOString(),
+    cached: true,
+    offline: true,
+    summary: {
+      scanned_projects: 0,
+      pending_quote_projects: 0,
+      quote_followups: 0,
+      urgent_quotes: 0,
+      owner_count: 0
+    },
+    rows: [],
+    sections: {
+      quote_followups: [],
+      owner_summary: []
+    },
+    source_status: {
+      sqlite_quote_followups: { ok: false, rows: 0, message }
+    },
+    notes: [
+      message,
+      "请在 ERP 稳定时点击“谨慎同步”更新本地待报价数据。"
+    ]
   };
 }
 
@@ -2636,7 +2766,7 @@ async function queryLocalProductionCenter(params = {}) {
       },
       notes: [
         "当前读取本地 SQLite 派工/工序计划表。",
-        "点击“立即同步”可从 ERP 重新同步工序计划。"
+        "点击“谨慎同步工序20条”可从 ERP 小批量更新工序计划。"
       ]
     }
   };
@@ -3074,7 +3204,7 @@ function materialControlPage(body) {
       modulePanel("长库龄库存", body.sections.old_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"])
     ],
     notes: body.notes,
-    actions: [["立即同步", "/sync?sources=material_alerts"], ["刷新实时ERP", "/materials?refresh=1"], ["查看 JSON", "/api/pmc_dashboard?format=json"]]
+    actions: [["谨慎同步物料20条", "/sync?sources=material_alerts&pagesize=20&scan_size=20&contract_limit=3"], ["刷新实时ERP", "/materials?refresh=1"], ["查看 JSON", "/api/pmc_dashboard?format=json"]]
   });
 }
 
@@ -3094,7 +3224,7 @@ function quoteCenterPage(body) {
       modulePanel("负责人汇总", body.sections.owner_summary, ["owner", "quote_followups", "urgent_quotes", "estimated_amount", "max_age_days", "latest_action"])
     ],
     notes: body.notes,
-    actions: [["立即同步", "/sync?sources=quote_projects"], ["刷新实时ERP", "/quotes?refresh=1"], ["查看 JSON", "/api/pending_quotes?format=json&pageindex=1&pagesize=20&limit=20"]]
+    actions: [["谨慎同步报价20条", "/sync?sources=quote_projects&pagesize=20&limit=20"], ["刷新实时ERP", "/quotes?refresh=1"], ["查看 JSON", "/api/pending_quotes?format=json&pageindex=1&pagesize=20&limit=20"]]
   });
 }
 
@@ -3134,6 +3264,12 @@ async function queryFinanceCenter(params = {}) {
       return {
         header: { status: 0, message: "ok" },
         body: buildLocalFinanceCenter({ financeRows })
+      };
+    }
+    if (ERP_PROTECTION_MODE) {
+      return {
+        header: { status: 0, message: "ok" },
+        body: emptyFinanceCenterBody("ERP保护模式已开启，应收应付中心未找到本地 SQLite 数据时不再自动请求 ERP。")
       };
     }
   }
@@ -3207,6 +3343,39 @@ async function queryFinanceCenter(params = {}) {
         "逾期判断优先使用到期日；如果 ERP 返回付款条件天数且有单据日期，则自动推算到期日。"
       ]
     }
+  };
+}
+
+function emptyFinanceCenterBody(message) {
+  return {
+    model: "finance_center",
+    generated_at: new Date().toISOString(),
+    cached: true,
+    offline: true,
+    summary: {
+      receivable_records: 0,
+      payable_records: 0,
+      receivable_unpaid: 0,
+      payable_unpaid: 0,
+      overdue_receivables: 0,
+      due_soon_payables: 0,
+      source_errors: 0
+    },
+    sections: {
+      receivables: [],
+      payables: [],
+      receivable_debts: [],
+      overdue_receivables: [],
+      due_soon_payables: [],
+      payable_debts: []
+    },
+    source_status: {
+      sqlite_finance_records: { ok: false, rows: 0, message }
+    },
+    notes: [
+      message,
+      "请在 ERP 稳定时点击“谨慎同步”更新本地应收应付数据。"
+    ]
   };
 }
 
@@ -3350,7 +3519,7 @@ function financeCenterPage(body) {
     ],
     notes: body.notes,
     actions: [
-      ["立即同步", "/sync?sources=finance_records"],
+      ["谨慎同步财务20条", "/sync?sources=finance_records&pagesize=20"],
       ["刷新实时ERP", "/finance?refresh=1"],
       ["应收接口", "/api/receivables?pageindex=1&pagesize=20"],
       ["应付接口", "/api/payables?pageindex=1&pagesize=20"]
@@ -3641,7 +3810,7 @@ function productionCenterPage(body) {
       modulePanel("工序计划", body.sections.procedure_plans, ["work_assignment_id", "order_no", "product_name", "procedure_name", "work_center_name", "planned_qty", "finished_qty", "remaining_qty", "planned_start_date", "planned_finish_date", "owner"])
     ],
     notes: body.notes,
-    actions: [["立即同步", "/sync?sources=procedure_plans"], ["派工追踪", "/dispatch"], ["刷新实时ERP", "/production?refresh=1"]]
+    actions: [["谨慎同步工序20条", "/sync?sources=procedure_plans&pagesize=20"], ["派工追踪", "/dispatch"], ["刷新实时ERP", "/production?refresh=1"]]
   });
 }
 
@@ -3666,7 +3835,7 @@ function dispatchTrackingPage(body) {
       ...body.notes,
       "当前 ERP 的 production_progress 接口返回 0 行时，本页优先使用 procedure_plans 工序计划作为派工追踪主数据。"
     ],
-    actions: [["立即同步", "/sync?sources=procedure_plans"], ["返回生产中心", "/production"], ["刷新实时ERP", "/dispatch?refresh=1"]]
+    actions: [["谨慎同步工序20条", "/sync?sources=procedure_plans&pagesize=20"], ["返回生产中心", "/production"], ["刷新实时ERP", "/dispatch?refresh=1"]]
   });
 }
 
@@ -3905,23 +4074,34 @@ function csvCell(value) {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
-async function querySystemStatus() {
+async function querySystemStatus(params = {}) {
   const startedAt = Date.now();
   let erpStatus;
-  try {
-    const session = await client.login();
+  const shouldCheckErp = parseBoolean(params.check_erp) || !ERP_PROTECTION_MODE;
+  if (!shouldCheckErp) {
     erpStatus = {
-      ok: true,
-      message: "ERP 登录接口正常",
-      latency_ms: Date.now() - startedAt,
-      session_tail: session ? String(session).slice(-6) : ""
+      ok: null,
+      message: "ERP保护模式已开启，未主动登录检测。",
+      latency_ms: 0,
+      session_tail: ""
     };
-  } catch (error) {
-    erpStatus = {
-      ok: false,
-      message: summarizeDataSourceError(error),
-      latency_ms: Date.now() - startedAt
-    };
+  } else {
+    try {
+      const session = await client.login();
+      erpStatus = {
+        ok: true,
+        message: "ERP 登录接口正常",
+        latency_ms: Date.now() - startedAt,
+        session_tail: session ? String(session).slice(-6) : ""
+      };
+    } catch (error) {
+      erpStatus = {
+        ok: false,
+        message: summarizeDataSourceError(error),
+        latency_ms: Date.now() - startedAt,
+        session_tail: ""
+      };
+    }
   }
   const snapshot = latestPmcSnapshot();
   const syncRuns = latestSyncRuns();
@@ -3944,7 +4124,8 @@ async function querySystemStatus() {
       model: "system_status",
       generated_at: new Date().toISOString(),
       summary: {
-        erp_online: erpStatus.ok ? 1 : 0,
+        erp_online: erpStatus.ok === null ? null : erpStatus.ok ? 1 : 0,
+        erp_protection_mode: ERP_PROTECTION_MODE ? "开启" : "关闭",
         erp_latency_ms: erpStatus.latency_ms,
         has_snapshot: snapshot ? 1 : 0,
         module_count: modules.length,
@@ -3967,21 +4148,23 @@ async function querySystemStatus() {
         sync_runs: syncRuns
       },
       notes: [
-        erpStatus.ok ? "ERP 实时接口当前可用。" : `ERP 实时接口当前不可用：${erpStatus.message}`,
+        erpStatus.ok === null ? erpStatus.message : erpStatus.ok ? "ERP 实时接口当前可用。" : `ERP 实时接口当前不可用：${erpStatus.message}`,
         snapshot ? `最近本地快照时间：${formatDateTime(snapshot.created_at)}。` : "当前没有本地驾驶舱快照。",
         syncRuns.length ? "最近同步状态来自本地 SQLite sync_runs 表。" : "当前还没有业务数据同步记录。",
-        "此页面只做轻量状态检查，不扫描订单、库存和合同明细。"
+        "此页面默认只读本地状态；点击“检测ERP登录”才会访问 ERP 登录接口。"
       ]
     }
   };
 }
 
 function systemStatusPage(body) {
+  const erpOnlineText = body.summary.erp_online === null ? "未检测" : body.summary.erp_online ? "是" : "否";
   return modulePage({
     title: "数据源状态中心",
     subtitle: "查看 ERP 登录接口、本地 SQLite 快照和关键业务页面的可用状态。",
     summary: [
-      ["ERP在线", body.summary.erp_online ? "是" : "否"],
+      ["ERP在线", erpOnlineText],
+      ["保护模式", body.summary.erp_protection_mode],
       ["ERP耗时ms", body.summary.erp_latency_ms],
       ["本地快照", body.summary.has_snapshot ? "有" : "无"],
       ["同步源", body.summary.sync_sources],
@@ -3996,7 +4179,8 @@ function systemStatusPage(body) {
     ],
     notes: body.notes,
     actions: [
-      ["立即同步", "/sync"],
+      ["谨慎同步订单20条", "/sync?sources=sales_orders&pagesize=20"],
+      ["检测ERP登录", "/system?check_erp=1"],
       ["刷新状态", "/system"],
       ["PMC驾驶舱", "/pmc"]
     ]
@@ -4018,10 +4202,10 @@ function syncStatusPage(body) {
       modulePanel("最近同步状态", body.latest || latestSyncRuns(), ["source_key", "started_at", "finished_at", "status", "rows_synced", "error_message"])
     ],
     notes: [
-      "服务启动时会自动同步一次；之后由本页手动触发同步。",
+      "ERP保护模式下，服务启动不会自动同步；本页默认只同步销售订单20条。",
       "同步失败不会清空旧数据，业务页面继续显示最近一次成功数据。"
     ],
-    actions: [["再次同步", "/sync"], ["系统状态", "/system"]]
+    actions: [["再次同步订单20条", "/sync?sources=sales_orders&pagesize=20"], ["系统状态", "/system"]]
   });
 }
 
