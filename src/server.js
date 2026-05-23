@@ -6,6 +6,7 @@ import { queryOrderShortages } from "./orderShortages.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
 import { initLocalDb, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listMaterialAlerts, listProcedurePlans, listQuoteFollowups, listSalesOrders, savePmcSnapshot } from "./localDb.js";
 import { syncCoreData } from "./syncService.js";
+import { buildSyncPolicyRows } from "./syncPolicy.js";
 import { buildLocalExceptionCenter, buildLocalFinanceCenter, buildLocalPmcDashboard, quoteOwnerSummaryForLocal } from "./localAnalytics.js";
 
 loadEnvFile();
@@ -15,6 +16,7 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "127.0.0.1";
 const ERP_PROTECTION_MODE = process.env.ERP_PROTECTION_MODE !== "0";
 const DEFAULT_SYNC_PAGE_SIZE = Number.parseInt(process.env.DEFAULT_SYNC_PAGE_SIZE || "20", 10) || 20;
+const DEFAULT_SYNC_COOLDOWN_SECONDS = Number.parseInt(process.env.SYNC_COOLDOWN_SECONDS || "300", 10) || 300;
 const client = new ErpClient();
 
 const server = http.createServer(async (req, res) => {
@@ -4105,6 +4107,10 @@ async function querySystemStatus(params = {}) {
   }
   const snapshot = latestPmcSnapshot();
   const syncRuns = latestSyncRuns();
+  const syncPolicyRows = buildSyncPolicyRows({
+    latestRuns: syncRuns,
+    cooldownSeconds: DEFAULT_SYNC_COOLDOWN_SECONDS
+  });
   const modules = [
     ["PMC 驾驶舱", "/pmc", snapshot ? "可用：支持本地快照" : "可用：无快照时显示离线空看板"],
     ["角色工作台", "/roles", "可用：老板/PMC/销售入口和日常流程"],
@@ -4130,7 +4136,8 @@ async function querySystemStatus(params = {}) {
         has_snapshot: snapshot ? 1 : 0,
         module_count: modules.length,
         sync_sources: syncRuns.length,
-        sync_failures: syncRuns.filter((row) => row.status === "failed").length
+        sync_failures: syncRuns.filter((row) => row.status === "failed").length,
+        sync_in_cooldown: syncPolicyRows.filter((row) => row.health_status === "冷却中").length
       },
       sections: {
         erp_status: [erpStatus],
@@ -4145,7 +4152,8 @@ async function querySystemStatus(params = {}) {
             }]
           : [],
         modules: modules.map(([name, path, status]) => ({ name, path, status })),
-        sync_runs: syncRuns
+        sync_runs: syncRuns,
+        sync_policy: syncPolicyRows
       },
       notes: [
         erpStatus.ok === null ? erpStatus.message : erpStatus.ok ? "ERP 实时接口当前可用。" : `ERP 实时接口当前不可用：${erpStatus.message}`,
@@ -4169,11 +4177,13 @@ function systemStatusPage(body) {
       ["本地快照", body.summary.has_snapshot ? "有" : "无"],
       ["同步源", body.summary.sync_sources],
       ["同步失败", body.summary.sync_failures],
+      ["冷却中", body.summary.sync_in_cooldown],
       ["业务入口", body.summary.module_count]
     ],
     panels: [
       modulePanel("ERP 登录状态", body.sections.erp_status, ["ok", "message", "latency_ms", "session_tail"]),
       modulePanel("最近驾驶舱快照", body.sections.snapshot, ["created_at", "today_orders", "month_orders", "overdue_orders", "shortage_orders", "low_stock"]),
+      modulePanel("同步策略", body.sections.sync_policy, ["label", "recommended_interval", "risk_level", "last_status", "last_rows", "last_finished_at", "next_allowed_at", "health_status", "action"]),
       modulePanel("最近同步状态", body.sections.sync_runs, ["source_key", "started_at", "finished_at", "status", "rows_synced", "error_message"]),
       modulePanel("业务入口状态", body.sections.modules, ["name", "path", "status"])
     ],
