@@ -104,6 +104,10 @@ export function buildHistorySyncProgress({ sources = HISTORY_SYNC_SOURCES, lates
     const pageIndex = Number(latest?.page_index) || 0;
     const pageSize = Number(latest?.page_size) || 20;
     const hasNext = lastStatus === "success" && rowsSynced >= pageSize;
+    const nextPageIndex = hasNext ? pageIndex + 1 : "";
+    const nextRun = hasNext
+      ? `/history-sync/run?source=${encodeURIComponent(source.source)}&start_date=${encodeURIComponent(latest.start_date || "")}&end_date=${encodeURIComponent(latest.end_date || "")}&pageindex=${nextPageIndex}&pagesize=${pageSize}`
+      : "";
     return {
       source: source.source,
       label: source.label,
@@ -115,8 +119,9 @@ export function buildHistorySyncProgress({ sources = HISTORY_SYNC_SOURCES, lates
       end_date: latest?.end_date || "",
       finished_at: latest?.finished_at || "",
       error_message: latest?.error_message || "",
-      next_page_index: hasNext ? pageIndex + 1 : "",
-      next_action: hasNext ? `继续第 ${pageIndex + 1} 页` : lastStatus === "failed" ? "检查错误后重试当前页" : "从第 1 页开始"
+      next_page_index: nextPageIndex,
+      next_action: hasNext ? `继续第 ${pageIndex + 1} 页` : lastStatus === "failed" ? "检查错误后重试当前页" : "从第 1 页开始",
+      next_run: nextRun
     };
   });
 }

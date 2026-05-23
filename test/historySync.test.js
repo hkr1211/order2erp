@@ -43,4 +43,5 @@ test("buildHistorySyncProgress suggests next page after success", () => {
   assert.equal(progress[0].last_status, "success");
   assert.equal(progress[0].next_page_index, 4);
   assert.match(progress[0].next_action, /继续第 4 页/);
+  assert.match(progress[0].next_run, /pageindex=4/);
 });

@@ -174,8 +174,12 @@ const server = http.createServer(async (req, res) => {
       if (guard.blocked) {
         return sendHtml(res, 503, historySyncBlockedPage(guard.reason));
       }
-      const result = await runHistorySyncBatchWithRecord(params);
-      return sendHtml(res, 200, historySyncResultPage(result));
+      try {
+        const result = await runHistorySyncBatchWithRecord(params);
+        return sendHtml(res, 200, historySyncResultPage(result));
+      } catch (error) {
+        return sendHtml(res, 500, historySyncFailurePage(params, summarizeDataSourceError(error)));
+      }
     }
 
     if (req.method === "GET" && url.pathname === "/api/history_sync/run") {
@@ -998,6 +1002,9 @@ function formatCell(value) {
   }
   if (value === undefined || value === null || value === "") {
     return "";
+  }
+  if (typeof value === "string" && /^\/[A-Za-z0-9/_?=&.%:-]+$/.test(value)) {
+    return `<a href="${escapeHtml(value)}">${escapeHtml(value)}</a>`;
   }
   return escapeHtml(displayValue(value));
 }
@@ -4462,7 +4469,7 @@ function historySyncPage(body) {
       ["熔断保护", body.summary.circuit_breaker]
     ],
     panels: [
-      modulePanel("最近进度", body.progress, ["label", "source", "last_status", "last_rows_synced", "last_page_index", "page_size", "start_date", "end_date", "finished_at", "next_page_index", "next_action", "error_message"]),
+      modulePanel("最近进度", body.progress, ["label", "source", "last_status", "last_rows_synced", "last_page_index", "page_size", "start_date", "end_date", "finished_at", "next_page_index", "next_action", "next_run", "error_message"]),
       modulePanel("可执行同步源", body.rows, ["label", "source", "date_support", "start_date", "end_date", "page_size", "suggested_range", "latest_progress", "safety", "run"])
     ],
     notes: body.notes,
@@ -4516,6 +4523,26 @@ function historySyncResultPage(result) {
       ["返回历史同步", "/history-sync"],
       ["SQLite覆盖率", "/sqlite-coverage"]
     ]
+  });
+}
+
+function historySyncFailurePage(params, message) {
+  return modulePage({
+    title: "历史同步失败",
+    subtitle: "本次批次没有完成，已记录失败进度。",
+    summary: [
+      ["同步源", params.source || ""],
+      ["页码", params.pageindex || params.page_index || 1],
+      ["状态", "失败"]
+    ],
+    panels: [
+      modulePanel("失败信息", [{ source: params.source || "", page_index: params.pageindex || params.page_index || 1, error_message: message }], ["source", "page_index", "error_message"])
+    ],
+    notes: [
+      "请先查看 ERP 健康状态和请求日志。",
+      "确认 ERP 稳定后，可以回到历史同步中心从同一页重试。"
+    ],
+    actions: [["返回历史同步", "/history-sync"], ["ERP健康状态", "/api/erp_health"], ["ERP请求日志", "/erp-logs"]]
   });
 }
 
