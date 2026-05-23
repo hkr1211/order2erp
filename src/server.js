@@ -9,7 +9,7 @@ import { syncCoreData } from "./syncService.js";
 import { buildSyncPolicyRows } from "./syncPolicy.js";
 import { buildErpHealthSummary, shouldBlockErpBusinessQuery } from "./erpHealth.js";
 import { SQLITE_TABLES, buildSqliteCoverage } from "./sqliteCoverage.js";
-import { HISTORY_SYNC_SOURCES, buildHistorySyncProgress, defaultHistoryRange, historySyncDryRun, historySyncParams, runHistorySyncBatch } from "./historySync.js";
+import { HISTORY_SYNC_SOURCES, buildHistorySyncProgress, defaultHistoryRange, historySyncDryRun, historySyncParams, historySyncWindowParams, runHistorySyncBatch } from "./historySync.js";
 import { buildLocalExceptionCenter, buildLocalFinanceCenter, buildLocalPmcDashboard, quoteOwnerSummaryForLocal } from "./localAnalytics.js";
 
 loadEnvFile();
@@ -169,6 +169,11 @@ const server = http.createServer(async (req, res) => {
       return sendHtml(res, 200, historySyncDryRunPage(historySyncDryRun(params)));
     }
 
+    if (req.method === "GET" && url.pathname === "/history-sync/window") {
+      const params = Object.fromEntries(url.searchParams);
+      return sendHtml(res, 200, historySyncWindowPage(historySyncWindowParams(params)));
+    }
+
     if (req.method === "GET" && url.pathname === "/history-sync/run") {
       const params = Object.fromEntries(url.searchParams);
       const guard = shouldBlockErpBusinessQuery({
@@ -203,6 +208,11 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/history_sync/dry-run") {
       const params = Object.fromEntries(url.searchParams);
       return sendJson(res, 200, historySyncDryRun(params));
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/history_sync/window") {
+      const params = Object.fromEntries(url.searchParams);
+      return sendJson(res, 200, historySyncWindowParams(params));
     }
 
     if (req.method === "GET" && url.pathname === "/erp-logs") {
@@ -1203,6 +1213,7 @@ function labelFor(key) {
     next_page_index: "下一页",
     next_run: "继续执行",
     dry_run: "预演",
+    safe_window: "安全窗口",
     run: "执行",
     view_name: "ERP视图",
     page_index: "页码",
@@ -4454,6 +4465,7 @@ function queryHistorySyncCenter(params = {}) {
     });
     const queryString = `source=${encodeURIComponent(source.source)}&start_date=${encodeURIComponent(plan.range.start_date)}&end_date=${encodeURIComponent(plan.range.end_date)}&pageindex=1&pagesize=${plan.pageSize}`;
     const dryRunHref = `/history-sync/dry-run?${queryString}`;
+    const windowHref = `/history-sync/window?${queryString}&max_pages=3&delay_ms=5000`;
     const runHref = `/history-sync/run?${queryString}`;
     return {
       source: source.source,
@@ -4466,6 +4478,7 @@ function queryHistorySyncCenter(params = {}) {
       safety: source.riskNote,
       latest_progress: progressRows.find((row) => row.source === source.source)?.next_action || "从第 1 页开始",
       dry_run: dryRunHref,
+      safe_window: windowHref,
       run: runHref
     };
   });
@@ -4505,11 +4518,38 @@ function historySyncPage(body) {
     ],
     panels: [
       modulePanel("最近进度", body.progress, ["label", "source", "last_status", "last_rows_synced", "last_page_index", "page_size", "start_date", "end_date", "finished_at", "next_page_index", "next_action", "next_run", "error_message"]),
-      modulePanel("可执行同步源", body.rows, ["label", "source", "date_support", "start_date", "end_date", "page_size", "suggested_range", "latest_progress", "safety", "dry_run", "run"])
+      modulePanel("可执行同步源", body.rows, ["label", "source", "date_support", "start_date", "end_date", "page_size", "suggested_range", "latest_progress", "safety", "dry_run", "safe_window", "run"])
     ],
     notes: body.notes,
     actions: [
       ["SQLite覆盖率", "/sqlite-coverage"],
+      ["ERP健康状态", "/api/erp_health"],
+      ["ERP请求日志", "/erp-logs"]
+    ]
+  });
+}
+
+function historySyncWindowPage(result) {
+  return modulePage({
+    title: "历史同步安全窗口",
+    subtitle: `${result.label} 从第 ${result.startPageIndex} 页开始，按受控节奏补齐。页面本身不访问 ERP。`,
+    summary: [
+      ["同步源", result.label],
+      ["起始页", result.startPageIndex],
+      ["计划页数", result.maxPages],
+      ["每页条数", result.pageSize],
+      ["页间等待ms", result.delayMs]
+    ],
+    panels: [
+      modulePanel("窗口内页面", result.pages, ["label", "source", "page_index", "page_size", "start_date", "end_date", "dry_run", "run"])
+    ],
+    notes: [
+      ...result.safety,
+      "建议先点每一页的预演，确认参数无误后再逐页执行。",
+      "如果 ERP 当天已经出现卡顿，先不要执行窗口内的同步。"
+    ],
+    actions: [
+      ["返回历史同步", "/history-sync"],
       ["ERP健康状态", "/api/erp_health"],
       ["ERP请求日志", "/erp-logs"]
     ]

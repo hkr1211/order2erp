@@ -83,6 +83,43 @@ export function historySyncDryRun(options = {}) {
   };
 }
 
+export function historySyncWindowParams(options = {}) {
+  const plan = historySyncParams(options);
+  const maxPages = clampInt(options.max_pages || options.maxPages || 2, 1, 5);
+  const delayMs = clampInt(options.delay_ms || options.delayMs || 5000, 5000, 60000);
+  const pages = Array.from({ length: maxPages }, (_, index) => {
+    const pageIndex = plan.pageIndex + index;
+    return {
+      source: plan.source,
+      label: plan.label,
+      page_index: pageIndex,
+      page_size: plan.pageSize,
+      start_date: plan.range.start_date,
+      end_date: plan.range.end_date,
+      dry_run: historySyncHref("/history-sync/dry-run", plan, pageIndex),
+      run: historySyncHref("/history-sync/run", plan, pageIndex)
+    };
+  });
+  return {
+    generated_at: new Date().toISOString(),
+    source: plan.source,
+    label: plan.label,
+    view_name: plan.viewName,
+    startPageIndex: plan.pageIndex,
+    pageSize: plan.pageSize,
+    start_date: plan.range.start_date,
+    end_date: plan.range.end_date,
+    maxPages,
+    delayMs,
+    pages,
+    safety: [
+      `每次最多连续 ${maxPages} 页，每页最多 ${plan.pageSize} 条。`,
+      `两页之间至少等待 ${delayMs}ms。`,
+      "执行期间仍会经过 ERP 队列、请求间隔、冷却和熔断保护。"
+    ]
+  };
+}
+
 export async function runHistorySyncBatch(client, options = {}) {
   const plan = historySyncParams(options);
   const response = await client.queryView(plan.viewName, plan.erpParams);
@@ -146,6 +183,10 @@ export function buildHistorySyncProgress({ sources = HISTORY_SYNC_SOURCES, lates
       next_run: nextRun
     };
   });
+}
+
+function historySyncHref(path, plan, pageIndex) {
+  return `${path}?source=${encodeURIComponent(plan.source)}&start_date=${encodeURIComponent(plan.range.start_date)}&end_date=${encodeURIComponent(plan.range.end_date)}&pageindex=${pageIndex}&pagesize=${plan.pageSize}`;
 }
 
 function startOfDay(date) {

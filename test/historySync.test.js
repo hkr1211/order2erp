@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildHistorySyncProgress, defaultHistoryRange, historySyncDryRun, historySyncParams } from "../src/historySync.js";
+import { buildHistorySyncProgress, defaultHistoryRange, historySyncDryRun, historySyncParams, historySyncWindowParams } from "../src/historySync.js";
 
 test("defaultHistoryRange returns the last 90 days", () => {
   const range = defaultHistoryRange(new Date("2026-05-23T08:00:00+08:00"));
@@ -37,6 +37,25 @@ test("historySyncDryRun does not access ERP and shows request parameters", () =>
   assert.equal(dryRun.will_access_erp, "否");
   assert.match(dryRun.erp_params_json, /dateQD_0/);
   assert.match(dryRun.notes.join(" "), /不访问 ERP/);
+});
+
+test("historySyncWindowParams clamps page count and delay for ERP safety", () => {
+  const windowParams = historySyncWindowParams({
+    source: "sales_orders",
+    start_date: "2026-02-22",
+    end_date: "2026-05-23",
+    pageindex: 3,
+    pagesize: 99,
+    max_pages: 99,
+    delay_ms: 10
+  });
+
+  assert.equal(windowParams.pageSize, 20);
+  assert.equal(windowParams.startPageIndex, 3);
+  assert.equal(windowParams.maxPages, 5);
+  assert.equal(windowParams.delayMs, 5000);
+  assert.equal(windowParams.pages[0].page_index, 3);
+  assert.equal(windowParams.pages.at(-1).page_index, 7);
 });
 
 test("buildHistorySyncProgress suggests next page after success", () => {
