@@ -84,6 +84,24 @@ export function initLocalDb(dbPath = process.env.PMC_DB_PATH || DEFAULT_DB_PATH)
       raw_json TEXT NOT NULL,
       synced_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS erp_quote_followups (
+      quote_no TEXT PRIMARY KEY,
+      priority TEXT,
+      quote_status TEXT,
+      customer TEXT,
+      title TEXT,
+      owner TEXT,
+      project_stage TEXT,
+      estimated_amount REAL,
+      quoted_amount REAL,
+      created_date TEXT,
+      age_days INTEGER,
+      action TEXT,
+      risk_flags TEXT,
+      raw_json TEXT NOT NULL,
+      synced_at TEXT NOT NULL
+    );
   `);
   return db;
 }
@@ -189,6 +207,21 @@ export function replaceMaterialAlerts(rows) {
   });
 }
 
+export function replaceQuoteFollowups(rows) {
+  const database = initLocalDb();
+  runInTransaction(database, () => {
+    database.prepare("DELETE FROM erp_quote_followups").run();
+    const stmt = database.prepare(`
+      INSERT INTO erp_quote_followups
+      (quote_no, priority, quote_status, customer, title, owner, project_stage, estimated_amount, quoted_amount, created_date, age_days, action, risk_flags, raw_json, synced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const row of rows) {
+      stmt.run(row.quote_no, row.priority, row.quote_status, row.customer, row.title, row.owner, row.project_stage, row.estimated_amount, row.quoted_amount, row.created_date, row.age_days, row.action, stringifyScalar(row.risk_flags), JSON.stringify(row.raw || row), row.synced_at);
+    }
+  });
+}
+
 export function listSalesOrders({ limit = 100 } = {}) {
   return initLocalDb().prepare("SELECT * FROM erp_sales_orders ORDER BY delivery_date IS NULL, delivery_date LIMIT ?").all(limit);
 }
@@ -201,6 +234,10 @@ export function listMaterialAlerts({ limit = 100 } = {}) {
   return initLocalDb().prepare("SELECT * FROM erp_material_alerts ORDER BY CASE priority WHEN '高' THEN 1 WHEN '中' THEN 2 ELSE 3 END, alert_type LIMIT ?").all(limit);
 }
 
+export function listQuoteFollowups({ limit = 100 } = {}) {
+  return initLocalDb().prepare("SELECT * FROM erp_quote_followups ORDER BY CASE priority WHEN '高' THEN 1 WHEN '中' THEN 2 ELSE 3 END, age_days DESC LIMIT ?").all(limit);
+}
+
 function runInTransaction(database, action) {
   database.exec("BEGIN");
   try {
@@ -210,4 +247,11 @@ function runInTransaction(database, action) {
     database.exec("ROLLBACK");
     throw error;
   }
+}
+
+function stringifyScalar(value) {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  return typeof value === "object" ? JSON.stringify(value) : String(value);
 }

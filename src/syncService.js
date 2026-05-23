@@ -1,10 +1,13 @@
 import { normalizeTable, toBusinessView } from "./erpClient.js";
 import { queryOrderShortages } from "./orderShortages.js";
+import { queryPendingQuotes } from "./pendingQuotes.js";
+import { mapQuoteFollowupForLocal } from "./localAnalytics.js";
 import {
   finishSyncRun,
   latestSyncRuns,
   replaceMaterialAlerts,
   replaceProcedurePlans,
+  replaceQuoteFollowups,
   replaceSalesOrders,
   startSyncRun
 } from "./localDb.js";
@@ -21,6 +24,9 @@ export async function syncCoreData(client, options = {}) {
     }
     if (source === "material_alerts") {
       results.push(await syncMaterialAlerts(client, options));
+    }
+    if (source === "quote_projects") {
+      results.push(await syncQuoteProjects(client, options));
     }
   }
   return { generated_at: new Date().toISOString(), results, latest: latestSyncRuns() };
@@ -120,6 +126,25 @@ export async function syncMaterialAlerts(client, options = {}) {
   });
 }
 
+export async function syncQuoteProjects(client, options = {}) {
+  return runSync("quote_projects", async () => {
+    const pending = await queryPendingQuotes(client, {
+      pageindex: options.pageindex || 1,
+      pagesize: options.quote_pagesize || options.pagesize || 50,
+      limit: options.quote_limit || options.limit || 50,
+      searchKey: options.searchKey || "",
+      include_all: options.include_all || ""
+    });
+    const today = options.today ? new Date(options.today) : new Date();
+    const rows = (pending?.body?.rows || []).map((row) => ({
+      ...mapQuoteFollowupForLocal(row, today),
+      synced_at: new Date().toISOString()
+    }));
+    replaceQuoteFollowups(rows);
+    return rows.length;
+  });
+}
+
 async function runSync(sourceKey, action) {
   const run = startSyncRun(sourceKey);
   try {
@@ -139,7 +164,7 @@ async function runSync(sourceKey, action) {
 
 function normalizeSources(value) {
   if (!value) {
-    return ["sales_orders", "procedure_plans", "material_alerts"];
+    return ["sales_orders", "procedure_plans", "material_alerts", "quote_projects"];
   }
   if (Array.isArray(value)) {
     return value;

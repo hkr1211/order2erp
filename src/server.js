@@ -4,9 +4,9 @@ import { ErpClient, ERP_VIEWS, normalizeTable, toBusinessView } from "./erpClien
 import { queryOrderDeliveryRisks } from "./orderDeliveryRisks.js";
 import { queryOrderShortages } from "./orderShortages.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
-import { initLocalDb, latestPmcSnapshot, latestSyncRuns, listMaterialAlerts, listProcedurePlans, listSalesOrders, savePmcSnapshot } from "./localDb.js";
+import { initLocalDb, latestPmcSnapshot, latestSyncRuns, listMaterialAlerts, listProcedurePlans, listQuoteFollowups, listSalesOrders, savePmcSnapshot } from "./localDb.js";
 import { syncCoreData } from "./syncService.js";
-import { buildLocalExceptionCenter, buildLocalPmcDashboard } from "./localAnalytics.js";
+import { buildLocalExceptionCenter, buildLocalPmcDashboard, quoteOwnerSummaryForLocal } from "./localAnalytics.js";
 
 loadEnvFile();
 initLocalDb();
@@ -2376,6 +2376,43 @@ function procurementPriorityWeight(priority) {
 }
 
 async function queryQuoteCenter(params = {}) {
+  if (params.refresh !== "1" && !params.searchKey) {
+    const quoteRows = listQuoteFollowups({ limit: clampInt(params.limit || params.pagesize || 100, 1, 500) }).map((row) => ({
+      ...row,
+      raw: parseJson(row.raw_json, row)
+    }));
+    if (quoteRows.length) {
+      const ownerRows = quoteOwnerSummaryForLocal(quoteRows);
+      return {
+        header: { status: 0, message: "ok" },
+        body: {
+          model: "quote_center",
+          generated_at: new Date().toISOString(),
+          cached: true,
+          summary: {
+            scanned_projects: quoteRows.length,
+            pending_quote_projects: quoteRows.length,
+            quote_followups: quoteRows.length,
+            urgent_quotes: quoteRows.filter((row) => row.priority === "高").length,
+            owner_count: ownerRows.length
+          },
+          rows: quoteRows,
+          sections: {
+            quote_followups: quoteRows,
+            owner_summary: ownerRows
+          },
+          source_status: {
+            sqlite_quote_followups: { ok: true, rows: quoteRows.length }
+          },
+          notes: [
+            "当前读取本地 SQLite 待报价项目。",
+            "点击“立即同步”可从 ERP 更新本地待报价数据。"
+          ]
+        }
+      };
+    }
+  }
+
   let pending;
   let sourceError = null;
   const timeoutMs = clampInt(params.timeout_ms || 5000, 1000, 15000);
@@ -3057,7 +3094,7 @@ function quoteCenterPage(body) {
       modulePanel("负责人汇总", body.sections.owner_summary, ["owner", "quote_followups", "urgent_quotes", "estimated_amount", "max_age_days", "latest_action"])
     ],
     notes: body.notes,
-    actions: [["查看 JSON", "/api/pending_quotes?format=json&pageindex=1&pagesize=20&limit=20"]]
+    actions: [["立即同步", "/sync?sources=quote_projects"], ["刷新实时ERP", "/quotes?refresh=1"], ["查看 JSON", "/api/pending_quotes?format=json&pageindex=1&pagesize=20&limit=20"]]
   });
 }
 
