@@ -16,7 +16,13 @@ import {
 export async function syncCoreData(client, options = {}) {
   const sources = normalizeSources(options.sources);
   const results = [];
+  const latestBeforeSync = latestSyncRuns();
   for (const source of sources) {
+    const skipped = shouldSkipSyncSource(source, latestBeforeSync, options);
+    if (skipped) {
+      results.push(skipped);
+      continue;
+    }
     if (source === "sales_orders") {
       results.push(await syncSalesOrders(client, options));
     }
@@ -34,6 +40,40 @@ export async function syncCoreData(client, options = {}) {
     }
   }
   return { generated_at: new Date().toISOString(), results, latest: latestSyncRuns() };
+}
+
+export function shouldSkipSyncSource(sourceKey, latestRuns = [], options = {}) {
+  if (isTruthy(options.force_sync) || isTruthy(options.force)) {
+    return null;
+  }
+  const cooldownSeconds = parsePositiveInt(
+    options.cooldown_seconds ?? process.env.SYNC_COOLDOWN_SECONDS,
+    300
+  );
+  if (cooldownSeconds <= 0) {
+    return null;
+  }
+  const latest = latestRuns.find((row) => row.source_key === sourceKey);
+  if (!latest) {
+    return null;
+  }
+  const lastTime = new Date(latest.finished_at || latest.started_at || "");
+  if (Number.isNaN(lastTime.getTime())) {
+    return null;
+  }
+  const elapsedSeconds = Math.floor((Date.now() - lastTime.getTime()) / 1000);
+  if (elapsedSeconds >= cooldownSeconds) {
+    return null;
+  }
+  return {
+    source_key: sourceKey,
+    started_at: latest.started_at,
+    finished_at: new Date().toISOString(),
+    status: "skipped",
+    rows_synced: 0,
+    error_message: `ERP保护模式：${sourceKey} 距离上次同步 ${Math.max(0, elapsedSeconds)} 秒，小于 ${cooldownSeconds} 秒冷却时间；如确认 ERP 稳定可加 force_sync=1。`,
+    skipped_due_to_cooldown: true
+  };
 }
 
 export async function syncSalesOrders(client, options = {}) {
@@ -217,6 +257,19 @@ function normalizeSources(value) {
     .split(",")
     .map((source) => source.trim())
     .filter(Boolean);
+}
+
+function parsePositiveInt(value, fallback) {
+  const number = Number.parseInt(value, 10);
+  return Number.isFinite(number) ? Math.max(0, number) : fallback;
+}
+
+function isTruthy(value) {
+  if (value === true || value === 1) {
+    return true;
+  }
+  const text = value === undefined || value === null ? "" : String(value).trim().toLowerCase();
+  return text === "1" || text === "true" || text === "yes";
 }
 
 function mapSalesOrder(row, index) {

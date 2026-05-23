@@ -4194,6 +4194,7 @@ function syncStatusPage(body) {
     summary: [
       ["同步源", body.results.length],
       ["成功", body.results.filter((row) => row.status === "success").length],
+      ["跳过", body.results.filter((row) => row.status === "skipped").length],
       ["失败", body.results.filter((row) => row.status === "failed").length],
       ["同步行数", body.results.reduce((sum, row) => sum + (Number(row.rows_synced) || 0), 0)]
     ],
@@ -4203,9 +4204,10 @@ function syncStatusPage(body) {
     ],
     notes: [
       "ERP保护模式下，服务启动不会自动同步；本页默认只同步销售订单20条。",
+      "同一个同步源默认 5 分钟内重复点击会跳过，不访问 ERP；确认 ERP 稳定时可在链接后加 force_sync=1。",
       "同步失败不会清空旧数据，业务页面继续显示最近一次成功数据。"
     ],
-    actions: [["再次同步订单20条", "/sync?sources=sales_orders&pagesize=20"], ["系统状态", "/system"]]
+    actions: [["再次同步订单20条", "/sync?sources=sales_orders&pagesize=20"], ["强制同步订单20条", "/sync?sources=sales_orders&pagesize=20&force_sync=1"], ["系统状态", "/system"]]
   });
 }
 

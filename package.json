@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node --no-warnings src/server.js",
-    "check": "node --check src/server.js && node --check src/erpClient.js && node --check src/orderShortages.js && node --check src/orderDeliveryRisks.js && node --check src/pendingQuotes.js && node --check src/localDb.js && node --check src/syncService.js && node --check src/localAnalytics.js && node --test test/localAnalytics.test.js"
+    "check": "node --check src/server.js && node --check src/erpClient.js && node --check src/orderShortages.js && node --check src/orderDeliveryRisks.js && node --check src/pendingQuotes.js && node --check src/localDb.js && node --check src/syncService.js && node --check src/localAnalytics.js && node --test test/localAnalytics.test.js test/syncService.test.js"
   },
   "engines": {
     "node": ">=18"
