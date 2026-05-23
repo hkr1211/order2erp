@@ -749,6 +749,15 @@ function labelFor(key) {
     age_days: "账龄天数",
     due_days: "到期天数",
     risk_status: "风险状态",
+    task_no: "待办编号",
+    exception_type: "异常类型",
+    priority: "优先级",
+    related_no: "关联单号",
+    item: "事项",
+    responsible_role: "责任角色",
+    action: "处理建议",
+    open_tasks: "未关闭待办",
+    critical_tasks: "高优先级待办",
     records: "记录数",
     overdue_records: "逾期记录",
     earliest_due_date: "最近到期日",
@@ -1777,28 +1786,44 @@ async function queryProductionCenter(params = {}) {
 async function queryExceptionCenter(params = {}) {
   let dashboard;
   let sourceError = null;
-  try {
-    dashboard = await queryPmcDashboard({
-      scan_pages: params.scan_pages || 1,
-      scan_size: params.scan_size || 20,
-      contract_limit: params.contract_limit || 5,
-      alert_limit: params.alert_limit || 20,
-      low_stock_threshold: params.low_stock_threshold || 5,
-      old_stock_days: params.old_stock_days || 180,
-      due_soon_days: params.due_soon_days || 7,
-      quote_limit: params.quote_limit || 20
-    });
-  } catch (error) {
-    sourceError = summarizeDataSourceError(error);
+  let cached = false;
+  const snapshot = latestPmcSnapshot();
+  const dashboardParams = {
+    scan_pages: params.scan_pages || 1,
+    scan_size: params.scan_size || 20,
+    contract_limit: params.contract_limit || 5,
+    alert_limit: params.alert_limit || 20,
+    low_stock_threshold: params.low_stock_threshold || 5,
+    old_stock_days: params.old_stock_days || 180,
+    due_soon_days: params.due_soon_days || 7,
+    quote_limit: params.quote_limit || 20
+  };
+  if (snapshot && params.refresh !== "1") {
+    dashboard = { body: snapshot.payload };
+    cached = true;
+  } else {
+    try {
+      dashboard = await withTimeout(queryPmcDashboard(dashboardParams), clampInt(params.timeout_ms || 5000, 1000, 15000));
+    } catch (error) {
+      sourceError = summarizeDataSourceError(error);
+      if (snapshot) {
+        dashboard = { body: snapshot.payload };
+        cached = true;
+      }
+    }
   }
   const body = dashboard?.body || { summary: {}, sections: {} };
+  const tasks = buildExceptionTasks(body.sections || []);
   return {
     header: { status: 0, message: "ok" },
     body: {
       model: "exception_center",
       generated_at: new Date().toISOString(),
       offline: Boolean(sourceError),
+      cached,
       summary: {
+        open_tasks: tasks.length,
+        critical_tasks: tasks.filter((task) => task.priority === "高").length,
         overdue_orders: body.summary.overdue_delivery_rows || 0,
         due_soon_orders: body.summary.due_soon_delivery_rows || 0,
         shortage_orders: body.summary.order_shortage_orders || 0,
@@ -1810,18 +1835,109 @@ async function queryExceptionCenter(params = {}) {
         due_soon_orders: body.sections.due_soon_delivery_rows || [],
         shortage_rows: body.sections.order_shortage_rows || [],
         pending_quotes: body.sections.pending_quotes || [],
-        low_stock: body.sections.low_stock || []
+        low_stock: body.sections.low_stock || [],
+        tasks
       },
       source_status: {
         pmc_dashboard: { ok: !sourceError, message: sourceError }
       },
       notes: [
         ...(sourceError ? [`ERP 数据源暂不可用：${sourceError}`] : []),
+        ...(cached ? [`当前读取本地驾驶舱快照：${formatDateTime(snapshot.created_at)}。`] : []),
         "异常管理中心把交期、缺料、待报价、低库存聚合成统一待办。",
-        "后续可增加责任人、处理时限、关闭状态和操作日志。"
+        "每条待办包含优先级、责任角色、处理建议和当前状态。",
+        "责任角色按异常类型自动推导；关闭状态和操作日志后续接本地数据库。"
       ]
     }
   };
+}
+
+function buildExceptionTasks(sections) {
+  const tasks = [
+    ...exceptionTasksFromDelivery(sections.overdue_delivery_rows || [], "交期逾期"),
+    ...exceptionTasksFromDelivery(sections.due_soon_delivery_rows || [], "临期交付"),
+    ...exceptionTasksFromShortage(sections.order_shortage_rows || []),
+    ...exceptionTasksFromQuotes(sections.pending_quotes || []),
+    ...exceptionTasksFromLowStock(sections.low_stock || [])
+  ];
+  return tasks
+    .sort((a, b) => exceptionPriorityWeight(b.priority) - exceptionPriorityWeight(a.priority) || String(a.due_date || "").localeCompare(String(b.due_date || "")))
+    .slice(0, 80)
+    .map((task, index) => ({ task_no: `PMC-${String(index + 1).padStart(3, "0")}`, ...task }));
+}
+
+function exceptionTasksFromDelivery(rows, type) {
+  return rows.map((row) => {
+    const days = parseNumber(row.days_from_today);
+    const overdue = days !== null && days < 0;
+    return {
+      exception_type: type,
+      priority: overdue ? "高" : "中",
+      related_no: row.order_no,
+      customer: row.customer,
+      item: row.product_name || row.product_code,
+      quantity: row.remaining_qty,
+      due_date: row.delivery_date,
+      responsible_role: overdue ? "PMC/销售" : "PMC",
+      action: overdue ? "确认延期原因并同步客户交期" : "跟进生产与发货准备",
+      status: "待处理"
+    };
+  });
+}
+
+function exceptionTasksFromShortage(rows) {
+  return rows.map((row) => ({
+    exception_type: "订单缺料",
+    priority: "高",
+    related_no: row.order_no,
+    customer: row.customer,
+    item: row.product_name || row.product_code,
+    quantity: row.shortage_qty,
+    due_date: row.delivery_date,
+    responsible_role: "PMC/采购",
+    action: "确认替代库存、采购到货或调整排产",
+    status: "待处理"
+  }));
+}
+
+function exceptionTasksFromQuotes(rows) {
+  return rows.map((row) => ({
+    exception_type: "待报价",
+    priority: "中",
+    related_no: row.project_no,
+    customer: row.customer,
+    item: row.title,
+    quantity: "",
+    due_date: row.created_date,
+    responsible_role: "销售",
+    action: "确认报价资料并推进报价",
+    status: "待处理"
+  }));
+}
+
+function exceptionTasksFromLowStock(rows) {
+  return rows.map((row) => ({
+    exception_type: "低库存",
+    priority: parseNumber(row.available_qty) <= 0 ? "高" : "中",
+    related_no: row.product_code,
+    customer: "",
+    item: row.product_name,
+    quantity: row.available_qty,
+    due_date: "",
+    responsible_role: "PMC/仓库",
+    action: "确认安全库存、冻结量和补料需求",
+    status: "待处理"
+  }));
+}
+
+function exceptionPriorityWeight(priority) {
+  if (priority === "高") {
+    return 3;
+  }
+  if (priority === "中") {
+    return 2;
+  }
+  return 1;
 }
 
 async function queryReportCenter(params = {}) {
@@ -2371,8 +2487,10 @@ function productionCenterPage(body) {
 function exceptionCenterPage(body) {
   return modulePage({
     title: "异常管理中心",
-    subtitle: "把交期、缺料、待报价、库存异常统一成 PMC 待办池。",
+    subtitle: "把交期、缺料、待报价、库存异常统一成按优先级排序的 PMC 待办池。",
     summary: [
+      ["未关闭待办", body.summary.open_tasks],
+      ["高优先级", body.summary.critical_tasks],
       ["逾期订单", body.summary.overdue_orders],
       ["7天内交期", body.summary.due_soon_orders],
       ["缺料订单", body.summary.shortage_orders],
@@ -2380,6 +2498,7 @@ function exceptionCenterPage(body) {
       ["低库存", body.summary.low_stock]
     ],
     panels: [
+      modulePanel("统一异常待办", body.sections.tasks, ["task_no", "priority", "exception_type", "related_no", "customer", "item", "quantity", "due_date", "responsible_role", "action", "status"]),
       modulePanel("逾期订单", body.sections.overdue_orders, ["order_no", "customer", "product_name", "remaining_qty", "delivery_date"]),
       modulePanel("7天内交期", body.sections.due_soon_orders, ["order_no", "customer", "product_name", "remaining_qty", "delivery_date"]),
       modulePanel("缺料明细", body.sections.shortage_rows, ["order_no", "customer", "product_name", "available_qty", "shortage_qty"]),
@@ -2694,7 +2813,7 @@ function pmcGoalPage() {
     ["物料控制中心", "已完成V1入口", "缺料订单、低库存、冻结库存、长库龄"],
     ["待报价中心", "已完成V1入口", "项目/商机待报价清单"],
     ["生产进度中心", "已完成V1入口", "ERP生产进度、领料、BOM、工序计划数据入口"],
-    ["异常管理中心", "已完成V1入口", "交期、缺料、库存、报价异常待办池"],
+    ["异常管理中心", "已完成V1", "交期、缺料、库存、报价统一异常待办池，含优先级和责任角色"],
     ["报表中心", "已完成V1", "管理指标汇总、打印版、CSV导出、Excel日报导出"],
     ["排产甘特图", "已完成V1入口", "按订单交期生成时间轴；工单/设备/工序排产待接入"],
     ["采购跟催", "已完成V1入口", "先接入库流水和应付付款；采购订单/供应商联系人待确认"],
@@ -2978,6 +3097,15 @@ function parseBoolean(value) {
   }
   const text = value === undefined || value === null ? "" : String(value).trim().toLowerCase();
   return text === "1" || text === "true" || text === "yes";
+}
+
+function withTimeout(promise, timeoutMs) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(`数据源响应超过 ${timeoutMs}ms`)), timeoutMs);
+    })
+  ]);
 }
 
 function clampInt(value, min, max) {
