@@ -39,3 +39,30 @@ test("ErpRequestQueue waits between ERP operations", async () => {
 
   assert.ok(startedAt[1] - startedAt[0] >= 15);
 });
+
+test("ErpRequestQueue reports queue metrics", async () => {
+  const queue = new ErpRequestQueue({ minIntervalMs: 0 });
+  let releaseFirst;
+  const first = queue.run(async () => {
+    await new Promise((resolve) => {
+      releaseFirst = resolve;
+    });
+  });
+  const second = queue.run(async () => "second");
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(queue.snapshot().running, 1);
+  assert.equal(queue.snapshot().queued, 1);
+
+  releaseFirst();
+  await Promise.all([first, second]);
+  assert.equal(queue.snapshot().running, 0);
+  assert.equal(queue.snapshot().queued, 0);
+  assert.equal(queue.snapshot().completed, 2);
+
+  await assert.rejects(queue.run(async () => {
+    throw new Error("boom");
+  }), /boom/);
+  assert.equal(queue.snapshot().failed, 1);
+  assert.match(queue.snapshot().last_error, /boom/);
+});

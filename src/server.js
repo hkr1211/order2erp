@@ -4108,6 +4108,7 @@ async function querySystemStatus(params = {}) {
   }
   const snapshot = latestPmcSnapshot();
   const syncRuns = latestSyncRuns();
+  const erpQueue = client.requestQueue.snapshot();
   const syncPolicyRows = buildSyncPolicyRows({
     latestRuns: syncRuns,
     cooldownSeconds: DEFAULT_SYNC_COOLDOWN_SECONDS
@@ -4135,6 +4136,9 @@ async function querySystemStatus(params = {}) {
         erp_protection_mode: ERP_PROTECTION_MODE ? "开启" : "关闭",
         erp_latency_ms: erpStatus.latency_ms,
         erp_request_min_interval_ms: ERP_REQUEST_MIN_INTERVAL_MS,
+        erp_queue_queued: erpQueue.queued,
+        erp_queue_running: erpQueue.running,
+        erp_request_failed: erpQueue.failed,
         has_snapshot: snapshot ? 1 : 0,
         module_count: modules.length,
         sync_sources: syncRuns.length,
@@ -4143,6 +4147,7 @@ async function querySystemStatus(params = {}) {
       },
       sections: {
         erp_status: [erpStatus],
+        erp_queue: [erpQueue],
         snapshot: snapshot
           ? [{
               created_at: snapshot.created_at,
@@ -4177,6 +4182,9 @@ function systemStatusPage(body) {
       ["保护模式", body.summary.erp_protection_mode],
       ["ERP耗时ms", body.summary.erp_latency_ms],
       ["请求间隔ms", body.summary.erp_request_min_interval_ms],
+      ["ERP排队", body.summary.erp_queue_queued],
+      ["ERP运行中", body.summary.erp_queue_running],
+      ["请求失败", body.summary.erp_request_failed],
       ["本地快照", body.summary.has_snapshot ? "有" : "无"],
       ["同步源", body.summary.sync_sources],
       ["同步失败", body.summary.sync_failures],
@@ -4185,6 +4193,7 @@ function systemStatusPage(body) {
     ],
     panels: [
       modulePanel("ERP 登录状态", body.sections.erp_status, ["ok", "message", "latency_ms", "session_tail"]),
+      modulePanel("ERP 请求队列", body.sections.erp_queue, ["queued", "running", "completed", "failed", "min_interval_ms", "last_started_at", "last_finished_at", "last_error"]),
       modulePanel("最近驾驶舱快照", body.sections.snapshot, ["created_at", "today_orders", "month_orders", "overdue_orders", "shortage_orders", "low_stock"]),
       modulePanel("同步策略", body.sections.sync_policy, ["label", "recommended_interval", "risk_level", "last_status", "last_rows", "last_finished_at", "next_allowed_at", "health_status", "action"]),
       modulePanel("最近同步状态", body.sections.sync_runs, ["source_key", "started_at", "finished_at", "status", "rows_synced", "error_message"]),
