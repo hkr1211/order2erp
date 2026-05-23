@@ -19,6 +19,71 @@ export function initLocalDb(dbPath = process.env.PMC_DB_PATH || DEFAULT_DB_PATH)
       summary_json TEXT NOT NULL,
       payload_json TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS sync_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_key TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      status TEXT NOT NULL,
+      rows_synced INTEGER NOT NULL DEFAULT 0,
+      error_message TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS erp_sales_orders (
+      erp_id TEXT PRIMARY KEY,
+      order_no TEXT,
+      customer TEXT,
+      owner TEXT,
+      product_name TEXT,
+      product_code TEXT,
+      product_model TEXT,
+      quantity REAL,
+      remaining_qty REAL,
+      delivery_date TEXT,
+      signed_date TEXT,
+      amount REAL,
+      status_text TEXT,
+      raw_json TEXT NOT NULL,
+      synced_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS erp_procedure_plans (
+      erp_id TEXT PRIMARY KEY,
+      work_assignment_id TEXT,
+      order_no TEXT,
+      product_name TEXT,
+      product_code TEXT,
+      product_model TEXT,
+      procedure_name TEXT,
+      work_center_name TEXT,
+      planned_qty REAL,
+      finished_qty REAL,
+      remaining_qty REAL,
+      planned_start_date TEXT,
+      planned_finish_date TEXT,
+      owner TEXT,
+      state TEXT,
+      raw_json TEXT NOT NULL,
+      synced_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS erp_material_alerts (
+      alert_id TEXT PRIMARY KEY,
+      alert_type TEXT NOT NULL,
+      order_no TEXT,
+      customer TEXT,
+      product_code TEXT,
+      product_name TEXT,
+      warehouse TEXT,
+      demand_qty REAL,
+      available_qty REAL,
+      stock_qty REAL,
+      shortage_qty REAL,
+      priority TEXT,
+      raw_json TEXT NOT NULL,
+      synced_at TEXT NOT NULL
+    );
   `);
   return db;
 }
@@ -47,4 +112,94 @@ export function latestPmcSnapshot() {
     summary: JSON.parse(row.summary_json),
     payload: JSON.parse(row.payload_json)
   };
+}
+
+export function startSyncRun(sourceKey) {
+  const database = initLocalDb();
+  const startedAt = new Date().toISOString();
+  const result = database
+    .prepare("INSERT INTO sync_runs (source_key, started_at, status) VALUES (?, ?, ?)")
+    .run(sourceKey, startedAt, "running");
+  return { id: result.lastInsertRowid, source_key: sourceKey, started_at: startedAt };
+}
+
+export function finishSyncRun(id, { status, rows_synced = 0, error_message = null }) {
+  const database = initLocalDb();
+  const finishedAt = new Date().toISOString();
+  database
+    .prepare("UPDATE sync_runs SET finished_at = ?, status = ?, rows_synced = ?, error_message = ? WHERE id = ?")
+    .run(finishedAt, status, rows_synced, error_message, id);
+  return { id, finished_at: finishedAt, status, rows_synced, error_message };
+}
+
+export function latestSyncRuns() {
+  const database = initLocalDb();
+  return database
+    .prepare(
+      `SELECT source_key, started_at, finished_at, status, rows_synced, error_message
+       FROM sync_runs
+       WHERE id IN (SELECT MAX(id) FROM sync_runs GROUP BY source_key)
+       ORDER BY source_key`
+    )
+    .all();
+}
+
+export function replaceSalesOrders(rows) {
+  const database = initLocalDb();
+  const tx = database.transaction((items) => {
+    database.prepare("DELETE FROM erp_sales_orders").run();
+    const stmt = database.prepare(`
+      INSERT INTO erp_sales_orders
+      (erp_id, order_no, customer, owner, product_name, product_code, product_model, quantity, remaining_qty, delivery_date, signed_date, amount, status_text, raw_json, synced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const row of items) {
+      stmt.run(row.erp_id, row.order_no, row.customer, row.owner, row.product_name, row.product_code, row.product_model, row.quantity, row.remaining_qty, row.delivery_date, row.signed_date, row.amount, row.status_text, JSON.stringify(row.raw || row), row.synced_at);
+    }
+  });
+  tx(rows);
+}
+
+export function replaceProcedurePlans(rows) {
+  const database = initLocalDb();
+  const tx = database.transaction((items) => {
+    database.prepare("DELETE FROM erp_procedure_plans").run();
+    const stmt = database.prepare(`
+      INSERT INTO erp_procedure_plans
+      (erp_id, work_assignment_id, order_no, product_name, product_code, product_model, procedure_name, work_center_name, planned_qty, finished_qty, remaining_qty, planned_start_date, planned_finish_date, owner, state, raw_json, synced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const row of items) {
+      stmt.run(row.erp_id, row.work_assignment_id, row.order_no, row.product_name, row.product_code, row.product_model, row.procedure_name, row.work_center_name, row.planned_qty, row.finished_qty, row.remaining_qty, row.planned_start_date, row.planned_finish_date, row.owner, row.state, JSON.stringify(row.raw || row), row.synced_at);
+    }
+  });
+  tx(rows);
+}
+
+export function replaceMaterialAlerts(rows) {
+  const database = initLocalDb();
+  const tx = database.transaction((items) => {
+    database.prepare("DELETE FROM erp_material_alerts").run();
+    const stmt = database.prepare(`
+      INSERT INTO erp_material_alerts
+      (alert_id, alert_type, order_no, customer, product_code, product_name, warehouse, demand_qty, available_qty, stock_qty, shortage_qty, priority, raw_json, synced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const row of items) {
+      stmt.run(row.alert_id, row.alert_type, row.order_no, row.customer, row.product_code, row.product_name, row.warehouse, row.demand_qty, row.available_qty, row.stock_qty, row.shortage_qty, row.priority, JSON.stringify(row.raw || row), row.synced_at);
+    }
+  });
+  tx(rows);
+}
+
+export function listSalesOrders({ limit = 100 } = {}) {
+  return initLocalDb().prepare("SELECT * FROM erp_sales_orders ORDER BY delivery_date IS NULL, delivery_date LIMIT ?").all(limit);
+}
+
+export function listProcedurePlans({ limit = 100 } = {}) {
+  return initLocalDb().prepare("SELECT * FROM erp_procedure_plans ORDER BY planned_finish_date IS NULL, planned_finish_date LIMIT ?").all(limit);
+}
+
+export function listMaterialAlerts({ limit = 100 } = {}) {
+  return initLocalDb().prepare("SELECT * FROM erp_material_alerts ORDER BY CASE priority WHEN '高' THEN 1 WHEN '中' THEN 2 ELSE 3 END, alert_type LIMIT ?").all(limit);
 }
