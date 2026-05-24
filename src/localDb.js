@@ -67,6 +67,18 @@ export function initLocalDb(dbPath = process.env.PMC_DB_PATH || DEFAULT_DB_PATH)
       payload_json TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS order_procedure_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_no TEXT NOT NULL,
+      work_assignment_id TEXT NOT NULL,
+      procedure_name TEXT,
+      product_name TEXT,
+      reason TEXT,
+      actor TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE(order_no, work_assignment_id, procedure_name)
+    );
+
     CREATE TABLE IF NOT EXISTS erp_sales_orders (
       erp_id TEXT PRIMARY KEY,
       order_no TEXT,
@@ -265,6 +277,45 @@ export function latestPmcInterventionsByRelatedNos(relatedNos = []) {
     }
   }
   return latestByNo;
+}
+
+export function saveOrderProcedureLink(entry = {}) {
+  const database = initLocalDb();
+  const orderNo = String(entry.order_no || "").trim();
+  const workAssignmentId = String(entry.work_assignment_id || "").trim();
+  const procedureName = String(entry.procedure_name || "").trim();
+  if (!orderNo || !workAssignmentId) {
+    throw new Error("order_no and work_assignment_id are required");
+  }
+  const payload = {
+    order_no: orderNo,
+    work_assignment_id: workAssignmentId,
+    procedure_name: procedureName,
+    product_name: String(entry.product_name || "").trim(),
+    reason: String(entry.reason || "").trim(),
+    actor: String(entry.actor || "内网用户").trim() || "内网用户",
+    created_at: entry.created_at || new Date().toISOString()
+  };
+  const result = database
+    .prepare(
+      `INSERT OR REPLACE INTO order_procedure_links
+       (order_no, work_assignment_id, procedure_name, product_name, reason, actor, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(payload.order_no, payload.work_assignment_id, payload.procedure_name, payload.product_name, payload.reason, payload.actor, payload.created_at);
+  return { id: result.lastInsertRowid, ...payload };
+}
+
+export function listOrderProcedureLinks({ limit = 200 } = {}) {
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 200, 1000));
+  return initLocalDb()
+    .prepare(
+      `SELECT id, order_no, work_assignment_id, procedure_name, product_name, reason, actor, created_at
+       FROM order_procedure_links
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`
+    )
+    .all(safeLimit);
 }
 
 export function pmcInterventionSummary({ today = new Date(), limit = 8 } = {}) {

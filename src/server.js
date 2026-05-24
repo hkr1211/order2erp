@@ -4,7 +4,7 @@ import { ErpClient, ERP_VIEWS, normalizeTable, toBusinessView } from "./erpClien
 import { queryOrderDeliveryRisks } from "./orderDeliveryRisks.js";
 import { queryOrderShortages } from "./orderShortages.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
-import { finishHistorySyncRun, initLocalDb, latestErpRequestLogs, latestHistorySyncRuns, latestPmcInterventions, latestPmcInterventionsByRelatedNos, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listMaterialAlerts, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, pmcInterventionSummary, savePmcIntervention, savePmcSnapshot, startHistorySyncRun, tableStats } from "./localDb.js";
+import { finishHistorySyncRun, initLocalDb, latestErpRequestLogs, latestHistorySyncRuns, latestPmcInterventions, latestPmcInterventionsByRelatedNos, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listMaterialAlerts, listOrderProcedureLinks, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, pmcInterventionSummary, saveOrderProcedureLink, savePmcIntervention, savePmcSnapshot, startHistorySyncRun, tableStats } from "./localDb.js";
 import { syncCoreData } from "./syncService.js";
 import { buildSyncPolicyRows } from "./syncPolicy.js";
 import { buildErpHealthSummary, shouldBlockErpBusinessQuery } from "./erpHealth.js";
@@ -74,6 +74,17 @@ const server = http.createServer(async (req, res) => {
       const params = Object.fromEntries(url.searchParams);
       const saved = savePmcIntervention(params);
       return sendHtml(res, 200, pmcInterventionPage(params, saved));
+    }
+
+    if (req.method === "GET" && url.pathname === "/procedure-links") {
+      const params = Object.fromEntries(url.searchParams);
+      return sendHtml(res, 200, procedureLinksPage(queryProcedureLinks(params)));
+    }
+
+    if (req.method === "GET" && url.pathname === "/procedure-links/save") {
+      const params = Object.fromEntries(url.searchParams);
+      const saved = saveOrderProcedureLink(params);
+      return sendHtml(res, 200, procedureLinksPage(queryProcedureLinks(params, saved)));
     }
 
     if (req.method === "GET" && url.pathname === "/orders") {
@@ -1198,6 +1209,7 @@ function viewTitle(viewName) {
     sales_orders: "销售订单",
     procedure_plans: "派工/工序",
     matched_orders: "已关联订单",
+    manual_matched_orders: "人工绑定",
     exact_matched_orders: "精确匹配",
     assisted_matched_orders: "辅助匹配",
     sales_orders_without_procedure: "无派工订单",
@@ -1285,11 +1297,14 @@ function labelFor(key) {
     matched_by: "匹配方式",
     sales_orders: "销售订单数",
     matched_orders: "已关联订单",
+    manual_matched_orders: "人工绑定",
     exact_matched_orders: "订单号匹配",
     assisted_matched_orders: "辅助匹配",
     sales_orders_without_procedure: "未关联工序订单",
     unmatched_procedure_plans: "未关联派工",
     match_rate: "匹配率",
+    reason: "原因",
+    link_action: "人工绑定",
     receipt_no: "入库单号",
     quantity: "数量",
     warehouse_keeper: "库管员",
@@ -1566,6 +1581,7 @@ function pmcConsolePage(body) {
       </div>
       <div class="actions">
         ${ownerFilter ? '<a class="button" href="/pmc?rebuild=1">返回全局</a>' : ""}
+        <a class="button" href="/procedure-links">人工绑定派工</a>
         <a class="button primary" href="/pmc?rebuild=1">从 SQLite 重新生成</a>
       </div>
     </header>
@@ -1592,9 +1608,9 @@ function pmcConsolePage(body) {
     </section>
     <div class="zone-title">订单作战地图</div>
     <section class="risk-board">
-      ${pmcTablePanel("订单-工序覆盖率", body.sections.order_procedure_coverage, ["sales_orders", "procedure_plans", "matched_orders", "exact_matched_orders", "assisted_matched_orders", "sales_orders_without_procedure", "unmatched_procedure_plans", "match_rate"], "warning")}
+      ${pmcTablePanel("订单-工序覆盖率", body.sections.order_procedure_coverage, ["sales_orders", "procedure_plans", "matched_orders", "manual_matched_orders", "exact_matched_orders", "assisted_matched_orders", "sales_orders_without_procedure", "unmatched_procedure_plans", "match_rate"], "warning")}
       ${pmcTablePanel("匹配明细", body.sections.order_procedure_matches, ["order_no", "product_name", "work_assignment_id", "procedure_name", "planned_finish_date", "matched_by"], "neutral")}
-      ${pmcTablePanel("未关联派工", body.sections.unmatched_procedure_plans, ["work_assignment_id", "order_no", "product_name", "procedure_name", "work_center_name", "remaining_qty", "reason"], "warning")}
+      ${pmcTablePanel("未关联派工", body.sections.unmatched_procedure_plans, ["work_assignment_id", "order_no", "product_name", "procedure_name", "work_center_name", "remaining_qty", "reason", "link_action"], "warning")}
     </section>
     <section class="battle-grid">
       ${pmcBattleMapPanel(body.sections.order_battle_map, body.sections.order_battle_stages)}
@@ -1711,6 +1727,9 @@ function formatPmcCell(row, column) {
     const owner = row?.owner_link || row?.owner || "";
     if (!owner) return "";
     return `<a class="mini-button" href="/pmc?rebuild=1&owner=${encodeURIComponent(owner)}">进入</a>`;
+  }
+  if (column === "link_action" && row?.link_action) {
+    return `<a class="mini-button" href="${escapeHtml(row.link_action)}">绑定</a>`;
   }
   if (column === "intervention_state") {
     return escapeHtml(row?.intervention_state || "待处理");
@@ -1843,6 +1862,81 @@ function interventionTemplate(params = {}) {
     return `内部协调：\n${relatedNo} 需处理 ${riskType}：${problem}。\n建议动作：${params.primary_action || action}。\n请责任部门确认资源、完成时间和对交期的影响。`;
   }
   return `${relatedNo} ${riskType}：${problem}\n处理动作：${action}\n建议：${params.primary_action || "请确认责任人、处理时限和下一步结果。"}`;
+}
+
+function queryProcedureLinks(params = {}, saved = null) {
+  const limit = clampInt(params.local_limit || 5000, 1, 5000);
+  const salesOrders = listSalesOrders({ limit });
+  const procedurePlans = listProcedurePlans({ limit });
+  const procedureLinks = listOrderProcedureLinks({ limit: 1000 });
+  const dashboard = buildLocalPmcDashboard({
+    today: new Date(),
+    salesOrders,
+    procedurePlans,
+    procedureLinks
+  });
+  return {
+    params,
+    saved,
+    summary: {
+      sales_orders: salesOrders.length,
+      procedure_plans: procedurePlans.length,
+      links: procedureLinks.length,
+      unmatched_procedure_plans: dashboard.sections.unmatched_procedure_plans.length,
+      match_rate: dashboard.summary.procedure_order_match_rate
+    },
+    links: procedureLinks,
+    unmatched: dashboard.sections.unmatched_procedure_plans,
+    orders: salesOrders.slice(0, 80)
+  };
+}
+
+function procedureLinksPage(body) {
+  return modulePage({
+    title: "派工人工绑定",
+    subtitle: "用于把缺少订单号的派工进度记录手工关联到销售订单。只写入本地 SQLite，不回写 ERP。",
+    summary: [
+      ["销售订单", body.summary.sales_orders],
+      ["派工记录", body.summary.procedure_plans],
+      ["已绑定", body.summary.links],
+      ["未关联派工", body.summary.unmatched_procedure_plans],
+      ["匹配率", `${body.summary.match_rate}%`]
+    ],
+    panels: [
+      body.saved ? procedureLinkSavedPanel(body.saved) : "",
+      procedureLinkFormPanel(body.params),
+      modulePanel("已绑定关系", body.links, ["order_no", "work_assignment_id", "procedure_name", "product_name", "reason", "actor", "created_at"], { fullWidth: true }),
+      modulePanel("待绑定派工", body.unmatched, ["work_assignment_id", "order_no", "product_name", "procedure_name", "work_center_name", "remaining_qty", "reason", "link_action"], { fullWidth: true }),
+      modulePanel("销售订单参考", body.orders, ["order_no", "customer", "owner", "product_name", "remaining_qty", "delivery_date"], { fullWidth: true })
+    ].filter(Boolean),
+    notes: [
+      "优先绑定派工单ID为空订单号、但现场能确认归属订单的记录。",
+      "绑定后返回 PMC 页面点击“从 SQLite 重新生成”，订单-工序覆盖率和匹配明细会使用人工绑定结果。"
+    ],
+    actions: [["返回PMC作战台", "/pmc?rebuild=1"]]
+  });
+}
+
+function procedureLinkSavedPanel(saved) {
+  return `<section class="panel full-width"><h2>已保存 <span class="pill">${escapeHtml(saved.id)}</span></h2><div class="empty">已把派工单 ${escapeHtml(saved.work_assignment_id)} 绑定到订单 ${escapeHtml(saved.order_no)}。请返回 PMC 重新生成页面查看结果。</div></section>`;
+}
+
+function procedureLinkFormPanel(params = {}) {
+  const inputStyle = "width:100%;min-height:36px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text);font-size:14px;";
+  const labelStyle = "display:block;margin-bottom:6px;color:var(--muted);font-size:13px;";
+  const field = (name, label, value = "") => `<label><span style="${labelStyle}">${escapeHtml(label)}</span><input style="${inputStyle}" name="${escapeHtml(name)}" value="${escapeHtml(value)}"></label>`;
+  return `<section class="panel full-width">
+    <h2>新增绑定</h2>
+    <form action="/procedure-links/save" method="get" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;padding:14px 16px;align-items:end;">
+      ${field("order_no", "销售订单号", params.order_no || "")}
+      ${field("work_assignment_id", "派工单ID", params.work_assignment_id || "")}
+      ${field("procedure_name", "工序", params.procedure_name || "")}
+      ${field("product_name", "产品名称", params.product_name || "")}
+      ${field("reason", "绑定原因", params.reason || "人工确认归属订单")}
+      ${field("actor", "操作人", params.actor || "内网用户")}
+      <button class="button primary" type="submit" style="min-height:36px;cursor:pointer;">保存绑定</button>
+    </form>
+  </section>`;
 }
 
 async function queryOrderCenter(params = {}) {
@@ -2758,6 +2852,9 @@ function formatDetailCell(column, value, row = {}) {
   if (column === "owner_link") {
     const owner = row?.owner_link || row?.owner || "";
     return owner ? `<a href="/followup?owner=${encodeURIComponent(owner)}">进入</a>` : "";
+  }
+  if (column === "link_action" && value) {
+    return `<a class="button" href="${escapeHtml(value)}">绑定</a>`;
   }
   if (["quantity", "demand_qty", "delivered_qty", "remaining_qty", "available_qty", "stock_qty", "shortage_qty", "planned_qty", "finished_qty"].includes(column)) {
     return escapeHtml(formatPmcQuantity(value, row?.unit || row?.raw?.unit || row?.raw?.raw?.Unit || row?.raw?.raw?.单位));
@@ -5580,6 +5677,7 @@ function queryLocalPmcDashboard(params = {}) {
   const materialAlerts = listMaterialAlerts({ limit });
   const quoteFollowups = listQuoteFollowups({ limit });
   const procedurePlans = listProcedurePlans({ limit });
+  const procedureLinks = listOrderProcedureLinks({ limit });
   const financeRows = listFinanceRecords({ limit });
   return buildLocalPmcDashboard({
     today: params.today ? new Date(params.today) : new Date(),
@@ -5588,6 +5686,7 @@ function queryLocalPmcDashboard(params = {}) {
     materialAlerts,
     quoteFollowups,
     procedurePlans,
+    procedureLinks,
     financeRows
   });
 }

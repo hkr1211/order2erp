@@ -219,6 +219,28 @@ test("buildLocalPmcDashboard supports conservative assisted order-procedure matc
   assert.equal(body.sections.unmatched_procedure_plans[0].work_assignment_id, "W-B");
 });
 
+test("buildLocalPmcDashboard applies manual order-procedure links", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-24T08:00:00+08:00"),
+    salesOrders: [
+      { order_no: "PO-100", customer: "客户A", product_name: "钽杯", delivery_date: "2026-06-10" }
+    ],
+    procedurePlans: [
+      { work_assignment_id: "W-A", order_no: "", product_name: "现场描述不一致", procedure_name: "落料", remaining_qty: 10, planned_finish_date: "2026-05-28" }
+    ],
+    procedureLinks: [
+      { order_no: "PO-100", work_assignment_id: "W-A", procedure_name: "落料", actor: "PMC" }
+    ]
+  });
+
+  assert.equal(body.summary.procedure_order_match_rate, 100);
+  assert.equal(body.summary.manual_matched_orders, 1);
+  assert.equal(body.sections.order_procedure_coverage[0].manual_matched_orders, 1);
+  assert.equal(body.sections.order_procedure_matches[0].matched_by, "人工绑定");
+  assert.equal(body.sections.order_procedure_matches[0].order_no, "PO-100");
+  assert.equal(body.sections.unmatched_procedure_plans.length, 0);
+});
+
 test("buildLocalFinanceCenter summarizes receivables and payables by risk", () => {
   const today = new Date("2026-05-23T08:00:00+08:00");
   const receivable = mapFinanceRowForLocal({

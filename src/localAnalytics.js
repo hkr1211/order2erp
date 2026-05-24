@@ -1,4 +1,4 @@
-export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], quoteFollowups = [], procedurePlans = [], financeRows = [], today = new Date(), owner = "" } = {}) {
+export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], quoteFollowups = [], procedurePlans = [], procedureLinks = [], financeRows = [], today = new Date(), owner = "" } = {}) {
   const day = startOfDay(today);
   const monthStart = new Date(day.getFullYear(), day.getMonth(), 1);
   const monthEnd = new Date(day.getFullYear(), day.getMonth() + 1, 0);
@@ -28,7 +28,7 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
   const stampingDelayedProcedures = delayedProcedures.filter(isStampingProcedure);
   const financeCenter = buildLocalFinanceCenter({ financeRows: scopedFinanceRows });
   const orderBattle = buildOrderBattleMap(normalizedProcedures, day);
-  const procedureCoverage = buildOrderProcedureCoverage(normalizedOrders, normalizedProcedures);
+  const procedureCoverage = buildOrderProcedureCoverage(normalizedOrders, normalizedProcedures, procedureLinks);
   const priorityRisks = [
     ...delayedProcedureTasks(stampingDelayedProcedures, "冲压延期"),
     ...shortageTasks(shortageRows),
@@ -84,6 +84,7 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
       battle_map_yellow_nodes: orderBattle.yellow_nodes,
       procedure_order_match_rate: procedureCoverage.match_rate,
       unmatched_procedure_plans: procedureCoverage.unmatched_procedure_plans.length,
+      manual_matched_orders: procedureCoverage.manual_matched_orders,
       assisted_matched_orders: procedureCoverage.assisted_matched_orders,
       overdue_receivables: financeCenter.summary.overdue_receivables,
       due_soon_payables: financeCenter.summary.due_soon_payables
@@ -617,7 +618,7 @@ function battleProblemText(status, row) {
   return "";
 }
 
-function buildOrderProcedureCoverage(orders, procedures) {
+function buildOrderProcedureCoverage(orders, procedures, procedureLinks = []) {
   const orderNos = new Set(orders.map((row) => normalizeKey(row.order_no)).filter(Boolean));
   const orderByNo = new Map(orders.map((row) => [normalizeKey(row.order_no), row]).filter(([key]) => Boolean(key)));
   const matchedOrderNos = new Set();
@@ -625,10 +626,21 @@ function buildOrderProcedureCoverage(orders, procedures) {
   const matches = [];
 
   procedures.forEach((row, index) => {
+    const link = findManualProcedureLink(row, procedureLinks);
+    const orderNo = normalizeKey(link?.order_no);
+    if (!orderNo || !orderByNo.has(orderNo)) return;
+    matchedOrderNos.add(orderNo);
+    matchedProcedureKeys.add(procedureKey(row, index));
+    matches.push(matchRow(orderByNo.get(orderNo), row, "人工绑定"));
+  });
+
+  procedures.forEach((row, index) => {
+    const key = procedureKey(row, index);
+    if (matchedProcedureKeys.has(key)) return;
     const orderNo = normalizeKey(row.order_no);
     if (orderNo && orderByNo.has(orderNo)) {
       matchedOrderNos.add(orderNo);
-      matchedProcedureKeys.add(procedureKey(row, index));
+      matchedProcedureKeys.add(key);
       matches.push(matchRow(orderByNo.get(orderNo), row, "订单号精确匹配"));
     }
   });
@@ -655,15 +667,18 @@ function buildOrderProcedureCoverage(orders, procedures) {
       work_center_name: row.work_center_name,
       remaining_qty: row.remaining_qty,
       planned_finish_date: row.planned_finish_date,
-      reason: unmatchedProcedureReason(row, orderNos)
+      reason: unmatchedProcedureReason(row, orderNos),
+      link_action: procedureLinkHref(row)
     }))
     .slice(0, 30);
   const salesOrdersWithoutProcedure = orders.filter((row) => !matchedOrderNos.has(normalizeKey(row.order_no))).length;
+  const manualMatches = matches.filter((row) => row.matched_by === "人工绑定").length;
   const assistedMatches = matches.filter((row) => row.matched_by === "产品+日期辅助匹配").length;
   const exactMatches = matches.filter((row) => row.matched_by === "订单号精确匹配").length;
   const matchRate = orderNos.size ? Number(((matchedOrderNos.size / orderNos.size) * 100).toFixed(1)) : 0;
   return {
     match_rate: matchRate,
+    manual_matched_orders: manualMatches,
     assisted_matched_orders: assistedMatches,
     unmatched_procedure_plans: unmatchedProcedures,
     matches: matches.slice(0, 30),
@@ -671,6 +686,7 @@ function buildOrderProcedureCoverage(orders, procedures) {
       sales_orders: orderNos.size,
       procedure_plans: procedures.length,
       matched_orders: matchedOrderNos.size,
+      manual_matched_orders: manualMatches,
       exact_matched_orders: exactMatches,
       assisted_matched_orders: assistedMatches,
       sales_orders_without_procedure: salesOrdersWithoutProcedure,
@@ -678,6 +694,25 @@ function buildOrderProcedureCoverage(orders, procedures) {
       match_rate: matchRate
     }
   };
+}
+
+function findManualProcedureLink(procedure, links) {
+  const workAssignmentId = normalizeKey(procedure.work_assignment_id);
+  if (!workAssignmentId || !Array.isArray(links)) return null;
+  const procedureName = productMatchKey(procedure.procedure_name);
+  return links.find((link) => {
+    if (normalizeKey(link.work_assignment_id) !== workAssignmentId) return false;
+    const linkedProcedure = productMatchKey(link.procedure_name);
+    return !linkedProcedure || linkedProcedure === procedureName;
+  }) || null;
+}
+
+function procedureLinkHref(row) {
+  const params = new URLSearchParams();
+  params.set("work_assignment_id", row.work_assignment_id || "");
+  params.set("procedure_name", row.procedure_name || "");
+  params.set("product_name", row.product_name || "");
+  return `/procedure-links?${params.toString()}`;
 }
 
 function findAssistedOrderMatch(procedure, orders, alreadyMatchedOrderNos) {

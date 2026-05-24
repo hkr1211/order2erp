@@ -128,3 +128,27 @@ test("excluded quote followups do not return after replacement sync", async () =
   assert.equal(exclusions[0].quote_no, "XM_2022051001");
   assert.equal(exclusions[0].reason, "2022年历史项目，不进入待报价池");
 });
+
+test("order procedure links can be saved and listed from SQLite", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "procedure-links-"));
+  process.env.PMC_DB_PATH = path.join(tempDir, "pmc.db");
+  const modulePath = `../src/localDb.js?procedureLinks=${Date.now()}`;
+  const { listOrderProcedureLinks, saveOrderProcedureLink } = await import(modulePath);
+
+  const saved = saveOrderProcedureLink({
+    order_no: "PO-100",
+    work_assignment_id: "W-A",
+    procedure_name: "落料",
+    product_name: "钽杯",
+    reason: "现场确认归属订单",
+    actor: "PMC"
+  });
+
+  const rows = listOrderProcedureLinks({ limit: 10 });
+
+  assert.ok(saved.id > 0);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].order_no, "PO-100");
+  assert.equal(rows[0].work_assignment_id, "W-A");
+  assert.equal(rows[0].reason, "现场确认归属订单");
+});
