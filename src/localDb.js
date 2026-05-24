@@ -179,7 +179,16 @@ export function initLocalDb(dbPath = process.env.PMC_DB_PATH || DEFAULT_DB_PATH)
       raw_json TEXT NOT NULL,
       synced_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS local_user_roles (
+      name TEXT PRIMARY KEY,
+      role TEXT NOT NULL,
+      is_followup INTEGER NOT NULL DEFAULT 1,
+      note TEXT,
+      updated_at TEXT NOT NULL
+    );
   `);
+  seedDefaultLocalUserRoles(db);
   return db;
 }
 
@@ -328,6 +337,32 @@ export function listOrderProcedureLinks({ limit = 200 } = {}) {
        ORDER BY created_at DESC, id DESC
        LIMIT ?`
     )
+    .all(safeLimit);
+}
+
+export function saveLocalUserRole(entry = {}) {
+  const database = initLocalDb();
+  const name = String(entry.name || "").trim();
+  if (!name) {
+    throw new Error("name is required");
+  }
+  const payload = {
+    name,
+    role: String(entry.role || "未分类").trim() || "未分类",
+    is_followup: entry.is_followup === false || Number(entry.is_followup) === 0 ? 0 : 1,
+    note: String(entry.note || "").trim(),
+    updated_at: entry.updated_at || new Date().toISOString()
+  };
+  database
+    .prepare("INSERT OR REPLACE INTO local_user_roles (name, role, is_followup, note, updated_at) VALUES (?, ?, ?, ?, ?)")
+    .run(payload.name, payload.role, payload.is_followup, payload.note, payload.updated_at);
+  return payload;
+}
+
+export function listLocalUserRoles({ limit = 200 } = {}) {
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 200, 1000));
+  return initLocalDb()
+    .prepare("SELECT name, role, is_followup, note, updated_at FROM local_user_roles ORDER BY is_followup ASC, role, name LIMIT ?")
     .all(safeLimit);
 }
 
@@ -606,6 +641,16 @@ function assertSafeIdentifier(value) {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(value))) {
     throw new Error(`Unsafe SQLite identifier: ${value}`);
   }
+}
+
+function seedDefaultLocalUserRoles(database) {
+  const existing = database.prepare("SELECT name FROM local_user_roles WHERE name = ?").get("葛梓");
+  if (existing) {
+    return;
+  }
+  database
+    .prepare("INSERT INTO local_user_roles (name, role, is_followup, note, updated_at) VALUES (?, ?, ?, ?, ?)")
+    .run("葛梓", "财务经理", 0, "财务应收负责人，不进入跟单员工作台", new Date().toISOString());
 }
 
 function insertSalesOrders(database, rows) {

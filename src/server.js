@@ -4,7 +4,7 @@ import { ErpClient, ERP_VIEWS, normalizeTable, toBusinessView } from "./erpClien
 import { queryOrderDeliveryRisks } from "./orderDeliveryRisks.js";
 import { queryOrderShortages } from "./orderShortages.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
-import { finishHistorySyncRun, initLocalDb, latestErpRequestLogs, latestHistorySyncRuns, latestPmcInterventions, latestPmcInterventionsByRelatedNos, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listMaterialAlerts, listOrderProcedureLinks, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, pmcInterventionSummary, saveOrderProcedureLink, savePmcIntervention, savePmcSnapshot, startHistorySyncRun, tableStats } from "./localDb.js";
+import { finishHistorySyncRun, initLocalDb, latestErpRequestLogs, latestHistorySyncRuns, latestPmcInterventions, latestPmcInterventionsByRelatedNos, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listLocalUserRoles, listMaterialAlerts, listOrderProcedureLinks, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, pmcInterventionSummary, saveOrderProcedureLink, savePmcIntervention, savePmcSnapshot, startHistorySyncRun, tableStats } from "./localDb.js";
 import { syncCoreData } from "./syncService.js";
 import { buildSyncPolicyRows } from "./syncPolicy.js";
 import { buildErpHealthSummary, shouldBlockErpBusinessQuery } from "./erpHealth.js";
@@ -213,6 +213,10 @@ const server = http.createServer(async (req, res) => {
       const params = Object.fromEntries(url.searchParams);
       const result = await querySystemStatus(params);
       return sendHtml(res, 200, systemStatusPage(result.body));
+    }
+
+    if (req.method === "GET" && url.pathname === "/user-roles") {
+      return sendHtml(res, 200, userRolesPage(queryUserRoles().body));
     }
 
     if (req.method === "GET" && url.pathname === "/sqlite-coverage") {
@@ -653,7 +657,7 @@ function normalizeNavPath(value) {
   if (path.startsWith("/reports/")) {
     return "/reports";
   }
-  if (path === "/sqlite-coverage" || path.startsWith("/history-sync") || path === "/erp-logs") {
+  if (path === "/sqlite-coverage" || path.startsWith("/history-sync") || path === "/erp-logs" || path === "/user-roles") {
     return "/system";
   }
   return path;
@@ -1324,6 +1328,11 @@ function labelFor(key) {
   const labels = {
     section: "分区",
     role: "角色",
+    name: "姓名",
+    is_followup: "是否跟单",
+    followup_text: "是否跟单",
+    detected_from: "识别来源",
+    configured: "配置状态",
     focus: "工作重点",
     primary_action: "建议动作",
     entry_1: "入口1",
@@ -6009,6 +6018,7 @@ async function querySystemStatus(params = {}) {
             }]
           : [],
         modules: modules.map(([name, path, status]) => ({ name, path, status })),
+        user_roles: listLocalUserRoles({ limit: 20 }),
         sync_runs: syncRuns,
         sync_policy: syncPolicyRows
       },
@@ -6054,6 +6064,7 @@ function systemStatusPage(body) {
       modulePanel("同步策略", body.sections.sync_policy, ["label", "recommended_interval", "risk_level", "last_status", "last_rows", "last_finished_at", "next_allowed_at", "health_status", "action"]),
       modulePanel("最近同步状态", body.sections.sync_runs, ["source_key", "started_at", "finished_at", "status", "rows_synced", "error_message"]),
       modulePanel("系统工具", systemToolRows(), ["tool_name", "tool_path", "tool_desc"]),
+      modulePanel("本地角色配置", body.sections.user_roles, ["name", "role", "is_followup", "note", "updated_at"]),
       modulePanel("业务入口状态", body.sections.modules, ["name", "path", "status"])
     ],
     notes: body.notes,
@@ -6061,6 +6072,7 @@ function systemStatusPage(body) {
       ...(body.summary.sync_paused === "已暂停" ? [["恢复同步", "/sync-pause?state=off"]] : [["暂停同步", "/sync-pause?state=on"]]),
       ["谨慎同步订单20条", "/sync?sources=sales_orders&pagesize=20"],
       ["检测ERP登录", "/system?check_erp=1"],
+      ["角色配置", "/user-roles"],
       ["ERP请求日志", "/erp-logs"],
       ["刷新状态", "/system"],
       ["PMC驾驶舱", "/pmc"]
@@ -6068,8 +6080,76 @@ function systemStatusPage(body) {
   });
 }
 
+function queryUserRoles() {
+  const dashboard = queryLocalPmcDashboard({ local_limit: 5000 });
+  const configuredRoles = listLocalUserRoles({ limit: 500 });
+  const detectedOwners = dashboard?.sections?.owner_workbenches || [];
+  const configuredNames = new Set(configuredRoles.map((row) => row.name));
+  const detectedRows = detectedOwners.map((row) => ({
+    name: row.owner,
+    detected_from: "跟单负责人池",
+    active_orders: row.active_orders,
+    shortage_orders: row.shortage_orders,
+    pending_quotes: row.pending_quotes,
+    open_procedures: row.open_procedures,
+    todos: row.todos,
+    configured: configuredNames.has(row.owner) ? "已配置" : "自动识别"
+  }));
+  return {
+    header: { status: 0, message: "ok" },
+    body: {
+      model: "user_roles",
+      generated_at: new Date().toISOString(),
+      summary: {
+        configured_roles: configuredRoles.length,
+        non_followup_roles: configuredRoles.filter((row) => Number(row.is_followup) === 0).length,
+        detected_followup_owners: detectedRows.length
+      },
+      sections: {
+        configured_roles: configuredRoles.map((row) => ({
+          ...row,
+          followup_text: Number(row.is_followup) === 0 ? "否" : "是"
+        })),
+        detected_followup_owners: detectedRows
+      },
+      notes: [
+        "本页读取 SQLite local_user_roles 表，用于修正 ERP 字段里混入的非跟单人员。",
+        "当前先提供只读检查入口；后续可增加页面表单，直接在浏览器里维护角色。",
+        "默认已将葛梓配置为财务经理/非跟单。"
+      ]
+    }
+  };
+}
+
+function userRolesPage(body) {
+  return modulePage({
+    title: "本地角色配置",
+    subtitle: "维护内网免登录版的人员角色覆盖规则，防止财务/管理人员误入跟单员工作台。",
+    summary: [
+      ["已配置人员", body.summary.configured_roles],
+      ["非跟单人员", body.summary.non_followup_roles],
+      ["识别到跟单负责人", body.summary.detected_followup_owners]
+    ],
+    panels: [
+      modulePanel("本地角色配置", body.sections.configured_roles, ["name", "role", "followup_text", "note", "updated_at"], { fullWidth: true }),
+      modulePanel("当前跟单负责人池", body.sections.detected_followup_owners, ["name", "configured", "active_orders", "shortage_orders", "pending_quotes", "open_procedures", "todos"], { fullWidth: true })
+    ],
+    notes: body.notes,
+    actions: [
+      ["系统状态", "/system"],
+      ["跟单工作台", "/followup"],
+      ["角色工作台", "/roles"]
+    ]
+  });
+}
+
 function systemToolRows() {
   return [
+    {
+      tool_name: "本地角色配置",
+      tool_path: "/user-roles",
+      tool_desc: "查看本地人员角色覆盖规则，避免财务/管理人员误入跟单工作台。"
+    },
     {
       tool_name: "SQLite 数据覆盖率",
       tool_path: "/sqlite-coverage",
@@ -6209,6 +6289,7 @@ function queryLocalPmcDashboard(params = {}) {
   const procedurePlans = listProcedurePlans({ limit });
   const procedureLinks = listOrderProcedureLinks({ limit });
   const financeRows = listFinanceRecords({ limit });
+  const userRoles = listLocalUserRoles({ limit });
   return buildLocalPmcDashboard({
     today: params.today ? new Date(params.today) : new Date(),
     owner: params.owner,
@@ -6217,7 +6298,8 @@ function queryLocalPmcDashboard(params = {}) {
     quoteFollowups,
     procedurePlans,
     procedureLinks,
-    financeRows
+    financeRows,
+    userRoles
   });
 }
 

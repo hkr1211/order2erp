@@ -186,3 +186,26 @@ test("order procedure links can be saved and listed from SQLite", async () => {
   assert.equal(rows[0].work_assignment_id, "W-A");
   assert.equal(rows[0].reason, "现场确认归属订单");
 });
+
+test("local user roles can mark finance staff as non-followup", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-user-roles-"));
+  process.env.PMC_DB_PATH = path.join(tempDir, "pmc.db");
+  const modulePath = `../src/localDb.js?userRoles=${Date.now()}`;
+  const { listLocalUserRoles, saveLocalUserRole } = await import(modulePath);
+
+  saveLocalUserRole({
+    name: "葛梓",
+    role: "财务经理",
+    is_followup: 0,
+    note: "财务应收负责人，不进入跟单员工作台",
+    updated_at: "2026-05-24T09:00:00.000Z"
+  });
+
+  const rows = listLocalUserRoles({ limit: 10 });
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].name, "葛梓");
+  assert.equal(rows[0].role, "财务经理");
+  assert.equal(rows[0].is_followup, 0);
+  assert.equal(rows[0].note, "财务应收负责人，不进入跟单员工作台");
+});

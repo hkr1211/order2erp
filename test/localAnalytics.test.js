@@ -160,6 +160,9 @@ test("buildLocalPmcDashboard filters a merchandiser workbench by owner", () => {
 test("buildLocalPmcDashboard excludes finance and completed orders from followup owners", () => {
   const body = buildLocalPmcDashboard({
     today: new Date("2026-05-24T08:00:00+08:00"),
+    userRoles: [
+      { name: "葛梓", role: "财务经理", is_followup: 0 }
+    ],
     salesOrders: [
       { order_no: "PO-FIN", customer: "客户A", owner: "葛梓", product_name: "来料加工", signed_date: "2026-02-28", status_text: "出库完毕 / 发货完毕 / 未收款 / 审批通过" },
       { order_no: "PO-DONE", customer: "客户B", owner: "李四", product_name: "钼板", signed_date: "2026-05-01", status_text: "发货完毕 / 已收款" },
@@ -172,6 +175,24 @@ test("buildLocalPmcDashboard excludes finance and completed orders from followup
   assert.equal(owners.includes("葛梓"), false);
   assert.equal(owners.includes("李四"), false);
   assert.equal(owners.includes("张三"), true);
+});
+
+test("buildLocalPmcDashboard uses local role config to exclude non-followup owners", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-24T08:00:00+08:00"),
+    userRoles: [
+      { name: "王财务", role: "财务", is_followup: 0 }
+    ],
+    salesOrders: [
+      { order_no: "PO-FIN-OPEN", customer: "客户A", owner: "王财务", product_name: "钼板", delivery_date: "2026-05-29", signed_date: "2026-05-01", status_text: "生产中" },
+      { order_no: "PO-SALES-OPEN", customer: "客户B", owner: "赵跟单", product_name: "钽杯", delivery_date: "2026-05-29", signed_date: "2026-05-01", status_text: "生产中" }
+    ]
+  });
+
+  const owners = body.sections.owner_workbenches.map((row) => row.owner);
+
+  assert.equal(owners.includes("王财务"), false);
+  assert.equal(owners.includes("赵跟单"), true);
 });
 
 test("buildLocalPmcDashboard builds an order battle map from procedure stages", () => {

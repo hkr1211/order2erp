@@ -1,9 +1,9 @@
-export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], quoteFollowups = [], procedurePlans = [], procedureLinks = [], financeRows = [], today = new Date(), owner = "" } = {}) {
+export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], quoteFollowups = [], procedurePlans = [], procedureLinks = [], financeRows = [], userRoles = [], today = new Date(), owner = "" } = {}) {
   const day = startOfDay(today);
   const monthStart = new Date(day.getFullYear(), day.getMonth(), 1);
   const monthEnd = new Date(day.getFullYear(), day.getMonth() + 1, 0);
   const ownerFilter = String(owner || "").trim();
-  const ownerWorkbenches = buildOwnerWorkbenches({ salesOrders, materialAlerts, quoteFollowups, procedurePlans });
+  const ownerWorkbenches = buildOwnerWorkbenches({ salesOrders, materialAlerts, quoteFollowups, procedurePlans, userRoles });
   const orderOwnerByNo = new Map(salesOrders.map((row) => [row.order_no, row.owner || "未分配"]).filter(([orderNo]) => orderNo));
   const scopedSalesOrders = ownerFilter ? salesOrders.filter((row) => ownerMatches(row.owner, ownerFilter)) : salesOrders;
   const scopedMaterialAlerts = ownerFilter
@@ -260,30 +260,31 @@ export function quoteOwnerSummaryForLocal(rows) {
     .slice(0, 20);
 }
 
-function buildOwnerWorkbenches({ salesOrders = [], materialAlerts = [], quoteFollowups = [], procedurePlans = [] } = {}) {
+function buildOwnerWorkbenches({ salesOrders = [], materialAlerts = [], quoteFollowups = [], procedurePlans = [], userRoles = [] } = {}) {
   const grouped = new Map();
   const orderOwnerByNo = new Map();
+  const roleByOwner = userRoleMap(userRoles);
   for (const row of salesOrders) {
     const owner = row.owner || "未分配";
-    if (!isFollowupOwner(owner) || isCompletedForFollowup(row)) continue;
+    if (!isFollowupOwner(owner, roleByOwner) || isCompletedForFollowup(row)) continue;
     if (row.order_no) orderOwnerByNo.set(row.order_no, owner);
     const current = ownerWorkbenchRow(grouped, owner);
     current.active_orders += 1;
   }
   for (const row of materialAlerts.filter((item) => item.alert_type === "shortage")) {
     const owner = row.owner || orderOwnerByNo.get(row.order_no) || "未分配";
-    if (!isFollowupOwner(owner)) continue;
+    if (!isFollowupOwner(owner, roleByOwner)) continue;
     ownerWorkbenchRow(grouped, owner).shortage_orders += 1;
   }
   for (const row of quoteFollowups) {
     const owner = row.owner || "未分配";
-    if (!isFollowupOwner(owner)) continue;
+    if (!isFollowupOwner(owner, roleByOwner)) continue;
     const current = ownerWorkbenchRow(grouped, owner);
     if (row.quote_status !== "已报价待确认") current.pending_quotes += 1;
   }
   for (const row of procedurePlans) {
     const owner = row.owner || orderOwnerByNo.get(row.order_no) || "未分配";
-    if (!isFollowupOwner(owner)) continue;
+    if (!isFollowupOwner(owner, roleByOwner)) continue;
     const current = ownerWorkbenchRow(grouped, owner);
     current.procedure_plans += 1;
     if ((number(row.remaining_qty) || 0) > 0) current.open_procedures += 1;
@@ -317,11 +318,16 @@ function ownerMatches(value, ownerFilter) {
   return (value || "未分配") === ownerFilter;
 }
 
-const NON_FOLLOWUP_OWNERS = new Set(["葛梓"]);
+function userRoleMap(userRoles = []) {
+  return new Map(userRoles.map((row) => [String(row.name || "").trim(), row]).filter(([name]) => name));
+}
 
-function isFollowupOwner(owner) {
+function isFollowupOwner(owner, roleByOwner = new Map()) {
   const name = String(owner || "").trim();
-  return Boolean(name) && name !== "未分配" && !NON_FOLLOWUP_OWNERS.has(name);
+  if (!name || name === "未分配") return false;
+  const role = roleByOwner.get(name);
+  if (role && Number(role.is_followup) === 0) return false;
+  return true;
 }
 
 function isCompletedForFollowup(row) {
