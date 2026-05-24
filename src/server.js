@@ -924,9 +924,6 @@ function apiResultPage(payload, url) {
   const summary = getSummary(business);
   const columns = getDisplayColumns(rows);
   const title = viewTitle(payload.view);
-  const jsonSearch = new URLSearchParams(url.searchParams);
-  jsonSearch.set("format", "json");
-  const jsonUrl = `${url.pathname}?${jsonSearch}`;
 
   return `<!doctype html>
 <html lang="zh-CN">
@@ -988,7 +985,6 @@ function apiResultPage(payload, url) {
       <div class="actions">
         <a class="button" href="/">首页</a>
         <a class="button" href="/views">全部视图</a>
-        <a class="button primary" href="${escapeHtml(jsonUrl)}">查看 JSON</a>
       </div>
     </div>
     ${renderSummary(summary)}
@@ -1488,7 +1484,6 @@ function pmcConsolePage(body) {
         <div class="sub">内网免登录版 · 老板 / PMC / 销售共用 · 更新时间 ${escapeHtml(formatDateTime(body.generated_at))}${body.cached ? " · 读取本地快照" : ""}${ownerFilter ? ` · 跟单员视图：${escapeHtml(ownerFilter)}` : ""}</div>
       </div>
       <div class="actions">
-        <a class="button" href="/api/pmc_console?format=json">查看 JSON</a>
         ${ownerFilter ? '<a class="button" href="/pmc?rebuild=1">返回全局</a>' : ""}
         <a class="button primary" href="/pmc?rebuild=1">从 SQLite 重新生成</a>
       </div>
@@ -2350,7 +2345,6 @@ function orderCenterPage(body, url) {
       <div class="actions">
         <a class="button" href="/sync?sources=sales_orders&pagesize=20">谨慎同步订单20条</a>
         <a class="button" href="/orders?refresh=1">刷新实时订单</a>
-        <a class="button primary" href="${escapeHtml(orderCenterJsonHref(url))}">查看 JSON</a>
       </div>
     </header>
     <section class="toolbar">
@@ -2425,12 +2419,6 @@ function orderPaginationHtml(pagination, queryBase) {
       <a class="button" href="/orders?${escapeHtml(pageSize20.toString())}">每页20条</a>
     </div>
   </section>`;
-}
-
-function orderCenterJsonHref(url) {
-  const params = new URLSearchParams(url.searchParams);
-  params.set("format", "json");
-  return `/api/order_center?${params}`;
 }
 
 function orderCenterRowHtml(row) {
@@ -2575,8 +2563,6 @@ function mapOrderDetailDeliveryRisk(contract, line, today, dueSoonCutoff) {
 function orderDetailPage(body, url) {
   const contract = body.contract || {};
   const title = contract.order_no || `合同 ${body.scan?.ord || ""}`;
-  const jsonParams = new URLSearchParams(url.searchParams);
-  jsonParams.set("format", "json");
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -2627,7 +2613,6 @@ function orderDetailPage(body, url) {
         <div class="sub">订单穿透详情 · 合同 ord ${escapeHtml(body.scan?.ord || "")}</div>
       </div>
       <div class="actions">
-        <a class="button primary" href="/api/order_detail?${escapeHtml(jsonParams.toString())}">查看 JSON</a>
       </div>
     </header>
     <section class="summary">
@@ -3790,6 +3775,7 @@ async function queryReportCenter(params = {}) {
 }
 
 function modulePage({ title, subtitle, summary = [], panels = [], notes = [], actions = [] }) {
+  const visibleActions = actions.filter(([label]) => !/JSON|Jason/i.test(String(label || "")));
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -3848,7 +3834,7 @@ function modulePage({ title, subtitle, summary = [], panels = [], notes = [], ac
         <div class="sub">${escapeHtml(subtitle)}</div>
       </div>
       <div class="actions">
-        ${actions.map(([label, href]) => `<a class="button primary" href="${escapeHtml(href)}">${escapeHtml(label)}</a>`).join("")}
+        ${visibleActions.map(([label, href]) => `<a class="button primary" href="${escapeHtml(href)}">${escapeHtml(label)}</a>`).join("")}
       </div>
     </header>
     <section class="summary">${summary.map(([label, value]) => `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value ?? "")}</strong></div>`).join("")}</section>
@@ -3893,7 +3879,7 @@ function materialControlPage(body) {
       modulePanel("长库龄库存", body.sections.old_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"])
     ],
     notes: body.notes,
-    actions: [["谨慎同步物料20条", "/sync?sources=material_alerts&pagesize=20&scan_size=20&contract_limit=3"], ["刷新实时ERP", "/materials?refresh=1"], ["查看 JSON", "/api/pmc_dashboard?format=json"]]
+    actions: [["谨慎同步物料20条", "/sync?sources=material_alerts&pagesize=20&scan_size=20&contract_limit=3"], ["刷新实时ERP", "/materials?refresh=1"]]
   });
 }
 
@@ -3913,7 +3899,7 @@ function quoteCenterPage(body) {
       modulePanel("负责人汇总", body.sections.owner_summary, ["owner", "quote_followups", "urgent_quotes", "estimated_amount", "max_age_days", "latest_action"])
     ],
     notes: body.notes,
-    actions: [["谨慎同步报价20条", "/sync?sources=quote_projects&pagesize=20&limit=20"], ["刷新实时ERP", "/quotes?refresh=1"], ["查看 JSON", "/api/pending_quotes?format=json&pageindex=1&pagesize=20&limit=20"]]
+    actions: [["谨慎同步报价20条", "/sync?sources=quote_projects&pagesize=20&limit=20"], ["刷新实时ERP", "/quotes?refresh=1"]]
   });
 }
 
