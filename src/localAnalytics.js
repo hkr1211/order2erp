@@ -140,16 +140,23 @@ function buildMorningBrief({ redRisks = [], yellowRisks = [] } = {}) {
     .sort((a, b) => riskLevelWeight(b.risk_level) - riskLevelWeight(a.risk_level) || riskTypeWeight(b.risk_type) - riskTypeWeight(a.risk_type) || String(a.due_date || "").localeCompare(String(b.due_date || "")))
     .slice(0, 6);
 
-  return headlineRows.map((row, index) => ({
-    priority_no: index + 1,
-    risk_level: row.risk_level,
-    headline: `${row.risk_type || "风险"}：${row.problem || row.related_no || "待确认"}`,
-    related_no: row.related_no,
-    owner_role: row.owner_role || "PMC",
-    next_action: row.primary_action || "确认责任人和完成时间",
-    meeting_focus: meetingFocusForRisk(row.risk_type),
-    buttons: Array.isArray(row.buttons) ? row.buttons.slice(0, 3) : ["标记处理中"]
-  }));
+  return headlineRows.map((row, index) => {
+    const buttons = Array.isArray(row.buttons) ? row.buttons.slice(0, 3) : ["标记处理中"];
+    return {
+      priority_no: index + 1,
+      risk_level: row.risk_level,
+      risk_type: row.risk_type,
+      headline: `${row.risk_type || "风险"}：${row.problem || row.related_no || "待确认"}`,
+      problem: row.problem,
+      related_no: row.related_no,
+      owner_role: row.owner_role || "PMC",
+      next_action: row.primary_action || "确认责任人和完成时间",
+      primary_action: row.primary_action,
+      meeting_focus: meetingFocusForRisk(row.risk_type),
+      action_label: buttons[0] || "标记处理中",
+      buttons
+    };
+  });
 }
 
 function riskLevelWeight(level) {

@@ -1283,6 +1283,7 @@ function labelFor(key) {
     risk_level: "风险等级",
     problem: "问题描述",
     rule_reason: "判定原因",
+    morning_action: "处理入口",
     buttons: "干预按钮",
     owner_role: "责任角色",
     action_label: "动作",
@@ -2943,6 +2944,9 @@ function formatDetailCell(column, value, row = {}) {
   }
   if (column === "intervention_action" && value) {
     return `<a class="button" href="${escapeHtml(value)}">处理</a>`;
+  }
+  if (column === "morning_action") {
+    return `<a class="button" href="${escapeHtml(pmcInterventionHref(row, row.action_label || "记录处理"))}">处理</a>`;
   }
   if (column === "intervention_log" && value) {
     return `<a class="button" href="${escapeHtml(value)}">查看</a>`;
@@ -5013,7 +5017,7 @@ function reportCenterPage(body) {
       ["早会重点", body.summary.morning_brief_items || 0]
     ],
     panels: [
-      modulePanel("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "next_action", "meeting_focus"], { fullWidth: true }),
+      modulePanel("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "next_action", "meeting_focus", "morning_action"], { fullWidth: true }),
       modulePanel("风险闭环待办", body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention", "responsible_role", "action"], { fullWidth: true }),
       modulePanel("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "note", "actor"], { fullWidth: true }),
       modulePanel("订单状态样本", body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]),

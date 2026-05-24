@@ -108,6 +108,7 @@ test("buildLocalPmcDashboard groups red and yellow risks with intervention actio
   assert.equal(body.sections.morning_brief[0].risk_level, "红牌");
   assert.equal(body.sections.morning_brief[0].headline.includes("产能瓶颈"), true);
   assert.equal(body.sections.morning_brief[0].meeting_focus, "今天确认产能、班次和外协选择");
+  assert.equal(body.sections.morning_brief[0].action_label, "加班协调");
   assert.equal(body.sections.morning_brief.some((row) => row.buttons.includes("标记处理中")), true);
 });
 
