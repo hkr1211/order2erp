@@ -4038,9 +4038,11 @@ async function queryReportCenter(params = {}) {
             low_stock: consoleBody.summary.low_stock,
             pending_response_tasks: exceptions.summary.pending_response_tasks || 0,
             responded_tasks: exceptions.summary.responded_tasks || 0,
-            today_interventions: interventionSummary.today_actions || 0
+            today_interventions: interventionSummary.today_actions || 0,
+            morning_brief_items: (consoleBody.sections.morning_brief || []).length
           },
           sections: {
+            morning_brief: consoleBody.sections.morning_brief || [],
             order_rows: orderCenter.body.rows,
             pending_quotes: consoleBody.sections.pending_quotes,
             low_stock: consoleBody.sections.low_stock,
@@ -4090,9 +4092,11 @@ async function queryReportCenter(params = {}) {
         low_stock: consoleData.body.summary.low_stock,
         pending_response_tasks: exceptions.summary.pending_response_tasks || 0,
         responded_tasks: exceptions.summary.responded_tasks || 0,
-        today_interventions: interventionSummary.today_actions || 0
+        today_interventions: interventionSummary.today_actions || 0,
+        morning_brief_items: (consoleData.body.sections.morning_brief || []).length
       },
       sections: {
+        morning_brief: consoleData.body.sections.morning_brief || [],
         order_rows: orderCenter.body.rows,
         pending_quotes: quotes.body.rows,
         low_stock: consoleData.body.sections.low_stock,
@@ -5005,9 +5009,11 @@ function reportCenterPage(body) {
       ["低库存", body.summary.low_stock],
       ["待响应风险", body.summary.pending_response_tasks || 0],
       ["已响应风险", body.summary.responded_tasks || 0],
-      ["今日处理", body.summary.today_interventions || 0]
+      ["今日处理", body.summary.today_interventions || 0],
+      ["早会重点", body.summary.morning_brief_items || 0]
     ],
     panels: [
+      modulePanel("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "next_action", "meeting_focus"], { fullWidth: true }),
       modulePanel("风险闭环待办", body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention", "responsible_role", "action"], { fullWidth: true }),
       modulePanel("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "note", "actor"], { fullWidth: true }),
       modulePanel("订单状态样本", body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]),
@@ -5037,7 +5043,8 @@ function reportPrintPage(body) {
     ["低库存", body.summary.low_stock],
     ["待响应风险", body.summary.pending_response_tasks || 0],
     ["已响应风险", body.summary.responded_tasks || 0],
-    ["今日处理", body.summary.today_interventions || 0]
+    ["今日处理", body.summary.today_interventions || 0],
+    ["早会重点", body.summary.morning_brief_items || 0]
   ];
   return `<!doctype html>
 <html lang="zh-CN">
@@ -5091,6 +5098,7 @@ function reportPrintPage(body) {
     <section class="summary">
       ${summaryRows.map(([label, value]) => `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value ?? "")}</strong></div>`).join("")}
     </section>
+    ${printTable("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "next_action", "meeting_focus"])}
     ${printTable("风险闭环待办", body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"])}
     ${printTable("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "note", "actor"])}
     ${printTable("订单状态样本", body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"])}
@@ -5130,9 +5138,11 @@ function reportCenterCsv(body) {
       低库存: body.summary.low_stock,
       待响应风险: body.summary.pending_response_tasks || 0,
       已响应风险: body.summary.responded_tasks || 0,
-      今日处理: body.summary.today_interventions || 0
+      今日处理: body.summary.today_interventions || 0,
+      早会重点: body.summary.morning_brief_items || 0
     })
   ]);
+  appendCsvSection(lines, "今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "next_action", "meeting_focus"]));
   appendCsvSection(lines, "风险闭环待办", tableRowsForCsv(body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"]));
   appendCsvSection(lines, "今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "note", "actor"]));
   appendCsvSection(lines, "订单状态样本", tableRowsForCsv(body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]));
@@ -5156,7 +5166,8 @@ function reportCenterExcel(body) {
     ["低库存", body.summary.low_stock],
     ["待响应风险", body.summary.pending_response_tasks || 0],
     ["已响应风险", body.summary.responded_tasks || 0],
-    ["今日处理", body.summary.today_interventions || 0]
+    ["今日处理", body.summary.today_interventions || 0],
+    ["早会重点", body.summary.morning_brief_items || 0]
   ];
   const generatedAt = formatDateTime(body.generated_at);
   return `<!doctype html>
@@ -5179,6 +5190,7 @@ function reportCenterExcel(body) {
   <h1>蕴杰金属 PMC 日报</h1>
   <div class="meta">生成时间：${escapeHtml(generatedAt)}</div>
   ${excelTable("指标汇总", summaryRows)}
+  ${excelTable("今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "next_action", "meeting_focus"]))}
   ${excelTable("风险闭环待办", tableRowsForCsv(body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"]))}
   ${excelTable("今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "note", "actor"]))}
   ${excelTable("订单状态样本", tableRowsForCsv(body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]))}
