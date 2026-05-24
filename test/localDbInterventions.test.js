@@ -66,3 +66,39 @@ test("PMC intervention summary counts today's actions and recent risk types", as
   assert.equal(summary.by_risk_type.find((row) => row.risk_type === "物料断供").actions, 1);
   assert.equal(summary.by_risk_type.find((row) => row.risk_type === "产能瓶颈").actions, 1);
 });
+
+test("latestPmcInterventionsByRelatedNos returns the latest action for each related number", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pmc-intervention-latest-"));
+  process.env.PMC_DB_PATH = path.join(tempDir, "pmc.db");
+  const modulePath = `../src/localDb.js?latest=${Date.now()}`;
+  const { latestPmcInterventionsByRelatedNos, savePmcIntervention } = await import(modulePath);
+
+  savePmcIntervention({
+    created_at: "2026-05-24T09:00:00.000Z",
+    risk_type: "物料断供",
+    related_no: "PO-1",
+    action_label: "生成催货文本",
+    actor: "PMC"
+  });
+  savePmcIntervention({
+    created_at: "2026-05-24T10:00:00.000Z",
+    risk_type: "物料断供",
+    related_no: "PO-1",
+    action_label: "标记处理中",
+    actor: "PMC经理"
+  });
+  savePmcIntervention({
+    created_at: "2026-05-24T08:00:00.000Z",
+    risk_type: "产能瓶颈",
+    related_no: "PO-2",
+    action_label: "加班协调",
+    actor: "生产经理"
+  });
+
+  const rowsByNo = latestPmcInterventionsByRelatedNos(["PO-1", "PO-2", "PO-3"]);
+
+  assert.equal(rowsByNo.get("PO-1").action_label, "标记处理中");
+  assert.equal(rowsByNo.get("PO-1").actor, "PMC经理");
+  assert.equal(rowsByNo.get("PO-2").action_label, "加班协调");
+  assert.equal(rowsByNo.has("PO-3"), false);
+});

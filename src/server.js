@@ -4,7 +4,7 @@ import { ErpClient, ERP_VIEWS, normalizeTable, toBusinessView } from "./erpClien
 import { queryOrderDeliveryRisks } from "./orderDeliveryRisks.js";
 import { queryOrderShortages } from "./orderShortages.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
-import { finishHistorySyncRun, initLocalDb, latestErpRequestLogs, latestHistorySyncRuns, latestPmcInterventions, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listMaterialAlerts, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, pmcInterventionSummary, savePmcIntervention, savePmcSnapshot, startHistorySyncRun, tableStats } from "./localDb.js";
+import { finishHistorySyncRun, initLocalDb, latestErpRequestLogs, latestHistorySyncRuns, latestPmcInterventions, latestPmcInterventionsByRelatedNos, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listMaterialAlerts, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, pmcInterventionSummary, savePmcIntervention, savePmcSnapshot, startHistorySyncRun, tableStats } from "./localDb.js";
 import { syncCoreData } from "./syncService.js";
 import { buildSyncPolicyRows } from "./syncPolicy.js";
 import { buildErpHealthSummary, shouldBlockErpBusinessQuery } from "./erpHealth.js";
@@ -1194,6 +1194,10 @@ function labelFor(key) {
     note: "备注",
     actor: "处理人",
     actions: "处理次数",
+    latest_intervention: "最近干预",
+    latest_actor: "最近处理人",
+    latest_at: "最近处理时间",
+    intervention_state: "闭环状态",
     days_from_today: "距今天数",
     delivery_date: "交期",
     signed_date: "签订日期",
@@ -1355,6 +1359,7 @@ function labelFor(key) {
 }
 
 function pmcConsolePage(body) {
+  body = enrichPmcInterventionStatus(body);
   const command = body.command_center || {};
   const interventions = pmcInterventionSummary({ today: new Date(), limit: 8 });
   const ownerFilter = body.owner_filter || "";
@@ -1473,8 +1478,8 @@ function pmcConsolePage(body) {
     </section>
     <div class="zone-title">红黄牌风险区</div>
     <section class="risk-board">
-      ${pmcTablePanel("红牌：今天必须处理", body.sections.red_risks, ["risk_type", "related_no", "problem", "rule_reason", "owner_role", "buttons"], "danger")}
-      ${pmcTablePanel("黄牌：3天内可能恶化", body.sections.yellow_risks, ["risk_type", "related_no", "problem", "rule_reason", "owner_role", "buttons"], "warning")}
+      ${pmcTablePanel("红牌：今天必须处理", body.sections.red_risks, ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "latest_intervention", "owner_role", "buttons"], "danger")}
+      ${pmcTablePanel("黄牌：3天内可能恶化", body.sections.yellow_risks, ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "latest_intervention", "owner_role", "buttons"], "warning")}
     </section>
     <div class="zone-title">跟单员视图</div>
     <section class="intervention-list">
@@ -1482,7 +1487,7 @@ function pmcConsolePage(body) {
     </section>
     <div class="zone-title">我的干预清单</div>
     <section class="intervention-list">
-      ${pmcTablePanel("待干预动作", body.sections.intervention_tasks, ["task_no", "risk_level", "risk_type", "related_no", "problem", "primary_action", "buttons"], "danger")}
+      ${pmcTablePanel("待干预动作", body.sections.intervention_tasks, ["task_no", "risk_level", "risk_type", "related_no", "problem", "intervention_state", "latest_intervention", "primary_action", "buttons"], "danger")}
     </section>
     <div class="zone-title">干预复盘</div>
     <section class="risk-board">
@@ -1525,6 +1530,36 @@ function pmcConsolePage(body) {
   </main>
 </body>
 </html>`;
+}
+
+function enrichPmcInterventionStatus(body) {
+  const sections = body?.sections || {};
+  const targetSections = ["red_risks", "yellow_risks", "intervention_tasks"];
+  const relatedNos = targetSections
+    .flatMap((name) => (Array.isArray(sections[name]) ? sections[name] : []))
+    .map((row) => row.related_no)
+    .filter(Boolean);
+  const latestByNo = latestPmcInterventionsByRelatedNos(relatedNos);
+  if (!latestByNo.size) {
+    return body;
+  }
+  const nextSections = { ...sections };
+  for (const name of targetSections) {
+    nextSections[name] = (Array.isArray(sections[name]) ? sections[name] : []).map((row) => {
+      const latest = latestByNo.get(row.related_no);
+      if (!latest) {
+        return row;
+      }
+      return {
+        ...row,
+        intervention_state: "已干预",
+        latest_intervention: latest.action_label,
+        latest_actor: latest.actor,
+        latest_at: latest.created_at
+      };
+    });
+  }
+  return { ...body, sections: nextSections };
 }
 
 function pmcTablePanel(title, rows, columns, tone = "") {
@@ -1580,6 +1615,12 @@ function formatPmcCell(row, column) {
     const owner = row?.owner_link || row?.owner || "";
     if (!owner) return "";
     return `<a class="mini-button" href="/pmc?rebuild=1&owner=${encodeURIComponent(owner)}">进入</a>`;
+  }
+  if (column === "intervention_state") {
+    return escapeHtml(row?.intervention_state || "待处理");
+  }
+  if (column === "latest_at") {
+    return escapeHtml(row?.latest_at ? formatDateTime(row.latest_at) : "");
   }
   return formatCell(row?.[column]);
 }

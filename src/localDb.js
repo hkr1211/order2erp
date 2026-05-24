@@ -236,6 +236,30 @@ export function latestPmcInterventions({ limit = 20, related_no = "" } = {}) {
     .all(safeLimit);
 }
 
+export function latestPmcInterventionsByRelatedNos(relatedNos = []) {
+  const keys = [...new Set(relatedNos.map((value) => String(value || "").trim()).filter(Boolean))];
+  if (!keys.length) {
+    return new Map();
+  }
+  const database = initLocalDb();
+  const placeholders = keys.map(() => "?").join(", ");
+  const rows = database
+    .prepare(
+      `SELECT id, created_at, risk_level, risk_type, related_no, action_label, problem, note, actor, payload_json
+       FROM pmc_intervention_logs
+       WHERE related_no IN (${placeholders})
+       ORDER BY created_at DESC, id DESC`
+    )
+    .all(...keys);
+  const latestByNo = new Map();
+  for (const row of rows) {
+    if (!latestByNo.has(row.related_no)) {
+      latestByNo.set(row.related_no, row);
+    }
+  }
+  return latestByNo;
+}
+
 export function pmcInterventionSummary({ today = new Date(), limit = 8 } = {}) {
   const database = initLocalDb();
   const safeLimit = Math.max(1, Math.min(Number(limit) || 8, 50));
