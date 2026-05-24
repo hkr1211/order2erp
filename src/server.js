@@ -37,10 +37,7 @@ const NAV_ITEMS = [
   ["财务", "/finance"],
   ["异常", "/exceptions"],
   ["报表", "/reports"],
-  ["系统", "/system"],
-  ["覆盖率", "/sqlite-coverage"],
-  ["历史同步", "/history-sync"],
-  ["日志", "/erp-logs"]
+  ["系统", "/system"]
 ];
 
 const server = http.createServer(async (req, res) => {
@@ -599,6 +596,9 @@ function normalizeNavPath(value) {
   if (path.startsWith("/reports/")) {
     return "/reports";
   }
+  if (path === "/sqlite-coverage" || path.startsWith("/history-sync") || path === "/erp-logs") {
+    return "/system";
+  }
   return path;
 }
 
@@ -615,10 +615,10 @@ function modulePathForTitle(title) {
   if (text.includes("异常")) return "/exceptions";
   if (text.includes("报表")) return "/reports";
   if (text.includes("数据源")) return "/system";
-  if (text.includes("SQLite")) return "/sqlite-coverage";
-  if (text.includes("历史同步")) return "/history-sync";
+  if (text.includes("SQLite")) return "/system";
+  if (text.includes("历史同步")) return "/system";
   if (text.includes("同步")) return "/system";
-  if (text.includes("ERP 请求日志")) return "/erp-logs";
+  if (text.includes("ERP 请求日志")) return "/system";
   if (text.includes("全功能")) return "/goal";
   return "/";
 }
@@ -645,10 +645,7 @@ function homePage() {
     ["Excel报表", "/reports/export.xls", "导出带格式的 PMC 日报 Excel 文件"],
     ["报表打印版", "/reports/print", "适合打印成 PDF 的 PMC 日报"],
     ["PMC 全功能路线", "/goal", "查看完整 PMC 平台实施目标和当前完成度"],
-    ["数据源状态中心", "/system", "查看 ERP 连通性、本地快照和系统状态"],
-    ["SQLite覆盖率", "/sqlite-coverage", "查看各页面依赖的本地表、同步行数和缺口"],
-    ["历史同步任务", "/history-sync", "按90天范围安全分批补齐本地 SQLite 数据"],
-    ["ERP 请求日志", "/erp-logs", "查看本地记录的 ERP 请求成败和耗时"]
+    ["数据源状态中心", "/system", "查看 ERP 连通性、本地快照、同步工具和系统状态"]
   ];
   const apiLinks = [
     ["健康检查", "/health", "确认本地中台是否正在运行"],
@@ -1318,6 +1315,9 @@ function labelFor(key) {
     suggested_range: "建议范围",
     safety: "安全说明",
     latest_progress: "最近进度",
+    tool_name: "工具名称",
+    tool_path: "入口",
+    tool_desc: "用途",
     last_status: "最近状态",
     last_rows_synced: "最近同步行数",
     last_page_index: "最近页码",
@@ -5324,6 +5324,7 @@ function systemStatusPage(body) {
       modulePanel("最近驾驶舱快照", body.sections.snapshot, ["created_at", "today_orders", "month_orders", "overdue_orders", "shortage_orders", "low_stock"]),
       modulePanel("同步策略", body.sections.sync_policy, ["label", "recommended_interval", "risk_level", "last_status", "last_rows", "last_finished_at", "next_allowed_at", "health_status", "action"]),
       modulePanel("最近同步状态", body.sections.sync_runs, ["source_key", "started_at", "finished_at", "status", "rows_synced", "error_message"]),
+      modulePanel("系统工具", systemToolRows(), ["tool_name", "tool_path", "tool_desc"]),
       modulePanel("业务入口状态", body.sections.modules, ["name", "path", "status"])
     ],
     notes: body.notes,
@@ -5336,6 +5337,26 @@ function systemStatusPage(body) {
       ["PMC驾驶舱", "/pmc"]
     ]
   });
+}
+
+function systemToolRows() {
+  return [
+    {
+      tool_name: "SQLite 数据覆盖率",
+      tool_path: "/sqlite-coverage",
+      tool_desc: "查看各页面依赖的本地表、同步行数、最近同步时间和缺失数据源。"
+    },
+    {
+      tool_name: "历史同步任务",
+      tool_path: "/history-sync",
+      tool_desc: "按90天范围安全分批补齐本地 SQLite 数据，执行前可预演。"
+    },
+    {
+      tool_name: "ERP 请求日志",
+      tool_path: "/erp-logs",
+      tool_desc: "查看本地记录的 ERP 请求成败、耗时、错误信息，并支持导出。"
+    }
+  ];
 }
 
 function syncPausePage(status) {
