@@ -1284,6 +1284,7 @@ function labelFor(key) {
     intervention_state: "闭环状态",
     response_sla: "响应时限",
     escalation_state: "升级状态",
+    intervention_action: "处理入口",
     days_from_today: "距今天数",
     delivery_date: "交期",
     signed_date: "签订日期",
@@ -1678,7 +1679,7 @@ function enrichPmcInterventionStatus(body) {
 function pmcRiskClosure(row = {}, latest = null) {
   const riskLevel = String(row.risk_level || row.priority || "").trim();
   const riskType = String(row.risk_type || row.exception_type || "").trim();
-  const isRed = riskLevel.includes("红") || /超期|断供|瓶颈/.test(riskType);
+  const isRed = riskLevel.includes("红") || riskLevel === "高" || /超期|断供|瓶颈/.test(riskType);
   const responseHours = isRed ? 4 : 24;
   if (latest?.created_at) {
     const hours = hoursSince(latest.created_at);
@@ -2911,6 +2912,9 @@ function formatDetailCell(column, value, row = {}) {
   if (column === "link_action" && value) {
     return `<a class="button" href="${escapeHtml(value)}">绑定</a>`;
   }
+  if (column === "intervention_action" && value) {
+    return `<a class="button" href="${escapeHtml(value)}">处理</a>`;
+  }
   if (["quantity", "demand_qty", "delivered_qty", "remaining_qty", "available_qty", "stock_qty", "shortage_qty", "planned_qty", "finished_qty"].includes(column)) {
     return escapeHtml(formatPmcQuantity(value, row?.unit || row?.raw?.unit || row?.raw?.raw?.Unit || row?.raw?.raw?.单位));
   }
@@ -3771,9 +3775,10 @@ async function queryExceptionCenter(params = {}) {
   if (params.refresh !== "1") {
     const dashboard = queryLocalPmcDashboard(params);
     if (dashboard) {
+      const body = enrichExceptionCenterStatus(buildLocalExceptionCenter(dashboard));
       return {
         header: { status: 0, message: "ok" },
-        body: buildLocalExceptionCenter(dashboard)
+        body
       };
     }
   }
@@ -3808,9 +3813,7 @@ async function queryExceptionCenter(params = {}) {
   }
   const body = dashboard?.body || { summary: {}, sections: {} };
   const tasks = buildExceptionTasks(body.sections || []);
-  return {
-    header: { status: 0, message: "ok" },
-    body: {
+  const exceptionBody = enrichExceptionCenterStatus({
       model: "exception_center",
       generated_at: new Date().toISOString(),
       offline: Boolean(sourceError),
@@ -3842,6 +3845,44 @@ async function queryExceptionCenter(params = {}) {
         "每条待办包含优先级、责任角色、处理建议和当前状态。",
         "责任角色按异常类型自动推导；关闭状态和操作日志后续接本地数据库。"
       ]
+    });
+  return {
+    header: { status: 0, message: "ok" },
+    body: exceptionBody
+  };
+}
+
+function enrichExceptionCenterStatus(body) {
+  const tasks = Array.isArray(body?.sections?.tasks) ? body.sections.tasks : [];
+  const relatedNos = tasks.map((row) => row.related_no).filter(Boolean);
+  const latestByNo = latestPmcInterventionsByRelatedNos(relatedNos);
+  const nextTasks = tasks.map((row) => {
+    const latest = latestByNo.get(row.related_no);
+    const closure = pmcRiskClosure(row, latest);
+    return {
+      ...row,
+      status: closure.intervention_state,
+      intervention_state: closure.intervention_state,
+      response_sla: closure.response_sla,
+      escalation_state: closure.escalation_state,
+      latest_intervention: latest?.action_label || "",
+      latest_actor: latest?.actor || "",
+      latest_at: latest?.created_at || "",
+      intervention_action: pmcInterventionHref(row, row.action || "记录处理")
+    };
+  });
+  const pending = nextTasks.filter((row) => row.intervention_state !== "已响应").length;
+  return {
+    ...body,
+    summary: {
+      ...(body.summary || {}),
+      open_tasks: pending,
+      pending_response_tasks: pending,
+      responded_tasks: nextTasks.length - pending
+    },
+    sections: {
+      ...(body.sections || {}),
+      tasks: nextTasks
     }
   };
 }
@@ -4778,6 +4819,7 @@ function exceptionCenterPage(body) {
     subtitle: "把交期、缺料、待报价、库存异常统一成按优先级排序的 PMC 待办池。",
     summary: [
       ["未关闭待办", body.summary.open_tasks],
+      ["已响应", body.summary.responded_tasks || 0],
       ["高优先级", body.summary.critical_tasks],
       ["逾期订单", body.summary.overdue_orders],
       ["7天内交期", body.summary.due_soon_orders],
@@ -4786,7 +4828,7 @@ function exceptionCenterPage(body) {
       ["低库存", body.summary.low_stock]
     ],
     panels: [
-      modulePanel("统一异常待办", body.sections.tasks, ["task_no", "priority", "exception_type", "related_no", "customer", "item", "quantity", "due_date", "responsible_role", "action", "status"]),
+      modulePanel("统一异常待办", body.sections.tasks, ["task_no", "priority", "exception_type", "related_no", "customer", "item", "quantity", "due_date", "responsible_role", "action", "status", "response_sla", "latest_intervention", "intervention_action"]),
       modulePanel("逾期订单", body.sections.overdue_orders, ["order_no", "customer", "product_name", "remaining_qty", "delivery_date"]),
       modulePanel("7天内交期", body.sections.due_soon_orders, ["order_no", "customer", "product_name", "remaining_qty", "delivery_date"]),
       modulePanel("缺料明细", body.sections.shortage_rows, ["order_no", "customer", "product_name", "available_qty", "shortage_qty"]),
