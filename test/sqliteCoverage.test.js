@@ -9,6 +9,7 @@ test("buildSqliteCoverage summarizes page table dependencies and missing sources
       erp_material_alerts: { row_count: 0, latest_at: "" },
       erp_finance_records: { row_count: 2200, latest_at: "2026-05-24T01:00:00.000Z", min_date: "2026-02-14", max_date: "2026-05-23" },
       erp_procedure_plans: { row_count: 768, latest_at: "2026-05-24T01:20:00.000Z", min_date: "2026-05-16", max_date: "2026-06-22" },
+      order_procedure_links: { row_count: 3, latest_at: "2026-05-24T02:00:00.000Z" },
       pmc_dashboard_snapshots: { row_count: 1, latest_at: "2026-05-23T08:30:00.000Z" }
     },
     now: new Date("2026-05-24T08:00:00+08:00"),
@@ -19,8 +20,12 @@ test("buildSqliteCoverage summarizes page table dependencies and missing sources
 
   const pmc = coverage.pages.find((row) => row.page_path === "/pmc");
   const materials = coverage.pages.find((row) => row.page_path === "/materials");
+  const procedureLinks = coverage.pages.find((row) => row.page_path === "/procedure-links");
 
   assert.ok(pmc.sqlite_tables.includes("erp_sales_orders"));
+  assert.ok(pmc.sqlite_tables.includes("order_procedure_links"));
+  assert.ok(procedureLinks.sqlite_tables.includes("order_procedure_links"));
+  assert.match(procedureLinks.table_rows, /order_procedure_links:3/);
   assert.equal(materials.coverage_status, "缺数据");
   assert.match(materials.missing_sources, /物料\/库存告警为空/);
   assert.equal(coverage.tables.find((row) => row.table_name === "erp_sales_orders").history_status, "90天已覆盖");
@@ -29,4 +34,5 @@ test("buildSqliteCoverage summarizes page table dependencies and missing sources
   assert.equal(coverage.summary.history_ready_tables, 2);
   assert.equal(coverage.summary.pages, coverage.pages.length);
   assert.ok(coverage.tables.some((row) => row.table_name === "erp_material_alerts"));
+  assert.equal(coverage.tables.find((row) => row.table_name === "order_procedure_links").incremental, "人工维护");
 });
