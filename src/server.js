@@ -65,6 +65,12 @@ const server = http.createServer(async (req, res) => {
       return sendHtml(res, 200, pmcConsolePage(result.body, params));
     }
 
+    if (req.method === "GET" && url.pathname === "/pmc/brief.txt") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = await queryPmcConsole(params);
+      return sendText(res, 200, pmcMorningBriefText(result.body, params));
+    }
+
     if (req.method === "GET" && url.pathname === "/pmc/intervention") {
       const params = Object.fromEntries(url.searchParams);
       return sendHtml(res, 200, pmcInterventionPage(params));
@@ -554,6 +560,11 @@ function sendJson(res, status, payload) {
 function sendHtml(res, status, html) {
   res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
   res.end(html);
+}
+
+function sendText(res, status, text) {
+  res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
+  res.end(text);
 }
 
 function sendCsv(res, filename, csv) {
@@ -1493,6 +1504,11 @@ function pmcConsolePage(body, params = {}) {
   const allHref = `/pmc?${viewParams.toString()}`;
   viewParams.set("open_only", "1");
   const openOnlyHref = `/pmc?${viewParams.toString()}`;
+  const briefParams = new URLSearchParams();
+  briefParams.set("rebuild", "1");
+  if (ownerFilter) briefParams.set("owner", ownerFilter);
+  if (openOnly) briefParams.set("open_only", "1");
+  const briefHref = `/pmc/brief.txt?${briefParams.toString()}`;
   const todayText = formatDate(new Date());
   const cards = [
     ["待响应风险", closure.open_total, "红黄牌尚未留痕", closure.open_red > 0 ? "danger" : closure.open_yellow > 0 ? "warning" : "neutral", openOnlyHref],
@@ -1614,6 +1630,7 @@ function pmcConsolePage(body, params = {}) {
       <div class="actions">
         ${ownerFilter ? '<a class="button" href="/pmc?rebuild=1">返回全局</a>' : ""}
         ${openOnly ? `<a class="button primary" href="${escapeHtml(allHref)}">显示全部</a>` : `<a class="button primary" href="${escapeHtml(openOnlyHref)}">只看待响应</a>`}
+        <a class="button" href="${escapeHtml(briefHref)}">早会文本</a>
         <a class="button" href="/procedure-links">人工绑定派工</a>
         <a class="button" href="/interventions">干预台账</a>
         <a class="button" href="/pmc?rebuild=1">从 SQLite 重新生成</a>
@@ -1771,6 +1788,39 @@ function filterPmcOpenRisks(body = {}) {
       intervention_tasks: (sections.intervention_tasks || []).filter(openRow)
     }
   };
+}
+
+function pmcMorningBriefText(body = {}, params = {}) {
+  const enriched = enrichPmcInterventionStatus(body);
+  const displayBody = parseBoolean(params.open_only) ? filterPmcOpenRisks(enriched) : enriched;
+  const sections = displayBody.sections || {};
+  const rows = (sections.morning_brief || []).slice(0, 10);
+  const closure = pmcClosureSummary(enriched.sections || {});
+  const scope = [
+    enriched.owner_filter ? `负责人：${enriched.owner_filter}` : "范围：全公司",
+    parseBoolean(params.open_only) ? "口径：只看待响应" : "口径：全部风险"
+  ].join("；");
+  const lines = [
+    "蕴杰金属 PMC 早会风险摘要",
+    `生成时间：${formatDateTime(new Date())}`,
+    scope,
+    `待响应：${closure.open_total}（红牌${closure.open_red}，黄牌${closure.open_yellow}）；已响应：${closure.responded_total}`,
+    ""
+  ];
+  if (!rows.length) {
+    lines.push("当前没有需要展示的早会风险。");
+    return lines.join("\n");
+  }
+  rows.forEach((row, index) => {
+    lines.push(`${index + 1}. [${row.risk_level || "风险"}][${row.intervention_state || "待响应"}] ${row.headline || row.related_no || "待确认风险"}`);
+    lines.push(`   关联单号：${row.related_no || "--"}；责任角色：${row.owner_role || "--"}；响应时限：${row.response_sla || "--"}`);
+    lines.push(`   早会关注：${row.meeting_focus || "--"}`);
+    lines.push(`   下一步：${row.next_action || row.primary_action || "--"}`);
+    if (row.latest_intervention || row.latest_actor) {
+      lines.push(`   最近处理：${[row.latest_intervention, row.latest_actor].filter(Boolean).join(" / ")}`);
+    }
+  });
+  return lines.join("\n");
 }
 
 function renderKpiCard(label, value, hint, tone = "", href = "") {
