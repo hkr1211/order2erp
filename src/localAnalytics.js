@@ -375,6 +375,7 @@ function normalizeOrder(row, today) {
 }
 
 function normalizeMaterialAlert(row) {
+  const raw = parseJson(row.raw_json, row);
   return {
     order_no: row.order_no,
     customer: row.customer,
@@ -385,8 +386,9 @@ function normalizeMaterialAlert(row) {
     available_qty: row.available_qty,
     stock_qty: row.stock_qty,
     shortage_qty: row.shortage_qty,
+    unit: row.unit || raw?.unit || raw?.raw?.Unit || raw?.raw?.单位,
     delivery_date: row.delivery_date,
-    raw: parseJson(row.raw_json, row)
+    raw
   };
 }
 
@@ -765,6 +767,8 @@ function shortageTasks(rows) {
     customer: row.customer,
     item: row.product_name || row.product_code,
     quantity: row.shortage_qty,
+    quantity_text: formatQuantity(row.shortage_qty, row.unit),
+    unit: row.unit,
     due_date: row.delivery_date,
     responsible_role: "PMC/采购",
     action: "确认替代库存、采购到货或调整排产",
@@ -813,6 +817,7 @@ function commandRiskRows(rows, riskType, fallbackType) {
       problem: commandProblemText(type, row),
       item: row.item,
       quantity: row.quantity,
+      quantity_text: row.quantity_text || formatQuantity(row.quantity, row.unit),
       due_date: row.due_date,
       owner_role: row.responsible_role,
       primary_action: row.action,
@@ -842,13 +847,22 @@ function quoteRiskRows(rows) {
 
 function commandProblemText(type, row) {
   if (type === "冲压延期") return `${row.item || "冲压工序"}未按计划完成，剩余${row.quantity ?? ""}`;
-  if (type === "物料断供") return `${row.item || "物料"}缺口${row.quantity ?? ""}，影响订单${row.related_no || ""}`;
+  if (type === "物料断供") return `${row.item || "物料"}缺口${row.quantity_text || formatQuantity(row.quantity, row.unit)}，影响订单${row.related_no || ""}`;
   if (type === "交期超期") return `${row.related_no || "订单"}已超过承诺交期，需今天处理`;
   if (type === "交期预警") return `${row.related_no || "订单"}即将到期，需提前协调生产/发货`;
   if (type === "产能瓶颈") return `${row.item || "工序"}已延误，需今天确认资源安排`;
   if (type === "产能预警") return `${row.item || "工序"}存在延期，需确认产能安排`;
   if (type === "物料预警") return `${row.item || "物料"}库存偏低，需确认补料或替代方案`;
   return row.action || row.item || type;
+}
+
+function formatQuantity(value, unit = "") {
+  if (value === undefined || value === null || value === "") {
+    return "";
+  }
+  const numberValue = Number(value);
+  const formatted = Number.isFinite(numberValue) ? numberValue.toFixed(2) : String(value);
+  return `${formatted}${unit || ""}`;
 }
 
 function ruleReasonForRisk(type, row) {

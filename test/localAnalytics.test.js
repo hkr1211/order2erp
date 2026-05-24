@@ -107,6 +107,20 @@ test("buildLocalPmcDashboard groups red and yellow risks with intervention actio
   assert.equal(body.sections.intervention_tasks.some((row) => row.buttons.includes("生成催货文本")), true);
 });
 
+test("buildLocalPmcDashboard formats shortage quantities with kg precision", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-24T08:00:00+08:00"),
+    materialAlerts: [
+      { alert_type: "shortage", order_no: "PO-ZR", customer: "客户A", product_name: "锆废料", product_code: "Zr106000001", shortage_qty: 0.3699999999999999, unit: "kg" }
+    ]
+  });
+
+  const risk = body.sections.red_risks.find((row) => row.related_no === "PO-ZR");
+
+  assert.equal(risk.problem, "锆废料缺口0.37kg，影响订单PO-ZR");
+  assert.equal(risk.quantity_text, "0.37kg");
+});
+
 test("buildLocalPmcDashboard filters a merchandiser workbench by owner", () => {
   const body = buildLocalPmcDashboard({
     today: new Date("2026-05-24T08:00:00+08:00"),

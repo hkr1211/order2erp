@@ -1630,7 +1630,22 @@ function formatPmcCell(row, column) {
   if (column === "latest_at") {
     return escapeHtml(row?.latest_at ? formatDateTime(row.latest_at) : "");
   }
+  if (["quantity", "demand_qty", "available_qty", "stock_qty", "shortage_qty"].includes(column)) {
+    return escapeHtml(formatPmcQuantity(row?.[column], row?.unit || row?.raw?.unit || row?.raw?.raw?.Unit || row?.raw?.raw?.单位));
+  }
   return formatCell(row?.[column]);
+}
+
+function formatPmcQuantity(value, unit = "") {
+  if (value === undefined || value === null || value === "") {
+    return "";
+  }
+  const number = parseNumber(value);
+  if (number === null) {
+    return displayValue(value);
+  }
+  const text = unit === "kg" || unit === "公斤" ? number.toFixed(2) : Number.isInteger(number) ? String(number) : String(Number(number.toFixed(2)));
+  return `${text}${unit || ""}`;
 }
 
 function pmcInterventionHref(row, actionLabel) {
