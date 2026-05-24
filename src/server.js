@@ -2650,13 +2650,13 @@ function detailTablePanel(title, rows, columns, compact = false) {
     <h2>${escapeHtml(title)} <span class="pill ${safeRows.length ? "yellow" : "green"}">${safeRows.length}</span></h2>
     ${
       safeRows.length
-        ? `<div class="table-wrap"><table${compact ? ' style="min-width:820px"' : ""}><thead><tr>${columns.map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${safeRows.map((row) => `<tr>${columns.map((column) => `<td>${formatDetailCell(column, row?.[column])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
+        ? `<div class="table-wrap"><table${compact ? ' style="min-width:820px"' : ""}><thead><tr>${columns.map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${safeRows.map((row) => `<tr>${columns.map((column) => `<td>${formatDetailCell(column, row?.[column], row)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
         : `<div class="empty">当前没有${escapeHtml(title)}。</div>`
     }
   </section>`;
 }
 
-function formatDetailCell(column, value) {
+function formatDetailCell(column, value, row = {}) {
   if (/^entry_\d+$/.test(column) && value) {
     return `<a href="${escapeHtml(value)}">${escapeHtml(value)}</a>`;
   }
@@ -2665,8 +2665,8 @@ function formatDetailCell(column, value) {
     const tone = value === "overdue" ? "red" : value === "due_soon" ? "yellow" : "green";
     return `<span class="pill ${tone}">${escapeHtml(label || "")}</span>`;
   }
-  if (["demand_qty", "delivered_qty", "remaining_qty", "available_qty", "stock_qty", "shortage_qty"].includes(column)) {
-    return escapeHtml(formatNumber(value));
+  if (["quantity", "demand_qty", "delivered_qty", "remaining_qty", "available_qty", "stock_qty", "shortage_qty", "planned_qty", "finished_qty"].includes(column)) {
+    return escapeHtml(formatPmcQuantity(value, row?.unit || row?.raw?.unit || row?.raw?.raw?.Unit || row?.raw?.raw?.单位));
   }
   return formatCell(value);
 }
@@ -3859,7 +3859,7 @@ function modulePanel(title, rows, columns, options = {}) {
     <h2>${escapeHtml(title)} <span class="pill">${escapeHtml(countText)}</span></h2>
     ${
       safeRows.length
-        ? `<div class="${wrapClass}"><table><thead><tr>${columns.map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${safeRows.map((row) => `<tr>${columns.map((column) => `<td>${formatDetailCell(column, row?.[column])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
+        ? `<div class="${wrapClass}"><table><thead><tr>${columns.map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${safeRows.map((row) => `<tr>${columns.map((column) => `<td>${formatDetailCell(column, row?.[column], row)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
         : `<div class="empty">当前没有${escapeHtml(title)}。</div>`
     }
   </section>`;
@@ -4657,7 +4657,7 @@ function printTable(title, rows, columns) {
     <h2>${escapeHtml(title)}</h2>
     ${
       safeRows.length
-        ? `<table><thead><tr>${columns.map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${safeRows.map((row) => `<tr>${columns.map((column) => `<td>${formatDetailCell(column, row?.[column])}</td>`).join("")}</tr>`).join("")}</tbody></table>`
+        ? `<table><thead><tr>${columns.map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${safeRows.map((row) => `<tr>${columns.map((column) => `<td>${formatDetailCell(column, row?.[column], row)}</td>`).join("")}</tr>`).join("")}</tbody></table>`
         : `<table><tbody><tr><td>当前没有${escapeHtml(title)}。</td></tr></tbody></table>`
     }
   </section>`;
