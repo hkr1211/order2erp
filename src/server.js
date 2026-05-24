@@ -59,6 +59,18 @@ const server = http.createServer(async (req, res) => {
       return sendHtml(res, 200, followupWorkbenchPage(result.body));
     }
 
+    if (req.method === "GET" && url.pathname === "/followup/brief") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = queryFollowupWorkbench(params);
+      return sendHtml(res, 200, followupBriefPage(result.body, params));
+    }
+
+    if (req.method === "GET" && url.pathname === "/followup/brief.txt") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = queryFollowupWorkbench(params);
+      return sendText(res, 200, followupBriefText(result.body, params));
+    }
+
     if (req.method === "GET" && url.pathname === "/pmc") {
       const params = Object.fromEntries(url.searchParams);
       const result = await queryPmcConsole(params);
@@ -978,6 +990,7 @@ function queryFollowupWorkbench(params = {}) {
 function followupWorkbenchPage(body) {
   const dashboard = body.dashboard || emptyPmcConsoleBody("当前没有本地 SQLite 订单数据，请先同步订单。");
   const owner = body.owner || "";
+  const briefHref = owner ? `/followup/brief?owner=${encodeURIComponent(owner)}&open_only=1` : "/followup/brief?open_only=1";
   const ownerLinks = (body.owners || []).slice(0, 20).map((row) => [
     `${row.owner}(${row.todos})`,
     `/followup?owner=${encodeURIComponent(row.owner)}`
@@ -1007,9 +1020,34 @@ function followupWorkbenchPage(body) {
     notes: body.notes,
     actions: [
       ...ownerLinks,
+      ["我的摘要", briefHref],
       ["PMC作战台", owner ? `/pmc?rebuild=1&owner=${encodeURIComponent(owner)}` : "/pmc?rebuild=1"],
       ["角色工作台", "/roles"]
     ]
+  });
+}
+
+function followupBriefText(body = {}, params = {}) {
+  const dashboard = body.dashboard || emptyPmcConsoleBody("当前没有本地 SQLite 订单数据，请先同步订单。");
+  return pmcMorningBriefText(dashboard, { ...params, open_only: params.open_only ?? "1" });
+}
+
+function followupBriefPage(body = {}, params = {}) {
+  const owner = body.owner || params.owner || "";
+  const text = followupBriefText(body, params);
+  const query = new URLSearchParams();
+  if (owner) query.set("owner", owner);
+  if (parseBoolean(params.open_only) || params.open_only === undefined) query.set("open_only", "1");
+  const queryText = query.toString();
+  const textHref = `/followup/brief.txt${queryText ? `?${queryText}` : ""}`;
+  const backHref = `/followup${owner ? `?owner=${encodeURIComponent(owner)}` : ""}`;
+  return briefCopyPage({
+    title: owner ? `${owner} 跟单摘要` : "跟单员摘要",
+    subtitle: "只读取本地 SQLite，按当前负责人过滤，用于跟单早会、客户沟通和内部催办。",
+    text,
+    textHref,
+    backHref,
+    backLabel: "返回跟单"
   });
 }
 
@@ -1838,12 +1876,23 @@ function pmcMorningBriefPage(body = {}, params = {}) {
   const queryText = query.toString();
   const textHref = `/pmc/brief.txt?${queryText}`;
   const backHref = `/pmc?${queryText || "rebuild=1"}`;
+  return briefCopyPage({
+    title: "PMC 早会文本",
+    subtitle: "可直接复制到微信、邮件或早会纪要。页面只读取本地 SQLite 生成的摘要，不访问 ERP。",
+    text,
+    textHref,
+    backHref,
+    backLabel: "返回PMC"
+  });
+}
+
+function briefCopyPage({ title, subtitle, text, textHref, backHref, backLabel }) {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PMC 早会文本</title>
+  <title>${escapeHtml(title)}</title>
   <style>
     :root { --bg:#f4f6f8; --panel:#fff; --text:#172033; --muted:#667085; --border:#d9dee7; --green:#176b58; }
     * { box-sizing:border-box; }
@@ -1868,13 +1917,13 @@ function pmcMorningBriefPage(body = {}, params = {}) {
     ${renderTopNav("/pmc")}
     <header>
       <div>
-        <h1>PMC 早会文本</h1>
-        <div class="sub">可直接复制到微信、邮件或早会纪要。页面只读取本地 SQLite 生成的摘要，不访问 ERP。</div>
+        <h1>${escapeHtml(title)}</h1>
+        <div class="sub">${escapeHtml(subtitle)}</div>
       </div>
       <div class="actions">
         <button class="button primary" type="button" onclick="copyBrief()">复制文本</button>
         <a class="button" href="${escapeHtml(textHref)}">打开纯文本</a>
-        <a class="button" href="${escapeHtml(backHref)}">返回PMC</a>
+        <a class="button" href="${escapeHtml(backHref)}">${escapeHtml(backLabel)}</a>
       </div>
     </header>
     <section class="panel">
