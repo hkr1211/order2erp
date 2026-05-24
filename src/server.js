@@ -1415,12 +1415,20 @@ function pmcConsolePage(body) {
     .zone-title { margin: 20px 0 10px; font-size: 18px; font-weight: 750; }
     .layout { display: grid; grid-template-columns: 1.05fr 1fr; gap: 12px; align-items: start; }
     .risk-board { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; align-items: start; }
+    .risk-board-command { grid-template-columns: 1fr; }
     .risk-focus { display: grid; grid-template-columns: 1.2fr 1fr; gap: 12px; margin-bottom: 12px; align-items: start; }
     .intervention-list { margin-bottom: 12px; }
     .panel { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); overflow: hidden; }
+    .panel.command-panel { border-color: #cfd6e2; }
     .panel h2 { margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--border); font-size: 17px; letter-spacing: 0; }
     .panel h2.danger { color: var(--red); }
     .panel h2.warning { color: var(--amber); }
+    .table-scroll { width: 100%; overflow: auto; }
+    .command-panel .table-scroll { max-height: 430px; }
+    .command-panel thead th { position: sticky; top: 0; z-index: 1; }
+    .command-panel table { min-width: 1180px; }
+    .command-panel td:nth-child(3), .command-panel td:nth-child(4) { min-width: 230px; }
+    .command-panel td:last-child { min-width: 190px; }
     table { width: 100%; border-collapse: collapse; }
     th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; font-size: 13px; line-height: 1.45; }
     th { background: #f0f3f6; color: #344054; font-weight: 650; white-space: nowrap; }
@@ -1477,9 +1485,9 @@ function pmcConsolePage(body) {
       ${cards.map(([label, value, hint, tone]) => `<div class="kpi ${tone}"><div class="label">${escapeHtml(label)}</div><div class="value">${escapeHtml(value)}</div><div class="hint">${escapeHtml(hint)}</div></div>`).join("\n")}
     </section>
     <div class="zone-title">红黄牌风险区</div>
-    <section class="risk-board">
-      ${pmcTablePanel("红牌：今天必须处理", body.sections.red_risks, ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "latest_intervention", "owner_role", "buttons"], "danger")}
-      ${pmcTablePanel("黄牌：3天内可能恶化", body.sections.yellow_risks, ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "latest_intervention", "owner_role", "buttons"], "warning")}
+    <section class="risk-board risk-board-command">
+      ${pmcTablePanel("红牌：今天必须处理", body.sections.red_risks, ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "latest_intervention", "owner_role", "buttons"], "danger", "command-panel")}
+      ${pmcTablePanel("黄牌：3天内可能恶化", body.sections.yellow_risks, ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "latest_intervention", "owner_role", "buttons"], "warning", "command-panel")}
     </section>
     <div class="zone-title">跟单员视图</div>
     <section class="intervention-list">
@@ -1562,13 +1570,13 @@ function enrichPmcInterventionStatus(body) {
   return { ...body, sections: nextSections };
 }
 
-function pmcTablePanel(title, rows, columns, tone = "") {
+function pmcTablePanel(title, rows, columns, tone = "", extraClass = "") {
   const safeRows = Array.isArray(rows) ? rows.slice(0, 10) : [];
-  return `<section class="panel">
+  return `<section class="panel ${escapeHtml(extraClass)}">
     <h2 class="${escapeHtml(tone)}">${escapeHtml(title)} <span class="tag ${escapeHtml(tone)}">${safeRows.length}</span></h2>
     ${
       safeRows.length
-        ? `<table><thead><tr>${columns.map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${safeRows.map((row) => `<tr>${columns.map((column) => `<td>${formatPmcCell(row, column)}</td>`).join("")}</tr>`).join("")}</tbody></table>`
+        ? `<div class="table-scroll"><table><thead><tr>${columns.map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${safeRows.map((row) => `<tr>${columns.map((column) => `<td>${formatPmcCell(row, column)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
         : `<div class="empty">当前没有${escapeHtml(title)}。</div>`
     }
   </section>`;
