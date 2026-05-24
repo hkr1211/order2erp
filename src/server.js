@@ -4507,7 +4507,7 @@ function erpRequestLogCsv(body) {
 function querySqliteCoverage() {
   const stats = Object.fromEntries(SQLITE_TABLES.map((table) => [
     table.table_name,
-    tableStats(table.table_name, table.timestamp_column)
+    coverageTableStats(table)
   ]));
   const coverage = buildSqliteCoverage({
     tableStats: stats,
@@ -4537,11 +4537,12 @@ function sqliteCoveragePage(body) {
       ["本地表", body.summary.tables],
       ["可用页面", body.summary.available_pages],
       ["缺数据页面", body.summary.missing_pages],
-      ["空表", body.summary.empty_tables]
+      ["空表", body.summary.empty_tables],
+      ["90天达标表", body.summary.history_ready_tables]
     ],
     panels: [
-      modulePanel("页面覆盖率", body.pages, ["page_name", "page_path", "coverage_status", "sqlite_tables", "table_rows", "latest_sync_at", "incremental_support", "suggested_range", "missing_sources"]),
-      modulePanel("SQLite 表状态", body.tables, ["label", "table_name", "row_count", "latest_at", "sync_source", "last_sync_status", "last_sync_finished_at", "incremental", "suggested_range", "last_sync_error"])
+      modulePanel("页面覆盖率", body.pages, ["page_name", "page_path", "coverage_status", "sqlite_tables", "table_rows", "latest_sync_at", "history_status", "incremental_support", "suggested_range", "missing_sources"]),
+      modulePanel("SQLite 表状态", body.tables, ["label", "table_name", "row_count", "date_range", "history_status", "latest_at", "sync_source", "last_sync_status", "last_sync_finished_at", "incremental", "suggested_range", "last_sync_error"])
     ],
     notes: body.notes,
     actions: [
@@ -4550,6 +4551,25 @@ function sqliteCoveragePage(body) {
       ["ERP请求日志", "/erp-logs"]
     ]
   });
+}
+
+function coverageTableStats(table) {
+  const stats = tableStats(table.table_name, table.timestamp_column);
+  if (!table.coverage_date_column) {
+    return stats;
+  }
+  const database = initLocalDb();
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table.table_name) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(table.coverage_date_column)) {
+    return stats;
+  }
+  const range = database
+    .prepare(`SELECT MIN(${table.coverage_date_column}) AS min_date, MAX(${table.coverage_date_column}) AS max_date FROM ${table.table_name} WHERE ${table.coverage_date_column} IS NOT NULL AND ${table.coverage_date_column} != ''`)
+    .get();
+  return {
+    ...stats,
+    min_date: range?.min_date || "",
+    max_date: range?.max_date || ""
+  };
 }
 
 function queryHistorySyncCenter(params = {}) {

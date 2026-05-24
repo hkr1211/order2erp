@@ -1,10 +1,10 @@
 export const SQLITE_TABLES = [
   { table_name: "pmc_dashboard_snapshots", label: "PMC驾驶舱快照", timestamp_column: "created_at", sync_source: "pmc_snapshot", incremental: "否", suggested_range: "保留最近30-90天快照" },
-  { table_name: "erp_sales_orders", label: "销售订单", timestamp_column: "synced_at", sync_source: "sales_orders", incremental: "部分支持", suggested_range: "未交付订单 + 近90天订单，夜间补近1年" },
+  { table_name: "erp_sales_orders", label: "销售订单", timestamp_column: "synced_at", coverage_date_column: "signed_date", history_target_days: 90, sync_source: "sales_orders", incremental: "部分支持", suggested_range: "未交付订单 + 近90天订单，夜间补近1年" },
   { table_name: "erp_material_alerts", label: "物料/库存告警", timestamp_column: "synced_at", sync_source: "material_alerts", incremental: "否", suggested_range: "当前缺料和低库存，每15-30分钟小批量刷新" },
-  { table_name: "erp_procedure_plans", label: "派工/工序计划", timestamp_column: "synced_at", sync_source: "procedure_plans", incremental: "部分支持", suggested_range: "未完工派工 + 近90天工序" },
-  { table_name: "erp_quote_followups", label: "待报价项目", timestamp_column: "synced_at", sync_source: "quote_projects", incremental: "部分支持", suggested_range: "未报价/未关闭项目 + 近180天" },
-  { table_name: "erp_finance_records", label: "应收应付", timestamp_column: "synced_at", sync_source: "finance_records", incremental: "部分支持", suggested_range: "未结清单据 + 近1年" },
+  { table_name: "erp_procedure_plans", label: "派工/工序计划", timestamp_column: "synced_at", coverage_date_column: "planned_start_date", history_target_days: 90, sync_source: "procedure_plans", incremental: "部分支持", suggested_range: "未完工派工 + 近90天工序" },
+  { table_name: "erp_quote_followups", label: "待报价项目", timestamp_column: "synced_at", coverage_date_column: "created_date", history_target_days: 90, sync_source: "quote_projects", incremental: "部分支持", suggested_range: "未报价/未关闭项目 + 近180天" },
+  { table_name: "erp_finance_records", label: "应收应付", timestamp_column: "synced_at", coverage_date_column: "bill_date", history_target_days: 90, sync_source: "finance_records", incremental: "部分支持", suggested_range: "未结清单据 + 近1年" },
   { table_name: "sync_runs", label: "同步记录", timestamp_column: "finished_at", sync_source: "internal", incremental: "本地自动", suggested_range: "保留全部或近1年" },
   { table_name: "erp_request_logs", label: "ERP请求日志", timestamp_column: "requested_at", sync_source: "internal", incremental: "本地自动", suggested_range: "保留近30天或最近5000条" }
 ];
@@ -26,15 +26,19 @@ export const SQLITE_PAGE_DEPENDENCIES = [
   { page_name: "ERP请求日志", page_path: "/erp-logs", tables: ["erp_request_logs"], missing_sources: [] }
 ];
 
-export function buildSqliteCoverage({ tableStats = {}, latestSyncRuns = [] } = {}) {
+export function buildSqliteCoverage({ tableStats = {}, latestSyncRuns = [], now = new Date() } = {}) {
   const syncBySource = new Map(latestSyncRuns.map((row) => [row.source_key, row]));
   const tables = SQLITE_TABLES.map((table) => {
     const stats = tableStats[table.table_name] || { row_count: 0, latest_at: "" };
     const sync = syncBySource.get(table.sync_source) || null;
+    const dateRange = [stats.min_date, stats.max_date].filter(Boolean).join(" 至 ");
+    const historyStatus = historyCoverageStatus({ table, stats, now });
     return {
       ...table,
       row_count: Number(stats.row_count) || 0,
       latest_at: stats.latest_at || "",
+      date_range: dateRange || "未统计",
+      history_status: historyStatus,
       last_sync_status: sync?.status || (table.sync_source === "internal" || table.sync_source === "pmc_snapshot" ? "本地生成" : "无同步记录"),
       last_sync_finished_at: sync?.finished_at || "",
       last_sync_error: sync?.error_message || ""
@@ -54,6 +58,7 @@ export function buildSqliteCoverage({ tableStats = {}, latestSyncRuns = [] } = {
       sqlite_tables: page.tables.join(", "),
       table_rows: dependencyTables.map((table) => `${table.table_name}:${table.row_count}`).join(", "),
       latest_sync_at: latestTime(dependencyTables.map((table) => table.latest_at || table.last_sync_finished_at)),
+      history_status: summarizeHistoryStatus(dependencyTables),
       incremental_support: summarizeIncremental(dependencyTables),
       suggested_range: summarizeRanges(dependencyTables),
       missing_sources: missingSources.join("；"),
@@ -66,11 +71,36 @@ export function buildSqliteCoverage({ tableStats = {}, latestSyncRuns = [] } = {
       tables: tables.length,
       available_pages: pages.filter((row) => row.coverage_status === "可用").length,
       missing_pages: pages.filter((row) => row.coverage_status !== "可用").length,
-      empty_tables: tables.filter((row) => row.row_count <= 0).length
+      empty_tables: tables.filter((row) => row.row_count <= 0).length,
+      history_ready_tables: tables.filter((row) => row.history_status === "90天已覆盖").length
     },
     pages,
     tables
   };
+}
+
+function historyCoverageStatus({ table, stats, now }) {
+  if (!table.history_target_days) {
+    return "当前快照/不适用";
+  }
+  if (Number(stats.row_count) <= 0) {
+    return "无数据";
+  }
+  if (!stats.min_date) {
+    return "未统计日期";
+  }
+  const target = startOfDay(now);
+  target.setDate(target.getDate() - table.history_target_days);
+  const minDate = parseDate(stats.min_date);
+  if (!minDate) {
+    return "日期不可识别";
+  }
+  return startOfDay(minDate) <= target ? `${table.history_target_days}天已覆盖` : `未覆盖${table.history_target_days}天`;
+}
+
+function summarizeHistoryStatus(tables) {
+  const values = [...new Set(tables.map((table) => table.history_status).filter(Boolean))];
+  return values.length ? values.join(" / ") : "待建本地表";
 }
 
 function latestTime(values) {
@@ -85,4 +115,18 @@ function summarizeIncremental(tables) {
 function summarizeRanges(tables) {
   const values = [...new Set(tables.map((table) => table.suggested_range).filter(Boolean))];
   return values.length ? values.join("；") : "先建本地同步源";
+}
+
+function parseDate(value) {
+  if (!value) {
+    return null;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function startOfDay(date) {
+  const copy = new Date(date);
+  copy.setHours(0, 0, 0, 0);
+  return copy;
 }
