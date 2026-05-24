@@ -25,6 +25,41 @@ test("historySyncParams limits sales order batch size and applies date range", (
   assert.equal(params.erpParams.pageindex, 2);
 });
 
+test("historySyncParams applies 90 day range to finance records", () => {
+  const params = historySyncParams({
+    source: "finance_records",
+    start_date: "2026-02-24",
+    end_date: "2026-05-24",
+    pageindex: 4,
+    pagesize: 10
+  });
+
+  assert.equal(params.viewName, "finance_records");
+  assert.equal(params.erpParams.receivables.tdate1, "2026-02-24");
+  assert.equal(params.erpParams.receivables.tdate2, "2026-05-24");
+  assert.equal(params.erpParams.payables.tdate1, "2026-02-24");
+  assert.equal(params.erpParams.payables.tdate2, "2026-05-24");
+  assert.equal(params.erpParams.receivables.pageindex, 4);
+  assert.equal(params.erpParams.payables.pagesize, 10);
+});
+
+test("historySyncParams applies 90 day range to quote projects", () => {
+  const params = historySyncParams({
+    source: "quote_projects",
+    start_date: "2026-02-24",
+    end_date: "2026-05-24",
+    pageindex: 3,
+    pagesize: 10
+  });
+
+  assert.equal(params.viewName, "quote_projects");
+  assert.equal(params.erpParams.tdate1, "2026-02-24");
+  assert.equal(params.erpParams.tdate2, "2026-05-24");
+  assert.equal(params.erpParams.pageindex, 3);
+  assert.equal(params.erpParams.pagesize, 10);
+  assert.equal(params.erpParams.include_all, "1");
+});
+
 test("historySyncDryRun does not access ERP and shows request parameters", () => {
   const dryRun = historySyncDryRun({
     source: "sales_orders",

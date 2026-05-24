@@ -330,14 +330,14 @@ export function replaceQuoteFollowups(rows) {
   const database = initLocalDb();
   runInTransaction(database, () => {
     database.prepare("DELETE FROM erp_quote_followups").run();
-    const stmt = database.prepare(`
-      INSERT INTO erp_quote_followups
-      (quote_no, priority, quote_status, customer, title, owner, project_stage, estimated_amount, quoted_amount, created_date, age_days, action, risk_flags, raw_json, synced_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    for (const row of rows) {
-      stmt.run(row.quote_no, row.priority, row.quote_status, row.customer, row.title, row.owner, row.project_stage, row.estimated_amount, row.quoted_amount, row.created_date, row.age_days, row.action, stringifyScalar(row.risk_flags), JSON.stringify(row.raw || row), row.synced_at);
-    }
+    insertQuoteFollowups(database, rows);
+  });
+}
+
+export function upsertQuoteFollowups(rows) {
+  const database = initLocalDb();
+  runInTransaction(database, () => {
+    insertQuoteFollowups(database, rows);
   });
 }
 
@@ -345,14 +345,14 @@ export function replaceFinanceRecords(rows) {
   const database = initLocalDb();
   runInTransaction(database, () => {
     database.prepare("DELETE FROM erp_finance_records").run();
-    const stmt = database.prepare(`
-      INSERT INTO erp_finance_records
-      (record_id, direction, counterparty, bill_no, business_title, amount, paid_amount, unpaid_amount, bill_date, due_date, payment_terms, age_days, due_days, risk_status, status, owner, raw_json, synced_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    for (const row of rows) {
-      stmt.run(row.record_id, row.direction, row.counterparty, row.bill_no, row.business_title, row.amount, row.paid_amount, row.unpaid_amount, row.bill_date, row.due_date, row.payment_terms, row.age_days, row.due_days, row.risk_status, row.status, row.owner, JSON.stringify(row.raw || row), row.synced_at);
-    }
+    insertFinanceRecords(database, rows);
+  });
+}
+
+export function upsertFinanceRecords(rows) {
+  const database = initLocalDb();
+  runInTransaction(database, () => {
+    insertFinanceRecords(database, rows);
   });
 }
 
@@ -417,6 +417,28 @@ function insertProcedurePlans(database, rows) {
   `);
   for (const row of rows) {
     stmt.run(row.erp_id, row.work_assignment_id, row.order_no, row.product_name, row.product_code, row.product_model, row.procedure_name, row.work_center_name, row.planned_qty, row.finished_qty, row.remaining_qty, row.planned_start_date, row.planned_finish_date, row.owner, row.state, JSON.stringify(row.raw || row), row.synced_at);
+  }
+}
+
+function insertQuoteFollowups(database, rows) {
+  const stmt = database.prepare(`
+    INSERT OR REPLACE INTO erp_quote_followups
+    (quote_no, priority, quote_status, customer, title, owner, project_stage, estimated_amount, quoted_amount, created_date, age_days, action, risk_flags, raw_json, synced_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const row of rows) {
+    stmt.run(row.quote_no, row.priority, row.quote_status, row.customer, row.title, row.owner, row.project_stage, row.estimated_amount, row.quoted_amount, row.created_date, row.age_days, row.action, stringifyScalar(row.risk_flags), JSON.stringify(row.raw || row), row.synced_at);
+  }
+}
+
+function insertFinanceRecords(database, rows) {
+  const stmt = database.prepare(`
+    INSERT OR REPLACE INTO erp_finance_records
+    (record_id, direction, counterparty, bill_no, business_title, amount, paid_amount, unpaid_amount, bill_date, due_date, payment_terms, age_days, due_days, risk_status, status, owner, raw_json, synced_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const row of rows) {
+    stmt.run(row.record_id, row.direction, row.counterparty, row.bill_no, row.business_title, row.amount, row.paid_amount, row.unpaid_amount, row.bill_date, row.due_date, row.payment_terms, row.age_days, row.due_days, row.risk_status, row.status, row.owner, JSON.stringify(row.raw || row), row.synced_at);
   }
 }
 

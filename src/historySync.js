@@ -1,5 +1,7 @@
 import { normalizeTable, toBusinessView } from "./erpClient.js";
-import { upsertProcedurePlans, upsertSalesOrders } from "./localDb.js";
+import { mapFinanceRowForLocal, mapQuoteFollowupForLocal } from "./localAnalytics.js";
+import { upsertFinanceRecords, upsertProcedurePlans, upsertQuoteFollowups, upsertSalesOrders } from "./localDb.js";
+import { queryPendingQuotes } from "./pendingQuotes.js";
 import { mapProcedurePlan, mapSalesOrder } from "./syncService.js";
 
 export const HISTORY_SYNC_SOURCES = [
@@ -18,6 +20,22 @@ export const HISTORY_SYNC_SOURCES = [
     dateSupport: "接口暂未确认日期参数",
     suggestedRange: "先按页小批量补齐，再确认日期字段后改增量",
     riskNote: "每次只拉一页20条，不带日期过滤，写入 SQLite upsert。"
+  },
+  {
+    source: "quote_projects",
+    label: "待报价项目",
+    viewName: "quote_projects",
+    dateSupport: "支持项目日期 tdate1/tdate2",
+    suggestedRange: "最近90天项目，后续可扩为180天",
+    riskNote: "每次只拉一页20条，按日期过滤，写入 SQLite upsert。"
+  },
+  {
+    source: "finance_records",
+    label: "应收应付",
+    viewName: "finance_records",
+    dateSupport: "支持单据日期 tdate1/tdate2",
+    suggestedRange: "最近90天应收应付，后续可扩为1年",
+    riskNote: "每次同步应收和应付各一页，按日期过滤，写入 SQLite upsert。"
   }
 ];
 
@@ -39,19 +57,12 @@ export function historySyncParams(options = {}) {
     start_date: options.start_date || options.date_start || defaultHistoryRange().start_date,
     end_date: options.end_date || options.date_end || defaultHistoryRange().end_date
   };
-  const erpParams = sourceConfig.source === "sales_orders"
-    ? {
-        pageindex: pageIndex,
-        pagesize: pageSize,
-        dateQD_0: range.start_date,
-        dateQD_1: range.end_date,
-        searchKey: options.searchKey || ""
-      }
-    : {
-        page_index: pageIndex,
-        page_size: pageSize,
-        searchKey: options.searchKey || ""
-      };
+  const erpParams = historyErpParams(sourceConfig.source, {
+    pageIndex,
+    pageSize,
+    range,
+    searchKey: options.searchKey || ""
+  });
   return {
     ...sourceConfig,
     pageIndex,
@@ -166,37 +177,127 @@ export async function runHistorySyncWindow(options = {}) {
 
 export async function runHistorySyncBatch(client, options = {}) {
   const plan = historySyncParams(options);
-  const response = await client.queryView(plan.viewName, plan.erpParams);
-  const table = normalizeTable(response);
-  const rows = plan.source === "sales_orders"
-    ? toBusinessView("sales_orders", table).rows.map((row, index) => mapSalesOrder(row, index))
-    : table.rows.map((row, index) => mapProcedurePlan(row, index));
-
   if (plan.source === "sales_orders") {
+    const response = await client.queryView(plan.viewName, plan.erpParams);
+    const table = normalizeTable(response);
+    const rows = toBusinessView("sales_orders", table).rows.map((row, index) => mapSalesOrder(row, index));
     upsertSalesOrders(rows);
-  } else {
-    upsertProcedurePlans(rows);
+    return historyBatchResult(plan, rows.length);
   }
+  if (plan.source === "procedure_plans") {
+    const response = await client.queryView(plan.viewName, plan.erpParams);
+    const table = normalizeTable(response);
+    const rows = table.rows.map((row, index) => mapProcedurePlan(row, index));
+    upsertProcedurePlans(rows);
+    return historyBatchResult(plan, rows.length);
+  }
+  if (plan.source === "quote_projects") {
+    const pending = await queryPendingQuotes(client, plan.erpParams);
+    const today = options.today ? new Date(options.today) : new Date();
+    const rows = (pending?.body?.rows || []).map((row) => ({
+      ...mapQuoteFollowupForLocal(row, today),
+      synced_at: new Date().toISOString()
+    }));
+    upsertQuoteFollowups(rows);
+    return historyBatchResult(plan, rows.length);
+  }
+  if (plan.source === "finance_records") {
+    const today = options.today ? new Date(options.today) : new Date();
+    const [receivableResult, payableResult] = await Promise.allSettled([
+      client.queryView("receivables", plan.erpParams.receivables),
+      client.queryView("payables", plan.erpParams.payables)
+    ]);
+    if (receivableResult.status === "rejected" && payableResult.status === "rejected") {
+      throw new Error(`${summarizeError(receivableResult.reason)}；${summarizeError(payableResult.reason)}`);
+    }
+    const receivableRows = receivableResult.status === "fulfilled" ? normalizeTable(receivableResult.value).rows : [];
+    const payableRows = payableResult.status === "fulfilled" ? normalizeTable(payableResult.value).rows : [];
+    const rows = [
+      ...receivableRows.map((row, index) => ({
+        record_id: `receivable-${row.id || row.billno || row.order1 || `${plan.pageIndex}-${index}`}`,
+        ...mapFinanceRowForLocal(row, "receivable", today),
+        synced_at: new Date().toISOString()
+      })),
+      ...payableRows.map((row, index) => ({
+        record_id: `payable-${row.id || row.billno || row.order1 || `${plan.pageIndex}-${index}`}`,
+        ...mapFinanceRowForLocal(row, "payable", today),
+        synced_at: new Date().toISOString()
+      }))
+    ];
+    upsertFinanceRecords(rows);
+    return historyBatchResult(plan, rows.length);
+  }
+  throw new Error(`Unsupported history sync source: ${plan.source}`);
+}
 
-  const hasNext = rows.length >= plan.pageSize;
+function historyBatchResult(plan, rowsSynced) {
   return {
     generated_at: new Date().toISOString(),
     source: plan.source,
     label: plan.label,
     status: "success",
-    rows_synced: rows.length,
+    rows_synced: rowsSynced,
     page_index: plan.pageIndex,
     page_size: plan.pageSize,
     start_date: plan.range.start_date,
     end_date: plan.range.end_date,
-    has_next: hasNext,
-    next_page_index: hasNext ? plan.pageIndex + 1 : null,
+    has_next: rowsSynced >= plan.pageSize,
+    next_page_index: rowsSynced >= plan.pageSize ? plan.pageIndex + 1 : null,
     notes: [
       "本次只执行一个小批次，避免长时间占用 ERP。",
       "数据写入使用 upsert，不会清空旧成功数据。",
       plan.riskNote
     ]
   };
+}
+
+function historyErpParams(source, { pageIndex, pageSize, range, searchKey }) {
+  if (source === "sales_orders") {
+    return {
+      pageindex: pageIndex,
+      pagesize: pageSize,
+      dateQD_0: range.start_date,
+      dateQD_1: range.end_date,
+      searchKey
+    };
+  }
+  if (source === "procedure_plans") {
+    return {
+      page_index: pageIndex,
+      page_size: pageSize,
+      searchKey
+    };
+  }
+  if (source === "quote_projects") {
+    return {
+      pageindex: pageIndex,
+      pagesize: pageSize,
+      limit: pageSize,
+      include_all: "1",
+      tdate1: range.start_date,
+      tdate2: range.end_date,
+      searchKey
+    };
+  }
+  if (source === "finance_records") {
+    const params = {
+      pageindex: pageIndex,
+      pagesize: pageSize,
+      tdate1: range.start_date,
+      tdate2: range.end_date,
+      searchKey
+    };
+    return {
+      receivables: { ...params },
+      payables: { ...params }
+    };
+  }
+  return { pageindex: pageIndex, pagesize: pageSize, searchKey };
+}
+
+function summarizeError(error) {
+  const message = error?.message || String(error || "未知错误");
+  return message.length > 200 ? `${message.slice(0, 200)}...` : message;
 }
 
 export function buildHistorySyncProgress({ sources = HISTORY_SYNC_SOURCES, latestRuns = [] } = {}) {
