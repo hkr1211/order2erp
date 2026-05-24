@@ -4882,18 +4882,22 @@ function exceptionCenterPage(body) {
 
 function queryInterventionLogCenter(params = {}) {
   const limit = clampInt(params.limit || 100, 1, 200);
-  const relatedNo = String(params.related_no || "").trim();
-  const rows = latestPmcInterventions({ limit, related_no: relatedNo });
+  const filters = {
+    related_no: String(params.related_no || "").trim(),
+    risk_type: String(params.risk_type || "").trim(),
+    actor: String(params.actor || "").trim(),
+    date_from: String(params.date_from || "").trim(),
+    date_to: String(params.date_to || "").trim(),
+    limit
+  };
+  const rows = latestPmcInterventions(filters);
   const summary = pmcInterventionSummary({ today: new Date(), limit: 20 });
   return {
     header: { status: 0, message: "ok" },
     body: {
       model: "intervention_log_center",
       generated_at: new Date().toISOString(),
-      filters: {
-        related_no: relatedNo,
-        limit
-      },
+      filters,
       summary: {
         shown_actions: rows.length,
         today_actions: summary.today_actions,
@@ -4914,12 +4918,17 @@ function queryInterventionLogCenter(params = {}) {
 }
 
 function interventionLogPage(body) {
-  const exportHref = body.filters.related_no
-    ? `/interventions/export.csv?related_no=${encodeURIComponent(body.filters.related_no)}&limit=${encodeURIComponent(body.filters.limit)}`
-    : `/interventions/export.csv?limit=${encodeURIComponent(body.filters.limit)}`;
+  const exportHref = `/interventions/export.csv?${interventionFilterParams(body.filters).toString()}`;
+  const activeFilters = [
+    body.filters.related_no ? `关联单号：${body.filters.related_no}` : "",
+    body.filters.risk_type ? `风险类型：${body.filters.risk_type}` : "",
+    body.filters.actor ? `处理人：${body.filters.actor}` : "",
+    body.filters.date_from ? `开始：${body.filters.date_from}` : "",
+    body.filters.date_to ? `结束：${body.filters.date_to}` : ""
+  ].filter(Boolean).join("；");
   return modulePage({
     title: "干预记录台账",
-    subtitle: body.filters.related_no ? `当前筛选关联单号：${body.filters.related_no}` : "查看 PMC 风险处理留痕、处理人和备注。",
+    subtitle: activeFilters ? `当前筛选 ${activeFilters}` : "查看 PMC 风险处理留痕、处理人和备注。",
     summary: [
       ["显示记录", body.summary.shown_actions],
       ["今日处理", body.summary.today_actions],
@@ -4927,12 +4936,43 @@ function interventionLogPage(body) {
       ["风险类型", body.summary.risk_types]
     ],
     panels: [
+      interventionFilterPanel(body.filters),
       modulePanel("干预记录", body.sections.rows, ["created_at", "risk_level", "risk_type", "related_no", "action_label", "problem", "note", "actor"], { fullWidth: true, limit: "all", tall: true }),
       modulePanel("风险类型汇总", body.sections.by_risk_type, ["risk_type", "actions"])
     ],
     notes: body.notes,
     actions: [["导出CSV", exportHref], ["PMC作战台", "/pmc?rebuild=1"], ["异常中心", "/exceptions"], ["系统状态", "/system"]]
   });
+}
+
+function interventionFilterParams(filters = {}) {
+  const params = new URLSearchParams();
+  for (const key of ["related_no", "risk_type", "actor", "date_from", "date_to", "limit"]) {
+    const value = filters[key];
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      params.set(key, String(value));
+    }
+  }
+  return params;
+}
+
+function interventionFilterPanel(filters = {}) {
+  const inputStyle = "width:100%;min-height:36px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text);font-size:14px;";
+  const labelStyle = "display:block;margin-bottom:6px;color:var(--muted);font-size:13px;";
+  const field = (name, label, value = "") => `<label><span style="${labelStyle}">${escapeHtml(label)}</span><input style="${inputStyle}" name="${escapeHtml(name)}" value="${escapeHtml(value)}"></label>`;
+  return `<section class="panel full-width">
+    <h2>筛选条件</h2>
+    <form action="/interventions" method="get" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;padding:14px 16px;align-items:end;">
+      ${field("related_no", "关联单号", filters.related_no || "")}
+      ${field("risk_type", "风险类型", filters.risk_type || "")}
+      ${field("actor", "处理人", filters.actor || "")}
+      ${field("date_from", "开始时间", filters.date_from || "")}
+      ${field("date_to", "结束时间", filters.date_to || "")}
+      ${field("limit", "显示条数", filters.limit || 100)}
+      <button class="button primary" type="submit" style="min-height:36px;cursor:pointer;">筛选</button>
+      <a class="button" href="/interventions" style="text-align:center;">清空</a>
+    </form>
+  </section>`;
 }
 
 function interventionLogCsv(body) {

@@ -103,6 +103,40 @@ test("latestPmcInterventionsByRelatedNos returns the latest action for each rela
   assert.equal(rowsByNo.has("PO-3"), false);
 });
 
+test("latestPmcInterventions filters by risk type actor and date range", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pmc-intervention-filters-"));
+  process.env.PMC_DB_PATH = path.join(tempDir, "pmc.db");
+  const modulePath = `../src/localDb.js?filters=${Date.now()}`;
+  const { latestPmcInterventions, savePmcIntervention } = await import(modulePath);
+
+  savePmcIntervention({
+    created_at: "2026-05-24T09:00:00.000Z",
+    risk_type: "物料断供",
+    related_no: "PO-1",
+    action_label: "生成催货文本",
+    actor: "PMC张三"
+  });
+  savePmcIntervention({
+    created_at: "2026-05-23T09:00:00.000Z",
+    risk_type: "产能瓶颈",
+    related_no: "PO-2",
+    action_label: "加班协调",
+    actor: "生产经理"
+  });
+
+  const rows = latestPmcInterventions({
+    risk_type: "物料断供",
+    actor: "张三",
+    date_from: "2026-05-24T00:00:00.000Z",
+    date_to: "2026-05-24T23:59:59.999Z",
+    limit: 10
+  });
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].related_no, "PO-1");
+  assert.equal(rows[0].actor, "PMC张三");
+});
+
 test("excluded quote followups do not return after replacement sync", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "quote-exclusions-"));
   process.env.PMC_DB_PATH = path.join(tempDir, "pmc.db");

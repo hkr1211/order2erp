@@ -231,28 +231,41 @@ export function savePmcIntervention(entry) {
   return { id: result.lastInsertRowid, created_at: createdAt, ...payload };
 }
 
-export function latestPmcInterventions({ limit = 20, related_no = "" } = {}) {
+export function latestPmcInterventions({ limit = 20, related_no = "", risk_type = "", actor = "", date_from = "", date_to = "" } = {}) {
   const database = initLocalDb();
   const safeLimit = Math.max(1, Math.min(Number(limit) || 20, 200));
+  const filters = [];
+  const values = [];
   if (related_no) {
-    return database
-      .prepare(
-        `SELECT id, created_at, risk_level, risk_type, related_no, action_label, problem, note, actor, payload_json
-         FROM pmc_intervention_logs
-         WHERE related_no = ?
-         ORDER BY id DESC
-         LIMIT ?`
-      )
-      .all(String(related_no), safeLimit);
+    filters.push("related_no LIKE ?");
+    values.push(`%${String(related_no).trim()}%`);
   }
+  if (risk_type) {
+    filters.push("risk_type = ?");
+    values.push(String(risk_type).trim());
+  }
+  if (actor) {
+    filters.push("actor LIKE ?");
+    values.push(`%${String(actor).trim()}%`);
+  }
+  if (date_from) {
+    filters.push("created_at >= ?");
+    values.push(String(date_from).trim());
+  }
+  if (date_to) {
+    filters.push("created_at <= ?");
+    values.push(String(date_to).trim());
+  }
+  const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
   return database
     .prepare(
       `SELECT id, created_at, risk_level, risk_type, related_no, action_label, problem, note, actor, payload_json
        FROM pmc_intervention_logs
+       ${whereClause}
        ORDER BY created_at DESC, id DESC
        LIMIT ?`
     )
-    .all(safeLimit);
+    .all(...values, safeLimit);
 }
 
 export function latestPmcInterventionsByRelatedNos(relatedNos = []) {
