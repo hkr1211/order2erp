@@ -1296,6 +1296,7 @@ function labelFor(key) {
     response_sla: "响应时限",
     escalation_state: "升级状态",
     intervention_action: "处理入口",
+    intervention_log: "处理记录",
     days_from_today: "距今天数",
     delivery_date: "交期",
     signed_date: "签订日期",
@@ -1598,6 +1599,7 @@ function pmcConsolePage(body) {
       <div class="actions">
         ${ownerFilter ? '<a class="button" href="/pmc?rebuild=1">返回全局</a>' : ""}
         <a class="button" href="/procedure-links">人工绑定派工</a>
+        <a class="button" href="/interventions">干预台账</a>
         <a class="button primary" href="/pmc?rebuild=1">从 SQLite 重新生成</a>
       </div>
     </header>
@@ -1606,8 +1608,8 @@ function pmcConsolePage(body) {
     </section>
     <div class="zone-title">红黄牌风险区</div>
     <section class="risk-board risk-board-command">
-      ${pmcTablePanel("红牌：今天必须处理", body.sections.red_risks, ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "owner_role", "buttons"], "danger", "command-panel")}
-      ${pmcTablePanel("黄牌：3天内可能恶化", body.sections.yellow_risks, ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "owner_role", "buttons"], "warning", "command-panel")}
+      ${pmcTablePanel("红牌：今天必须处理", body.sections.red_risks, ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "intervention_log", "owner_role", "buttons"], "danger", "command-panel")}
+      ${pmcTablePanel("黄牌：3天内可能恶化", body.sections.yellow_risks, ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "intervention_log", "owner_role", "buttons"], "warning", "command-panel")}
     </section>
     <div class="zone-title">跟单员视图</div>
     <section class="intervention-list">
@@ -1615,7 +1617,7 @@ function pmcConsolePage(body) {
     </section>
     <div class="zone-title">我的干预清单</div>
     <section class="intervention-list">
-      ${pmcTablePanel("待干预动作", body.sections.intervention_tasks, ["task_no", "risk_level", "risk_type", "related_no", "problem", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "primary_action", "buttons"], "danger")}
+      ${pmcTablePanel("待干预动作", body.sections.intervention_tasks, ["task_no", "risk_level", "risk_type", "related_no", "problem", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "intervention_log", "primary_action", "buttons"], "danger")}
     </section>
     <div class="zone-title">干预复盘</div>
     <section class="risk-board">
@@ -1680,7 +1682,8 @@ function enrichPmcInterventionStatus(body) {
         escalation_state: closure.escalation_state,
         latest_intervention: latest?.action_label || row.latest_intervention || "",
         latest_actor: latest?.actor || row.latest_actor || "",
-        latest_at: latest?.created_at || row.latest_at || ""
+        latest_at: latest?.created_at || row.latest_at || "",
+        intervention_log: interventionLogHref(row.related_no)
       };
     });
   }
@@ -1783,6 +1786,9 @@ function formatPmcCell(row, column) {
   if (column === "link_action" && row?.link_action) {
     return `<a class="mini-button" href="${escapeHtml(row.link_action)}">绑定</a>`;
   }
+  if (column === "intervention_log" && row?.intervention_log) {
+    return `<a class="mini-button" href="${escapeHtml(row.intervention_log)}">查看</a>`;
+  }
   if (column === "intervention_state") {
     return escapeHtml(row?.intervention_state || "待处理");
   }
@@ -1817,6 +1823,11 @@ function pmcInterventionHref(row, actionLabel) {
   params.set("primary_action", row?.primary_action || row?.action || "");
   params.set("actor", "内网用户");
   return `/pmc/intervention?${params.toString()}`;
+}
+
+function interventionLogHref(relatedNo = "") {
+  const value = String(relatedNo || "").trim();
+  return value ? `/interventions?related_no=${encodeURIComponent(value)}` : "/interventions";
 }
 
 function pmcInterventionPage(params = {}, saved = null) {
@@ -2926,6 +2937,9 @@ function formatDetailCell(column, value, row = {}) {
   if (column === "intervention_action" && value) {
     return `<a class="button" href="${escapeHtml(value)}">处理</a>`;
   }
+  if (column === "intervention_log" && value) {
+    return `<a class="button" href="${escapeHtml(value)}">查看</a>`;
+  }
   if (["quantity", "demand_qty", "delivered_qty", "remaining_qty", "available_qty", "stock_qty", "shortage_qty", "planned_qty", "finished_qty"].includes(column)) {
     return escapeHtml(formatPmcQuantity(value, row?.unit || row?.raw?.unit || row?.raw?.raw?.Unit || row?.raw?.raw?.单位));
   }
@@ -3879,6 +3893,7 @@ function enrichExceptionCenterStatus(body) {
       latest_intervention: latest?.action_label || "",
       latest_actor: latest?.actor || "",
       latest_at: latest?.created_at || "",
+      intervention_log: interventionLogHref(row.related_no),
       intervention_action: pmcInterventionHref(row, row.action || "记录处理")
     };
   });
@@ -4853,7 +4868,7 @@ function exceptionCenterPage(body) {
       ["低库存", body.summary.low_stock]
     ],
     panels: [
-      modulePanel("统一异常待办", body.sections.tasks, ["task_no", "priority", "exception_type", "related_no", "customer", "item", "quantity", "due_date", "responsible_role", "action", "status", "response_sla", "latest_intervention", "intervention_action"]),
+      modulePanel("统一异常待办", body.sections.tasks, ["task_no", "priority", "exception_type", "related_no", "customer", "item", "quantity", "due_date", "responsible_role", "action", "status", "response_sla", "latest_intervention", "intervention_log", "intervention_action"]),
       modulePanel("逾期订单", body.sections.overdue_orders, ["order_no", "customer", "product_name", "remaining_qty", "delivery_date"]),
       modulePanel("7天内交期", body.sections.due_soon_orders, ["order_no", "customer", "product_name", "remaining_qty", "delivery_date"]),
       modulePanel("缺料明细", body.sections.shortage_rows, ["order_no", "customer", "product_name", "available_qty", "shortage_qty"]),
