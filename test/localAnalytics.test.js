@@ -107,6 +107,37 @@ test("buildLocalPmcDashboard groups red and yellow risks with intervention actio
   assert.equal(body.sections.intervention_tasks.some((row) => row.buttons.includes("生成催货文本")), true);
 });
 
+test("buildLocalPmcDashboard filters a merchandiser workbench by owner", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-24T08:00:00+08:00"),
+    owner: "张三",
+    salesOrders: [
+      { order_no: "PO-ZS", customer: "客户A", owner: "张三", product_name: "钼板", delivery_date: "2026-05-25", signed_date: "2026-05-01", remaining_qty: 5 },
+      { order_no: "PO-LS", customer: "客户B", owner: "李四", product_name: "钽杯", delivery_date: "2026-05-25", signed_date: "2026-05-01", remaining_qty: 3 }
+    ],
+    materialAlerts: [
+      { alert_type: "shortage", order_no: "PO-ZS", customer: "客户A", product_name: "钼板", shortage_qty: 2 },
+      { alert_type: "shortage", order_no: "PO-LS", customer: "客户B", product_name: "钽杯", shortage_qty: 4 }
+    ],
+    procedurePlans: [
+      { work_assignment_id: "W-ZS", order_no: "PO-ZS", product_name: "钼板", procedure_name: "落料", work_center_name: "冲压工", remaining_qty: 8, planned_finish_date: "2026-05-20", owner: "张三", state: "生产中" },
+      { work_assignment_id: "W-LS", order_no: "PO-LS", product_name: "钽杯", procedure_name: "落料", work_center_name: "冲压工", remaining_qty: 8, planned_finish_date: "2026-05-20", owner: "李四", state: "生产中" }
+    ],
+    quoteFollowups: [
+      { quote_no: "Q-ZS", owner: "张三", title: "钼板询价", quoted_amount: 0, priority: "高", quote_status: "待报价" },
+      { quote_no: "Q-LS", owner: "李四", title: "钽杯询价", quoted_amount: 0, priority: "高", quote_status: "待报价" }
+    ]
+  });
+
+  assert.equal(body.owner_filter, "张三");
+  assert.equal(body.summary.month_orders, 1);
+  assert.equal(body.sections.due_soon_orders[0].order_no, "PO-ZS");
+  assert.equal(body.sections.shortage_orders[0].order_no, "PO-ZS");
+  assert.equal(body.sections.delayed_procedures[0].work_assignment_id, "W-ZS");
+  assert.equal(body.sections.pending_quotes[0].quote_no, "Q-ZS");
+  assert.equal(body.sections.owner_workbenches.some((row) => row.owner === "张三" && row.active_orders === 1), true);
+});
+
 test("buildLocalPmcDashboard builds an order battle map from procedure stages", () => {
   const body = buildLocalPmcDashboard({
     today: new Date("2026-05-24T08:00:00+08:00"),

@@ -1,14 +1,24 @@
-export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], quoteFollowups = [], procedurePlans = [], financeRows = [], today = new Date() } = {}) {
+export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], quoteFollowups = [], procedurePlans = [], financeRows = [], today = new Date(), owner = "" } = {}) {
   const day = startOfDay(today);
   const monthStart = new Date(day.getFullYear(), day.getMonth(), 1);
   const monthEnd = new Date(day.getFullYear(), day.getMonth() + 1, 0);
-  const normalizedOrders = salesOrders.map((row) => normalizeOrder(row, day));
+  const ownerFilter = String(owner || "").trim();
+  const ownerWorkbenches = buildOwnerWorkbenches({ salesOrders, materialAlerts, quoteFollowups, procedurePlans });
+  const orderOwnerByNo = new Map(salesOrders.map((row) => [row.order_no, row.owner || "未分配"]).filter(([orderNo]) => orderNo));
+  const scopedSalesOrders = ownerFilter ? salesOrders.filter((row) => ownerMatches(row.owner, ownerFilter)) : salesOrders;
+  const scopedMaterialAlerts = ownerFilter
+    ? materialAlerts.filter((row) => ownerMatches(row.owner || orderOwnerByNo.get(row.order_no), ownerFilter))
+    : materialAlerts;
+  const scopedQuoteFollowups = ownerFilter ? quoteFollowups.filter((row) => ownerMatches(row.owner, ownerFilter)) : quoteFollowups;
+  const scopedProcedurePlans = ownerFilter ? procedurePlans.filter((row) => ownerMatches(row.owner || orderOwnerByNo.get(row.order_no), ownerFilter)) : procedurePlans;
+  const scopedFinanceRows = ownerFilter ? financeRows.filter((row) => ownerMatches(row.owner, ownerFilter)) : financeRows;
+  const normalizedOrders = scopedSalesOrders.map((row) => normalizeOrder(row, day));
   const overdueOrders = normalizedOrders.filter((row) => row.days_from_today !== null && row.days_from_today < 0);
   const dueSoonOrders = normalizedOrders.filter((row) => row.days_from_today !== null && row.days_from_today >= 0 && row.days_from_today <= 7);
-  const shortageRows = materialAlerts.filter((row) => row.alert_type === "shortage").map(normalizeMaterialAlert);
-  const lowStockRows = materialAlerts.filter((row) => row.alert_type === "low_stock").map(normalizeMaterialAlert);
-  const pendingQuotes = quoteFollowups.map(normalizeQuoteFollowup).filter((row) => row.quote_status !== "已报价待确认");
-  const normalizedProcedures = procedurePlans.map(normalizeProcedurePlan);
+  const shortageRows = scopedMaterialAlerts.filter((row) => row.alert_type === "shortage").map(normalizeMaterialAlert);
+  const lowStockRows = scopedMaterialAlerts.filter((row) => row.alert_type === "low_stock").map(normalizeMaterialAlert);
+  const pendingQuotes = scopedQuoteFollowups.map(normalizeQuoteFollowup).filter((row) => row.quote_status !== "已报价待确认");
+  const normalizedProcedures = scopedProcedurePlans.map(normalizeProcedurePlan);
   const delayedProcedures = normalizedProcedures
     .filter((row) => row.remaining_qty === null || row.remaining_qty > 0)
     .filter((row) => {
@@ -16,7 +26,7 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
       return finishDate && startOfDay(finishDate) < day;
     });
   const stampingDelayedProcedures = delayedProcedures.filter(isStampingProcedure);
-  const financeCenter = buildLocalFinanceCenter({ financeRows });
+  const financeCenter = buildLocalFinanceCenter({ financeRows: scopedFinanceRows });
   const orderBattle = buildOrderBattleMap(normalizedProcedures, day);
   const procedureCoverage = buildOrderProcedureCoverage(normalizedOrders, normalizedProcedures);
   const priorityRisks = [
@@ -56,6 +66,7 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
     model: "pmc_console",
     generated_at: new Date().toISOString(),
     cached: true,
+    owner_filter: ownerFilter,
     summary: {
       today_orders: normalizedOrders.filter((row) => sameDay(parseDate(row.signed_date), day)).length,
       month_orders: normalizedOrders.filter((row) => betweenDays(parseDate(row.signed_date), monthStart, monthEnd)).length,
@@ -96,6 +107,7 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
       red_risks: redRisks,
       yellow_risks: yellowRisks,
       intervention_tasks: interventionTasks,
+      owner_workbenches: ownerWorkbenches,
       order_battle_stages: orderBattle.stages,
       order_battle_map: orderBattle.rows,
       order_battle_summary: orderBattle.summary,
@@ -107,11 +119,11 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
       due_soon_payables: financeCenter.sections.due_soon_payables
     },
     source_status: {
-      sqlite_sales_orders: { ok: true, rows: salesOrders.length },
-      sqlite_material_alerts: { ok: true, rows: materialAlerts.length },
-      sqlite_quote_followups: { ok: true, rows: quoteFollowups.length },
-      sqlite_procedure_plans: { ok: true, rows: procedurePlans.length },
-      sqlite_finance_records: { ok: true, rows: financeRows.length }
+      sqlite_sales_orders: { ok: true, rows: scopedSalesOrders.length, total_rows: salesOrders.length },
+      sqlite_material_alerts: { ok: true, rows: scopedMaterialAlerts.length, total_rows: materialAlerts.length },
+      sqlite_quote_followups: { ok: true, rows: scopedQuoteFollowups.length, total_rows: quoteFollowups.length },
+      sqlite_procedure_plans: { ok: true, rows: scopedProcedurePlans.length, total_rows: procedurePlans.length },
+      sqlite_finance_records: { ok: true, rows: scopedFinanceRows.length, total_rows: financeRows.length }
     },
     notes: [
       "当前读取本地 SQLite 销售订单、物料告警、待报价、派工进度和应收应付汇总。",
@@ -215,6 +227,59 @@ export function quoteOwnerSummaryForLocal(rows) {
     .map((row) => ({ ...row, estimated_amount: Number(row.estimated_amount.toFixed(2)) }))
     .sort((a, b) => b.urgent_quotes - a.urgent_quotes || b.max_age_days - a.max_age_days || b.estimated_amount - a.estimated_amount)
     .slice(0, 20);
+}
+
+function buildOwnerWorkbenches({ salesOrders = [], materialAlerts = [], quoteFollowups = [], procedurePlans = [] } = {}) {
+  const grouped = new Map();
+  const orderOwnerByNo = new Map();
+  for (const row of salesOrders) {
+    const owner = row.owner || "未分配";
+    if (row.order_no) orderOwnerByNo.set(row.order_no, owner);
+    const current = ownerWorkbenchRow(grouped, owner);
+    current.active_orders += 1;
+  }
+  for (const row of materialAlerts.filter((item) => item.alert_type === "shortage")) {
+    const owner = row.owner || orderOwnerByNo.get(row.order_no) || "未分配";
+    ownerWorkbenchRow(grouped, owner).shortage_orders += 1;
+  }
+  for (const row of quoteFollowups) {
+    const owner = row.owner || "未分配";
+    const current = ownerWorkbenchRow(grouped, owner);
+    if (row.quote_status !== "已报价待确认") current.pending_quotes += 1;
+  }
+  for (const row of procedurePlans) {
+    const owner = row.owner || orderOwnerByNo.get(row.order_no) || "未分配";
+    const current = ownerWorkbenchRow(grouped, owner);
+    current.procedure_plans += 1;
+    if ((number(row.remaining_qty) || 0) > 0) current.open_procedures += 1;
+  }
+  return [...grouped.values()]
+    .map((row) => ({
+      ...row,
+      todos: row.shortage_orders + row.pending_quotes + row.open_procedures,
+      owner_link: row.owner
+    }))
+    .sort((a, b) => b.todos - a.todos || b.active_orders - a.active_orders || a.owner.localeCompare(b.owner, "zh-CN"))
+    .slice(0, 20);
+}
+
+function ownerWorkbenchRow(grouped, owner) {
+  const key = owner || "未分配";
+  if (!grouped.has(key)) {
+    grouped.set(key, {
+      owner: key,
+      active_orders: 0,
+      shortage_orders: 0,
+      pending_quotes: 0,
+      procedure_plans: 0,
+      open_procedures: 0
+    });
+  }
+  return grouped.get(key);
+}
+
+function ownerMatches(value, ownerFilter) {
+  return (value || "未分配") === ownerFilter;
 }
 
 export function mapFinanceRowForLocal(row, direction, today = new Date()) {

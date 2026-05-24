@@ -379,7 +379,7 @@ const server = http.createServer(async (req, res) => {
           },
           pmc_console: {
             name: "PMC驾驶舱首页",
-            allowedParams: ["today", "scan_size", "scan_pages", "alert_limit", "contract_limit", "due_soon_days", "quote_limit", "low_stock_threshold", "old_stock_days"]
+            allowedParams: ["today", "owner", "scan_size", "scan_pages", "alert_limit", "contract_limit", "due_soon_days", "quote_limit", "low_stock_threshold", "old_stock_days"]
           },
           order_center: {
             name: "订单管理中心",
@@ -1240,6 +1240,13 @@ function labelFor(key) {
     material_tasks: "物料任务",
     urgent_material_tasks: "紧急物料任务",
     owner_count: "负责人数",
+    owner_link: "进入视图",
+    active_orders: "负责订单",
+    shortage_orders: "缺料订单",
+    pending_quotes: "待报价",
+    procedure_plans: "派工工序",
+    open_procedures: "未完工序",
+    todos: "待办合计",
     max_age_days: "最长停留天数",
     bucket: "时间窗口",
     order_count: "订单数",
@@ -1350,6 +1357,7 @@ function labelFor(key) {
 function pmcConsolePage(body) {
   const command = body.command_center || {};
   const interventions = pmcInterventionSummary({ today: new Date(), limit: 8 });
+  const ownerFilter = body.owner_filter || "";
   const cards = [
     ["今日待办", command.today_todos ?? 0, "红黄牌需要处理", command.red_count > 0 ? "danger" : command.yellow_count > 0 ? "warning" : "neutral"],
     ["今日已处理", interventions.today_actions ?? 0, "本地干预留痕", "neutral"],
@@ -1452,10 +1460,11 @@ function pmcConsolePage(body) {
     <header>
       <div>
         <h1>蕴杰金属数字 PMC 控制台</h1>
-        <div class="sub">内网免登录版 · 老板 / PMC / 销售共用 · 更新时间 ${escapeHtml(formatDateTime(body.generated_at))}${body.cached ? " · 读取本地快照" : ""}</div>
+        <div class="sub">内网免登录版 · 老板 / PMC / 销售共用 · 更新时间 ${escapeHtml(formatDateTime(body.generated_at))}${body.cached ? " · 读取本地快照" : ""}${ownerFilter ? ` · 跟单员视图：${escapeHtml(ownerFilter)}` : ""}</div>
       </div>
       <div class="actions">
         <a class="button" href="/api/pmc_console?format=json">查看 JSON</a>
+        ${ownerFilter ? '<a class="button" href="/pmc?rebuild=1">返回全局</a>' : ""}
         <a class="button primary" href="/pmc?rebuild=1">从 SQLite 重新生成</a>
       </div>
     </header>
@@ -1466,6 +1475,10 @@ function pmcConsolePage(body) {
     <section class="risk-board">
       ${pmcTablePanel("红牌：今天必须处理", body.sections.red_risks, ["risk_type", "related_no", "problem", "rule_reason", "owner_role", "buttons"], "danger")}
       ${pmcTablePanel("黄牌：3天内可能恶化", body.sections.yellow_risks, ["risk_type", "related_no", "problem", "rule_reason", "owner_role", "buttons"], "warning")}
+    </section>
+    <div class="zone-title">跟单员视图</div>
+    <section class="intervention-list">
+      ${pmcTablePanel("负责人入口", body.sections.owner_workbenches, ["owner", "active_orders", "shortage_orders", "pending_quotes", "open_procedures", "todos", "owner_link"], "neutral")}
     </section>
     <div class="zone-title">我的干预清单</div>
     <section class="intervention-list">
@@ -1562,6 +1575,11 @@ function formatPmcCell(row, column) {
     return row.buttons
       .map((label) => `<a class="mini-button" href="${escapeHtml(pmcInterventionHref(row, label))}">${escapeHtml(label)}</a>`)
       .join("");
+  }
+  if (column === "owner_link") {
+    const owner = row?.owner_link || row?.owner || "";
+    if (!owner) return "";
+    return `<a class="mini-button" href="/pmc?rebuild=1&owner=${encodeURIComponent(owner)}">进入</a>`;
   }
   return formatCell(row?.[column]);
 }
@@ -5375,6 +5393,7 @@ function queryLocalPmcDashboard(params = {}) {
   const financeRows = listFinanceRecords({ limit });
   return buildLocalPmcDashboard({
     today: params.today ? new Date(params.today) : new Date(),
+    owner: params.owner,
     salesOrders,
     materialAlerts,
     quoteFollowups,
