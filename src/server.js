@@ -4,7 +4,7 @@ import { ErpClient, ERP_VIEWS, normalizeTable, toBusinessView } from "./erpClien
 import { queryOrderDeliveryRisks } from "./orderDeliveryRisks.js";
 import { queryOrderShortages } from "./orderShortages.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
-import { finishHistorySyncRun, initLocalDb, latestErpRequestLogs, latestHistorySyncRuns, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listMaterialAlerts, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, savePmcSnapshot, startHistorySyncRun, tableStats } from "./localDb.js";
+import { finishHistorySyncRun, initLocalDb, latestErpRequestLogs, latestHistorySyncRuns, latestPmcInterventions, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listMaterialAlerts, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, savePmcIntervention, savePmcSnapshot, startHistorySyncRun, tableStats } from "./localDb.js";
 import { syncCoreData } from "./syncService.js";
 import { buildSyncPolicyRows } from "./syncPolicy.js";
 import { buildErpHealthSummary, shouldBlockErpBusinessQuery } from "./erpHealth.js";
@@ -59,6 +59,17 @@ const server = http.createServer(async (req, res) => {
       const params = Object.fromEntries(url.searchParams);
       const result = await queryPmcConsole(params);
       return sendHtml(res, 200, pmcConsolePage(result.body));
+    }
+
+    if (req.method === "GET" && url.pathname === "/pmc/intervention") {
+      const params = Object.fromEntries(url.searchParams);
+      return sendHtml(res, 200, pmcInterventionPage(params));
+    }
+
+    if (req.method === "GET" && url.pathname === "/pmc/intervention/save") {
+      const params = Object.fromEntries(url.searchParams);
+      const saved = savePmcIntervention(params);
+      return sendHtml(res, 200, pmcInterventionPage(params, saved));
     }
 
     if (req.method === "GET" && url.pathname === "/orders") {
@@ -1166,6 +1177,13 @@ function labelFor(key) {
     demand_qty: "需求数量",
     remaining_qty: "未交数量",
     risk_type: "风险类型",
+    risk_level: "风险等级",
+    problem: "问题描述",
+    buttons: "干预按钮",
+    owner_role: "责任角色",
+    action_label: "动作",
+    note: "备注",
+    actor: "处理人",
     days_from_today: "距今天数",
     delivery_date: "交期",
     signed_date: "签订日期",
@@ -1386,6 +1404,8 @@ function pmcConsolePage(body) {
     .tag { display: inline-block; padding: 3px 7px; border-radius: 999px; background: var(--green-soft); color: var(--green); font-size: 12px; white-space: nowrap; }
     .tag.danger { background: var(--red-soft); color: var(--red); }
     .tag.warning { background: var(--amber-soft); color: var(--amber); }
+    .mini-button { display: inline-block; margin: 2px 4px 2px 0; padding: 4px 7px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text); text-decoration: none; font-size: 12px; white-space: nowrap; }
+    .mini-button:hover { border-color: var(--green); color: var(--green); }
     .notes { margin-top: 12px; color: var(--muted); font-size: 13px; line-height: 1.7; }
     @media (max-width: 1180px) {
       .kpis { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
@@ -1461,10 +1481,128 @@ function pmcTablePanel(title, rows, columns, tone = "") {
     <h2 class="${escapeHtml(tone)}">${escapeHtml(title)} <span class="tag ${escapeHtml(tone)}">${safeRows.length}</span></h2>
     ${
       safeRows.length
-        ? `<table><thead><tr>${columns.map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${safeRows.map((row) => `<tr>${columns.map((column) => `<td>${formatCell(row?.[column])}</td>`).join("")}</tr>`).join("")}</tbody></table>`
+        ? `<table><thead><tr>${columns.map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${safeRows.map((row) => `<tr>${columns.map((column) => `<td>${formatPmcCell(row, column)}</td>`).join("")}</tr>`).join("")}</tbody></table>`
         : `<div class="empty">当前没有${escapeHtml(title)}。</div>`
     }
   </section>`;
+}
+
+function formatPmcCell(row, column) {
+  if (column === "buttons" && Array.isArray(row?.buttons)) {
+    return row.buttons
+      .map((label) => `<a class="mini-button" href="${escapeHtml(pmcInterventionHref(row, label))}">${escapeHtml(label)}</a>`)
+      .join("");
+  }
+  return formatCell(row?.[column]);
+}
+
+function pmcInterventionHref(row, actionLabel) {
+  const params = new URLSearchParams();
+  params.set("action_label", actionLabel || "查看详情");
+  params.set("risk_level", row?.risk_level || row?.priority || "");
+  params.set("risk_type", row?.risk_type || row?.exception_type || "");
+  params.set("related_no", row?.related_no || "");
+  params.set("problem", row?.problem || row?.item || "");
+  params.set("primary_action", row?.primary_action || row?.action || "");
+  params.set("actor", "内网用户");
+  return `/pmc/intervention?${params.toString()}`;
+}
+
+function pmcInterventionPage(params = {}, saved = null) {
+  const relatedNo = params.related_no || "";
+  const recentRows = latestPmcInterventions({ related_no: relatedNo, limit: 10 });
+  const saveParams = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null) saveParams.set(key, String(value));
+  }
+  saveParams.set("note", params.note || defaultInterventionNote(params));
+  const template = interventionTemplate(params);
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PMC 干预处理</title>
+  <style>
+    :root { --bg:#f4f6f8; --panel:#fff; --text:#172033; --muted:#667085; --border:#d9dee7; --green:#176b58; --red:#b42318; --red-soft:#fee4e2; }
+    * { box-sizing: border-box; }
+    body { margin:0; min-height:100vh; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
+    main { width:min(1180px, calc(100% - 32px)); margin:0 auto; padding:24px 0 36px; }
+    header { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; padding-bottom:16px; border-bottom:1px solid var(--border); }
+    h1 { margin:0; font-size:28px; }
+    .sub { margin-top:8px; color:var(--muted); font-size:14px; }
+    .button { display:inline-block; min-height:36px; padding:8px 12px; border:1px solid var(--border); border-radius:6px; background:var(--panel); color:var(--text); text-decoration:none; font-size:14px; }
+    .button.primary { background:var(--green); border-color:var(--green); color:#fff; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:16px; align-items:start; }
+    .panel { border:1px solid var(--border); border-radius:8px; background:var(--panel); overflow:hidden; }
+    .panel h2 { margin:0; padding:14px 16px; border-bottom:1px solid var(--border); font-size:17px; }
+    .body { padding:14px 16px; line-height:1.7; font-size:14px; }
+    .success { margin-top:14px; padding:12px 14px; border:1px solid #b7dfc8; border-radius:8px; background:#e8f3ef; color:var(--green); }
+    .tag { display:inline-block; padding:3px 7px; border-radius:999px; background:#e8f3ef; color:var(--green); font-size:12px; white-space:nowrap; }
+    .template { white-space:pre-wrap; padding:12px; border:1px solid var(--border); border-radius:8px; background:#f8fafc; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { padding:9px 10px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; font-size:13px; }
+    th { background:#f0f3f6; color:#344054; }
+    @media (max-width: 900px) { .grid { grid-template-columns:1fr; } header { display:block; } .actions { margin-top:12px; } }
+    ${sharedNavCss()}
+  </style>
+</head>
+<body>
+  <main>
+    ${renderTopNav("/pmc")}
+    <header>
+      <div>
+        <h1>PMC 干预处理</h1>
+        <div class="sub">本页只写入本地 SQLite 留痕，不回写 ERP，不发送外部消息。</div>
+      </div>
+      <div class="actions">
+        <a class="button" href="/pmc?rebuild=1">返回作战台</a>
+        <a class="button primary" href="/pmc/intervention/save?${escapeHtml(saveParams.toString())}">记录为已处理</a>
+      </div>
+    </header>
+    ${saved ? `<div class="success">已保存本地干预记录：#${escapeHtml(saved.id)}，${escapeHtml(formatDateTime(saved.created_at))}</div>` : ""}
+    <section class="grid">
+      <section class="panel"><h2>问题与动作</h2><div class="body">
+        <div><strong>风险等级：</strong>${escapeHtml(params.risk_level || "")}</div>
+        <div><strong>风险类型：</strong>${escapeHtml(params.risk_type || "")}</div>
+        <div><strong>关联单号：</strong>${escapeHtml(relatedNo || "")}</div>
+        <div><strong>问题描述：</strong>${escapeHtml(params.problem || "")}</div>
+        <div><strong>选择动作：</strong>${escapeHtml(params.action_label || "")}</div>
+        <div><strong>建议动作：</strong>${escapeHtml(params.primary_action || "")}</div>
+      </div></section>
+      <section class="panel"><h2>标准处理文本</h2><div class="body"><div class="template">${escapeHtml(template)}</div></div></section>
+    </section>
+    <section class="panel" style="margin-top:12px;"><h2>最近处理记录 <span class="tag">${recentRows.length}</span></h2>
+      ${
+        recentRows.length
+          ? `<table><thead><tr>${["created_at", "risk_type", "related_no", "action_label", "note", "actor"].map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${recentRows.map((row) => `<tr>${["created_at", "risk_type", "related_no", "action_label", "note", "actor"].map((column) => `<td>${formatCell(row[column])}</td>`).join("")}</tr>`).join("")}</tbody></table>`
+          : `<div class="body">当前关联单号还没有本地处理记录。</div>`
+      }
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
+function defaultInterventionNote(params = {}) {
+  return `${params.action_label || "处理"}：${params.primary_action || params.problem || "已进入处理"}`;
+}
+
+function interventionTemplate(params = {}) {
+  const action = params.action_label || "处理";
+  const riskType = params.risk_type || "风险";
+  const relatedNo = params.related_no || "相关单号";
+  const problem = params.problem || "待处理问题";
+  if (/催货|供应商|物流/.test(action)) {
+    return `供应商您好：\n${relatedNo} 当前存在 ${riskType}：${problem}。\n请确认具体到货时间、物流状态和可提前交付方案。如有延迟，请今天回复原因和新的到厂时间。\n\n蕴杰金属 PMC`;
+  }
+  if (/客户|沟通|通知/.test(action)) {
+    return `客户您好：\n${relatedNo} 当前进度我们正在重点跟进，问题为：${problem}。\n我们会在确认生产/物料方案后同步最新交付安排。`;
+  }
+  if (/加班|外协|排程|协调/.test(action)) {
+    return `内部协调：\n${relatedNo} 需处理 ${riskType}：${problem}。\n建议动作：${params.primary_action || action}。\n请责任部门确认资源、完成时间和对交期的影响。`;
+  }
+  return `${relatedNo} ${riskType}：${problem}\n处理动作：${action}\n建议：${params.primary_action || "请确认责任人、处理时限和下一步结果。"}`;
 }
 
 async function queryOrderCenter(params = {}) {

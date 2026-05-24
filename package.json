@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node --no-warnings src/server.js",
-    "check": "node --check src/server.js && node --check src/erpClient.js && node --check src/erpRequestQueue.js && node --check src/orderShortages.js && node --check src/orderDeliveryRisks.js && node --check src/pendingQuotes.js && node --check src/localDb.js && node --check src/syncService.js && node --check src/syncPolicy.js && node --check src/erpHealth.js && node --check src/sqliteCoverage.js && node --check src/historySync.js && node --check src/localAnalytics.js && node --check src/syncPause.js && node --test test/localAnalytics.test.js test/syncService.test.js test/syncPolicy.test.js test/erpRequestQueue.test.js test/erpClientLogging.test.js test/erpHealth.test.js test/sqliteCoverage.test.js test/historySync.test.js test/syncPause.test.js"
+    "check": "node --check src/server.js && node --check src/erpClient.js && node --check src/erpRequestQueue.js && node --check src/orderShortages.js && node --check src/orderDeliveryRisks.js && node --check src/pendingQuotes.js && node --check src/localDb.js && node --check src/syncService.js && node --check src/syncPolicy.js && node --check src/erpHealth.js && node --check src/sqliteCoverage.js && node --check src/historySync.js && node --check src/localAnalytics.js && node --check src/syncPause.js && node --test test/localAnalytics.test.js test/localDbInterventions.test.js test/syncService.test.js test/syncPolicy.test.js test/erpRequestQueue.test.js test/erpClientLogging.test.js test/erpHealth.test.js test/sqliteCoverage.test.js test/historySync.test.js test/syncPause.test.js"
   },
   "engines": {
     "node": ">=18"

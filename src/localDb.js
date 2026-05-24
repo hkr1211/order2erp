@@ -54,6 +54,19 @@ export function initLocalDb(dbPath = process.env.PMC_DB_PATH || DEFAULT_DB_PATH)
       error_message TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS pmc_intervention_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at TEXT NOT NULL,
+      risk_level TEXT,
+      risk_type TEXT,
+      related_no TEXT,
+      action_label TEXT NOT NULL,
+      problem TEXT,
+      note TEXT,
+      actor TEXT,
+      payload_json TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS erp_sales_orders (
       erp_id TEXT PRIMARY KEY,
       order_no TEXT,
@@ -175,6 +188,52 @@ export function latestPmcSnapshot() {
     summary: JSON.parse(row.summary_json),
     payload: JSON.parse(row.payload_json)
   };
+}
+
+export function savePmcIntervention(entry) {
+  const database = initLocalDb();
+  const createdAt = entry.created_at || new Date().toISOString();
+  const payload = {
+    risk_level: entry.risk_level || "",
+    risk_type: entry.risk_type || "",
+    related_no: entry.related_no || "",
+    action_label: entry.action_label || "",
+    problem: entry.problem || "",
+    note: entry.note || "",
+    actor: entry.actor || "内网用户"
+  };
+  const result = database
+    .prepare(
+      `INSERT INTO pmc_intervention_logs
+       (created_at, risk_level, risk_type, related_no, action_label, problem, note, actor, payload_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(createdAt, payload.risk_level, payload.risk_type, payload.related_no, payload.action_label, payload.problem, payload.note, payload.actor, JSON.stringify({ ...entry, ...payload }));
+  return { id: result.lastInsertRowid, created_at: createdAt, ...payload };
+}
+
+export function latestPmcInterventions({ limit = 20, related_no = "" } = {}) {
+  const database = initLocalDb();
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 20, 200));
+  if (related_no) {
+    return database
+      .prepare(
+        `SELECT id, created_at, risk_level, risk_type, related_no, action_label, problem, note, actor, payload_json
+         FROM pmc_intervention_logs
+         WHERE related_no = ?
+         ORDER BY id DESC
+         LIMIT ?`
+      )
+      .all(String(related_no), safeLimit);
+  }
+  return database
+    .prepare(
+      `SELECT id, created_at, risk_level, risk_type, related_no, action_label, problem, note, actor, payload_json
+       FROM pmc_intervention_logs
+       ORDER BY id DESC
+       LIMIT ?`
+    )
+    .all(safeLimit);
 }
 
 export function startSyncRun(sourceKey) {
