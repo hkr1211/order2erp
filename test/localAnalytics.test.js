@@ -105,6 +105,10 @@ test("buildLocalPmcDashboard groups red and yellow risks with intervention actio
   assert.equal(body.sections.yellow_risks.some((row) => row.rule_reason.includes("3天内可能恶化")), true);
   assert.equal(body.sections.intervention_tasks[0].primary_action, "优先确认冲压产能、模具和插单影响");
   assert.equal(body.sections.intervention_tasks.some((row) => row.buttons.includes("生成催货文本")), true);
+  assert.equal(body.sections.morning_brief[0].risk_level, "红牌");
+  assert.equal(body.sections.morning_brief[0].headline.includes("产能瓶颈"), true);
+  assert.equal(body.sections.morning_brief[0].meeting_focus, "今天确认产能、班次和外协选择");
+  assert.equal(body.sections.morning_brief.some((row) => row.buttons.includes("标记处理中")), true);
 });
 
 test("buildLocalPmcDashboard formats shortage quantities with kg precision", () => {

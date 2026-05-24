@@ -1341,6 +1341,9 @@ function labelFor(key) {
     age_days: "账龄天数",
     due_days: "到期天数",
     risk_status: "风险状态",
+    priority_no: "序号",
+    headline: "摘要",
+    meeting_focus: "早会关注点",
     task_no: "待办编号",
     followup_no: "跟催编号",
     followup_type: "跟催类型",
@@ -1605,6 +1608,10 @@ function pmcConsolePage(body) {
     </header>
     <section class="kpis">
       ${cards.map(([label, value, hint, tone]) => `<div class="kpi ${tone}"><div class="label">${escapeHtml(label)}</div><div class="value">${escapeHtml(value)}</div><div class="hint">${escapeHtml(hint)}</div></div>`).join("\n")}
+    </section>
+    <div class="zone-title">今日早会风险摘要</div>
+    <section class="intervention-list">
+      ${pmcTablePanel("老板/管理层重点", body.sections.morning_brief, ["priority_no", "risk_level", "headline", "related_no", "owner_role", "next_action", "meeting_focus", "buttons"], "danger")}
     </section>
     <div class="zone-title">红黄牌风险区</div>
     <section class="risk-board risk-board-command">

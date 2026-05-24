@@ -61,6 +61,7 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
     owner_role: row.owner_role,
     due_date: row.due_date
   }));
+  const morningBrief = buildMorningBrief({ redRisks, yellowRisks });
 
   return {
     model: "pmc_console",
@@ -107,6 +108,7 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
       priority_risks: priorityRisks,
       red_risks: redRisks,
       yellow_risks: yellowRisks,
+      morning_brief: morningBrief,
       intervention_tasks: interventionTasks,
       owner_workbenches: ownerWorkbenches,
       order_battle_stages: orderBattle.stages,
@@ -131,6 +133,27 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
       "同步暂停时本页不会访问 ERP，只使用最近已同步成功的数据重新生成。"
     ]
   };
+}
+
+function buildMorningBrief({ redRisks = [], yellowRisks = [] } = {}) {
+  const headlineRows = [...redRisks, ...yellowRisks]
+    .sort((a, b) => riskLevelWeight(b.risk_level) - riskLevelWeight(a.risk_level) || riskTypeWeight(b.risk_type) - riskTypeWeight(a.risk_type) || String(a.due_date || "").localeCompare(String(b.due_date || "")))
+    .slice(0, 6);
+
+  return headlineRows.map((row, index) => ({
+    priority_no: index + 1,
+    risk_level: row.risk_level,
+    headline: `${row.risk_type || "风险"}：${row.problem || row.related_no || "待确认"}`,
+    related_no: row.related_no,
+    owner_role: row.owner_role || "PMC",
+    next_action: row.primary_action || "确认责任人和完成时间",
+    meeting_focus: meetingFocusForRisk(row.risk_type),
+    buttons: Array.isArray(row.buttons) ? row.buttons.slice(0, 3) : ["标记处理中"]
+  }));
+}
+
+function riskLevelWeight(level) {
+  return String(level || "").includes("红") ? 2 : 1;
 }
 
 export function buildLocalExceptionCenter(dashboard) {
@@ -908,6 +931,14 @@ function ruleReasonForRisk(type, row) {
   if (type === "产能预警") return "工序计划存在延期风险，3天内可能恶化";
   if (type === "物料预警") return "库存可用量偏低，3天内可能恶化";
   return row.action || "按当前规则识别为需关注";
+}
+
+function meetingFocusForRisk(type) {
+  if (type === "物料断供" || type === "物料预警") return "今天确认到料、替代料或调拨方案";
+  if (type === "交期超期" || type === "交期预警") return "今天明确新交期和客户沟通口径";
+  if (type === "冲压延期" || type === "产能瓶颈" || type === "产能预警") return "今天确认产能、班次和外协选择";
+  if (type === "报价预警") return "今天确认报价资料、责任人和回复时间";
+  return "今天确认责任人、截止时间和下一步结果";
 }
 
 function interventionButtons(type) {
