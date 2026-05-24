@@ -28,6 +28,36 @@ test("buildLocalPmcDashboard summarizes SQLite orders and material alerts", () =
   assert.equal(body.sections.low_stock[0].product_code, "MO-1");
 });
 
+test("buildLocalPmcDashboard includes synced quote, procedure, and finance data", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-23T08:00:00+08:00"),
+    salesOrders: [],
+    materialAlerts: [],
+    quoteFollowups: [
+      { quote_no: "Q-1", title: "钼板询价", customer: "客户A", project_stage: "核价", estimated_amount: 120000, quoted_amount: 0, created_date: "2026-05-10", age_days: 13, priority: "高", quote_status: "待报价", action: "优先报价" },
+      { quote_no: "Q-2", title: "钽片复购", customer: "客户B", project_stage: "已报价", estimated_amount: 50000, quoted_amount: 48000, created_date: "2026-05-21", age_days: 2, priority: "低", quote_status: "已报价待确认" }
+    ],
+    procedurePlans: [
+      { work_assignment_id: "W-1", order_no: "SO-1", product_name: "钼板", procedure_name: "冲压", work_center_name: "冲压工段", planned_qty: 10, finished_qty: 2, remaining_qty: 8, planned_finish_date: "2026-05-20", owner: "张三", state: "生产中" },
+      { work_assignment_id: "W-2", order_no: "SO-2", product_name: "钨棒", procedure_name: "质检", work_center_name: "质检", planned_qty: 5, finished_qty: 5, remaining_qty: 0, planned_finish_date: "2026-05-22", owner: "李四", state: "已完工" }
+    ],
+    financeRows: [
+      { direction: "receivable", counterparty: "客户A", bill_no: "R-1", business_title: "钼板订单", unpaid_amount: 800, due_date: "2026-05-10", due_days: -13, risk_status: "已逾期" },
+      { direction: "payable", counterparty: "供应商B", bill_no: "P-1", business_title: "原料采购", unpaid_amount: 400, due_date: "2026-05-28", due_days: 5, risk_status: "7天内到期" }
+    ]
+  });
+
+  assert.equal(body.summary.pending_quote_projects, 1);
+  assert.equal(body.summary.procedure_plan_rows, 2);
+  assert.equal(body.summary.delayed_procedures, 1);
+  assert.equal(body.summary.overdue_receivables, 1);
+  assert.equal(body.summary.due_soon_payables, 1);
+  assert.equal(body.sections.pending_quotes[0].quote_no, "Q-1");
+  assert.equal(body.sections.delayed_procedures[0].work_center_name, "冲压工段");
+  assert.equal(body.sections.overdue_receivables[0].bill_no, "R-1");
+  assert.equal(body.source_status.sqlite_quote_followups.rows, 2);
+});
+
 test("buildLocalFinanceCenter summarizes receivables and payables by risk", () => {
   const today = new Date("2026-05-23T08:00:00+08:00");
   const receivable = mapFinanceRowForLocal({

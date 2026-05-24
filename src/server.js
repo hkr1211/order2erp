@@ -1327,7 +1327,9 @@ function pmcConsolePage(body) {
     ["7天内交期", body.summary.due_soon_orders, "临近交付窗口", "warning"],
     ["缺料订单", body.summary.shortage_orders, "按销售订单产品库存计算", "danger"],
     ["待报价项目", body.summary.pending_quote_projects, "项目/商机待报价", "warning"],
-    ["低库存预警", body.summary.low_stock, "可用库存低于阈值", "warning"]
+    ["低库存预警", body.summary.low_stock, "可用库存低于阈值", "warning"],
+    ["延期工序", body.summary.delayed_procedures ?? 0, "派工进度追踪表", "danger"],
+    ["逾期应收", body.summary.overdue_receivables ?? 0, "已到期未收款项", "warning"]
   ];
   return `<!doctype html>
 <html lang="zh-CN">
@@ -1359,7 +1361,7 @@ function pmcConsolePage(body) {
     .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
     .button { min-height: 36px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); text-decoration: none; font-size: 14px; }
     .button.primary { background: var(--green); border-color: var(--green); color: #ffffff; }
-    .kpis { display: grid; grid-template-columns: repeat(7, minmax(132px, 1fr)); gap: 10px; margin: 18px 0; }
+    .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 10px; margin: 18px 0; }
     .kpi { min-height: 112px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
     .kpi.warning { background: var(--amber-soft); border-color: #f3c77b; }
     .kpi.danger { background: var(--red-soft); border-color: #f2a7a3; }
@@ -1404,7 +1406,7 @@ function pmcConsolePage(body) {
       </div>
       <div class="actions">
         <a class="button" href="/api/pmc_console?format=json">查看 JSON</a>
-        <a class="button primary" href="/pmc?refresh=1">刷新驾驶舱</a>
+        <a class="button primary" href="/pmc?rebuild=1">从 SQLite 重新生成</a>
       </div>
     </header>
     <section class="kpis">
@@ -1415,10 +1417,13 @@ function pmcConsolePage(body) {
         ${pmcTablePanel("逾期订单", body.sections.overdue_orders, ["order_no", "customer", "product_name", "remaining_qty", "delivery_date"], "danger")}
         ${pmcTablePanel("7天内交期订单", body.sections.due_soon_orders, ["order_no", "customer", "product_name", "remaining_qty", "delivery_date"], "warning")}
         ${pmcTablePanel("缺料订单", body.sections.shortage_orders, ["order_no", "customer", "product_name", "demand_qty", "available_qty", "shortage_qty"], "danger")}
+        ${pmcTablePanel("延期工序", body.sections.delayed_procedures, ["work_assignment_id", "order_no", "product_name", "procedure_name", "work_center_name", "remaining_qty", "planned_finish_date"], "danger")}
       </div>
       <div class="stack">
         ${pmcTablePanel("待报价项目", body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"], "warning")}
         ${pmcTablePanel("低库存预警", body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"], "warning")}
+        ${pmcTablePanel("逾期应收", body.sections.overdue_receivables, ["counterparty", "bill_no", "business_title", "unpaid_amount", "due_date", "risk_status"], "warning")}
+        ${pmcTablePanel("7天内应付", body.sections.due_soon_payables, ["counterparty", "bill_no", "business_title", "unpaid_amount", "due_date", "risk_status"], "warning")}
       </div>
     </section>
     <section class="notes">
@@ -5130,24 +5135,34 @@ function pmcGoalPage() {
 }
 
 function queryLocalPmcDashboard(params = {}) {
-  const limit = clampInt(params.local_limit || 1000, 1, 5000);
+  const limit = clampInt(params.local_limit || 5000, 1, 5000);
   const salesOrders = listSalesOrders({ limit });
   if (!salesOrders.length) {
     return null;
   }
   const materialAlerts = listMaterialAlerts({ limit });
+  const quoteFollowups = listQuoteFollowups({ limit });
+  const procedurePlans = listProcedurePlans({ limit });
+  const financeRows = listFinanceRecords({ limit });
   return buildLocalPmcDashboard({
     today: params.today ? new Date(params.today) : new Date(),
     salesOrders,
-    materialAlerts
+    materialAlerts,
+    quoteFollowups,
+    procedurePlans,
+    financeRows
   });
 }
 
 async function queryPmcConsole(params = {}) {
   const refresh = parseBoolean(params.refresh);
-  if (!refresh) {
+  const rebuild = parseBoolean(params.rebuild);
+  if (!refresh || rebuild) {
     const localDashboard = queryLocalPmcDashboard(params);
     if (localDashboard) {
+      if (rebuild) {
+        savePmcSnapshot(localDashboard);
+      }
       return {
         header: { status: 0, message: "ok" },
         body: localDashboard

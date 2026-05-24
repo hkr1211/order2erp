@@ -1,4 +1,4 @@
-export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], today = new Date() } = {}) {
+export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], quoteFollowups = [], procedurePlans = [], financeRows = [], today = new Date() } = {}) {
   const day = startOfDay(today);
   const monthStart = new Date(day.getFullYear(), day.getMonth(), 1);
   const monthEnd = new Date(day.getFullYear(), day.getMonth() + 1, 0);
@@ -7,6 +7,15 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
   const dueSoonOrders = normalizedOrders.filter((row) => row.days_from_today !== null && row.days_from_today >= 0 && row.days_from_today <= 7);
   const shortageRows = materialAlerts.filter((row) => row.alert_type === "shortage").map(normalizeMaterialAlert);
   const lowStockRows = materialAlerts.filter((row) => row.alert_type === "low_stock").map(normalizeMaterialAlert);
+  const pendingQuotes = quoteFollowups.map(normalizeQuoteFollowup).filter((row) => row.quote_status !== "已报价待确认");
+  const normalizedProcedures = procedurePlans.map(normalizeProcedurePlan);
+  const delayedProcedures = normalizedProcedures
+    .filter((row) => row.remaining_qty === null || row.remaining_qty > 0)
+    .filter((row) => {
+      const finishDate = parseDate(row.planned_finish_date);
+      return finishDate && startOfDay(finishDate) < day;
+    });
+  const financeCenter = buildLocalFinanceCenter({ financeRows });
 
   return {
     model: "pmc_console",
@@ -18,23 +27,34 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
       overdue_orders: uniqueCount(overdueOrders, "order_no"),
       due_soon_orders: uniqueCount(dueSoonOrders, "order_no"),
       shortage_orders: uniqueCount(shortageRows, "order_no"),
-      pending_quote_projects: 0,
-      low_stock: lowStockRows.length
+      pending_quote_projects: pendingQuotes.length,
+      low_stock: lowStockRows.length,
+      procedure_plan_rows: normalizedProcedures.length,
+      delayed_procedures: delayedProcedures.length,
+      overdue_receivables: financeCenter.summary.overdue_receivables,
+      due_soon_payables: financeCenter.summary.due_soon_payables
     },
     sections: {
       overdue_orders: overdueOrders,
       due_soon_orders: dueSoonOrders,
       shortage_orders: shortageRows,
-      pending_quotes: [],
-      low_stock: lowStockRows
+      pending_quotes: pendingQuotes,
+      low_stock: lowStockRows,
+      delayed_procedures: delayedProcedures,
+      workload_by_center: procedureWorkloadByCenter(normalizedProcedures, day),
+      overdue_receivables: financeCenter.sections.overdue_receivables,
+      due_soon_payables: financeCenter.sections.due_soon_payables
     },
     source_status: {
       sqlite_sales_orders: { ok: true, rows: salesOrders.length },
-      sqlite_material_alerts: { ok: true, rows: materialAlerts.length }
+      sqlite_material_alerts: { ok: true, rows: materialAlerts.length },
+      sqlite_quote_followups: { ok: true, rows: quoteFollowups.length },
+      sqlite_procedure_plans: { ok: true, rows: procedurePlans.length },
+      sqlite_finance_records: { ok: true, rows: financeRows.length }
     },
     notes: [
-      "当前读取本地 SQLite 销售订单和物料告警汇总。",
-      "点击“立即同步”可从 ERP 更新本地业务表。"
+      "当前读取本地 SQLite 销售订单、物料告警、待报价、派工进度和应收应付汇总。",
+      "同步暂停时本页不会访问 ERP，只使用最近已同步成功的数据重新生成。"
     ]
   };
 }
@@ -242,6 +262,82 @@ function normalizeMaterialAlert(row) {
     delivery_date: row.delivery_date,
     raw: parseJson(row.raw_json, row)
   };
+}
+
+function normalizeQuoteFollowup(row) {
+  return {
+    quote_no: row.quote_no,
+    project_no: row.quote_no,
+    priority: row.priority,
+    quote_status: row.quote_status,
+    customer: row.customer,
+    title: row.title,
+    owner: row.owner || "未分配",
+    project_stage: row.project_stage,
+    estimated_amount: row.estimated_amount,
+    quoted_amount: row.quoted_amount,
+    created_date: row.created_date,
+    age_days: row.age_days,
+    action: row.action,
+    risk_flags: row.risk_flags,
+    raw: parseJson(row.raw_json, row)
+  };
+}
+
+function normalizeProcedurePlan(row) {
+  return {
+    work_assignment_id: row.work_assignment_id,
+    order_no: row.order_no,
+    product_name: row.product_name,
+    product_code: row.product_code,
+    product_model: row.product_model,
+    procedure_name: row.procedure_name,
+    work_center_name: row.work_center_name || "未识别工作中心",
+    planned_qty: row.planned_qty,
+    finished_qty: row.finished_qty,
+    remaining_qty: row.remaining_qty,
+    planned_start_date: row.planned_start_date,
+    planned_finish_date: row.planned_finish_date,
+    owner: row.owner,
+    state: row.state,
+    raw: parseJson(row.raw_json, row)
+  };
+}
+
+function procedureWorkloadByCenter(rows, today) {
+  const grouped = new Map();
+  for (const row of rows) {
+    const center = row.work_center_name || "未识别工作中心";
+    const current = grouped.get(center) || {
+      work_center_name: center,
+      procedure_count: 0,
+      planned_qty: 0,
+      finished_qty: 0,
+      remaining_qty: 0,
+      delayed_procedures: 0
+    };
+    const planned = number(row.planned_qty) || 0;
+    const finished = number(row.finished_qty) || 0;
+    const remaining = number(row.remaining_qty) || 0;
+    const finishDate = parseDate(row.planned_finish_date);
+    current.procedure_count += 1;
+    current.planned_qty += planned;
+    current.finished_qty += finished;
+    current.remaining_qty += remaining;
+    if (finishDate && remaining > 0 && startOfDay(finishDate) < today) {
+      current.delayed_procedures += 1;
+    }
+    grouped.set(center, current);
+  }
+  return [...grouped.values()]
+    .map((row) => ({
+      ...row,
+      planned_qty: Number(row.planned_qty.toFixed(4)),
+      finished_qty: Number(row.finished_qty.toFixed(4)),
+      remaining_qty: Number(row.remaining_qty.toFixed(4))
+    }))
+    .sort((a, b) => b.delayed_procedures - a.delayed_procedures || b.remaining_qty - a.remaining_qty)
+    .slice(0, 20);
 }
 
 function deliveryTasks(rows, type) {
