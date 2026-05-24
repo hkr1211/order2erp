@@ -1187,6 +1187,7 @@ function labelFor(key) {
     risk_type: "风险类型",
     risk_level: "风险等级",
     problem: "问题描述",
+    rule_reason: "判定原因",
     buttons: "干预按钮",
     owner_role: "责任角色",
     action_label: "动作",
@@ -1463,8 +1464,8 @@ function pmcConsolePage(body) {
     </section>
     <div class="zone-title">红黄牌风险区</div>
     <section class="risk-board">
-      ${pmcTablePanel("红牌：今天必须处理", body.sections.red_risks, ["risk_type", "related_no", "problem", "owner_role", "buttons"], "danger")}
-      ${pmcTablePanel("黄牌：3天内可能恶化", body.sections.yellow_risks, ["risk_type", "related_no", "problem", "owner_role", "buttons"], "warning")}
+      ${pmcTablePanel("红牌：今天必须处理", body.sections.red_risks, ["risk_type", "related_no", "problem", "rule_reason", "owner_role", "buttons"], "danger")}
+      ${pmcTablePanel("黄牌：3天内可能恶化", body.sections.yellow_risks, ["risk_type", "related_no", "problem", "rule_reason", "owner_role", "buttons"], "warning")}
     </section>
     <div class="zone-title">我的干预清单</div>
     <section class="intervention-list">

@@ -751,6 +751,7 @@ function commandRiskRows(rows, riskType, fallbackType) {
       due_date: row.due_date,
       owner_role: row.responsible_role,
       primary_action: row.action,
+      rule_reason: ruleReasonForRisk(type, row),
       buttons,
       source_status: row.status
     };
@@ -768,6 +769,7 @@ function quoteRiskRows(rows) {
     due_date: row.created_date,
     owner_role: row.owner || "销售/报价",
     primary_action: row.action || "补齐需求资料并安排报价",
+    rule_reason: "报价项目未完成确认，3天内可能影响接单响应",
     buttons: ["生成报价跟进", "客户沟通", "标记处理中"],
     source_status: row.quote_status
   }));
@@ -782,6 +784,16 @@ function commandProblemText(type, row) {
   if (type === "产能预警") return `${row.item || "工序"}存在延期，需确认产能安排`;
   if (type === "物料预警") return `${row.item || "物料"}库存偏低，需确认补料或替代方案`;
   return row.action || row.item || type;
+}
+
+function ruleReasonForRisk(type, row) {
+  if (type === "冲压延期" || type === "产能瓶颈") return "计划完工日已过且剩余数量 > 0，必须今天处理";
+  if (type === "物料断供") return "库存/订单缺口数量 > 0，必须今天处理";
+  if (type === "交期超期") return "当前日期已超过承诺交期，必须今天处理";
+  if (type === "交期预警") return "承诺交期进入7天窗口，3天内可能恶化";
+  if (type === "产能预警") return "工序计划存在延期风险，3天内可能恶化";
+  if (type === "物料预警") return "库存可用量偏低，3天内可能恶化";
+  return row.action || "按当前规则识别为需关注";
 }
 
 function interventionButtons(type) {

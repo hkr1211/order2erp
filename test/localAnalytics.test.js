@@ -101,6 +101,8 @@ test("buildLocalPmcDashboard groups red and yellow risks with intervention actio
   assert.equal(body.command_center.today_todos, 6);
   assert.equal(body.sections.red_risks.some((row) => row.risk_type === "交期超期" && row.buttons.includes("客户沟通")), true);
   assert.equal(body.sections.yellow_risks.some((row) => row.risk_type === "交期预警" && row.buttons.includes("协调工序")), true);
+  assert.equal(body.sections.red_risks.some((row) => row.rule_reason.includes("必须今天处理")), true);
+  assert.equal(body.sections.yellow_risks.some((row) => row.rule_reason.includes("3天内可能恶化")), true);
   assert.equal(body.sections.intervention_tasks[0].primary_action, "优先确认冲压产能、模具和插单影响");
   assert.equal(body.sections.intervention_tasks.some((row) => row.buttons.includes("生成催货文本")), true);
 });
