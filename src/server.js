@@ -26,6 +26,7 @@ const client = new ErpClient({ requestLogger: logErpRequest });
 const NAV_ITEMS = [
   ["首页", "/"],
   ["角色", "/roles"],
+  ["跟单", "/followup"],
   ["PMC", "/pmc"],
   ["订单", "/orders"],
   ["物料", "/materials"],
@@ -50,6 +51,12 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/roles") {
       return sendHtml(res, 200, roleWorkbenchesPage());
+    }
+
+    if (req.method === "GET" && url.pathname === "/followup") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = queryFollowupWorkbench(params);
+      return sendHtml(res, 200, followupWorkbenchPage(result.body));
     }
 
     if (req.method === "GET" && url.pathname === "/pmc") {
@@ -867,6 +874,15 @@ function roleWorkbenchesPage() {
       entry_2: "/orders",
       entry_3: "/finance",
       entry_4: ""
+    },
+    {
+      role: "跟单员",
+      focus: `处理本人订单风险：红黄牌 ${summary.priority_risks ?? "--"}，缺料订单 ${summary.shortage_orders ?? "--"}，待报价 ${summary.pending_quote_projects ?? "--"}。`,
+      primary_action: "先进入跟单工作台，按负责人过滤我的订单、缺料、报价和延期工序。",
+      entry_1: "/followup",
+      entry_2: "/pmc?rebuild=1",
+      entry_3: "/orders",
+      entry_4: "/quotes"
     }
   ];
   const workflowRows = [
@@ -877,7 +893,7 @@ function roleWorkbenchesPage() {
   ];
   return modulePage({
     title: "角色工作台",
-    subtitle: "按老板、PMC、销售三类用户组织常用入口和日常处理流程。",
+    subtitle: "按老板、PMC、销售、跟单员组织常用入口和日常处理流程。",
     summary: [
       ["今日订单", summary.today_orders ?? "--"],
       ["本月订单", summary.month_orders ?? "--"],
@@ -895,6 +911,65 @@ function roleWorkbenchesPage() {
     ],
     actions: [
       ["首页", "/"]
+    ]
+  });
+}
+
+function queryFollowupWorkbench(params = {}) {
+  const dashboard = queryLocalPmcDashboard(params);
+  const owners = dashboard?.sections?.owner_workbenches || [];
+  const selectedOwner = String(params.owner || "").trim() || owners[0]?.owner || "";
+  const scopedDashboard = selectedOwner ? queryLocalPmcDashboard({ ...params, owner: selectedOwner }) : dashboard;
+  return {
+    header: { status: 0, message: "ok" },
+    body: {
+      model: "followup_workbench",
+      generated_at: new Date().toISOString(),
+      owner: selectedOwner,
+      owners,
+      dashboard: scopedDashboard,
+      notes: [
+        "跟单工作台只读取本地 SQLite，不访问 ERP。",
+        selectedOwner ? `当前按负责人过滤：${selectedOwner}。` : "当前没有可识别负责人，显示空工作台。"
+      ]
+    }
+  };
+}
+
+function followupWorkbenchPage(body) {
+  const dashboard = body.dashboard || emptyPmcConsoleBody("当前没有本地 SQLite 订单数据，请先同步订单。");
+  const owner = body.owner || "";
+  const ownerLinks = (body.owners || []).slice(0, 20).map((row) => [
+    `${row.owner}(${row.todos})`,
+    `/followup?owner=${encodeURIComponent(row.owner)}`
+  ]);
+  return modulePage({
+    title: "跟单员工作台",
+    subtitle: owner ? `当前负责人：${owner}。按“先红牌、再黄牌、再正常”的顺序处理。` : "按负责人查看我的订单、缺料、待报价和延期工序。",
+    summary: [
+      ["负责人", owner || "--"],
+      ["今日待办", dashboard.command_center?.today_todos ?? 0],
+      ["红牌", dashboard.command_center?.red_count ?? 0],
+      ["黄牌", dashboard.command_center?.yellow_count ?? 0],
+      ["缺料订单", dashboard.summary?.shortage_orders ?? 0],
+      ["待报价", dashboard.summary?.pending_quote_projects ?? 0],
+      ["延期工序", dashboard.summary?.delayed_procedures ?? 0],
+      ["逾期应收", dashboard.summary?.overdue_receivables ?? 0]
+    ],
+    panels: [
+      modulePanel("负责人切换", body.owners || [], ["owner", "active_orders", "shortage_orders", "pending_quotes", "open_procedures", "todos", "owner_link"]),
+      modulePanel("我的红牌", dashboard.sections?.red_risks || [], ["risk_type", "related_no", "problem", "rule_reason", "owner_role", "buttons"]),
+      modulePanel("我的黄牌", dashboard.sections?.yellow_risks || [], ["risk_type", "related_no", "problem", "rule_reason", "owner_role", "buttons"]),
+      modulePanel("我的交期订单", [...(dashboard.sections?.overdue_orders || []), ...(dashboard.sections?.due_soon_orders || [])], ["order_no", "customer", "product_name", "remaining_qty", "delivery_date", "owner"]),
+      modulePanel("我的缺料订单", dashboard.sections?.shortage_orders || [], ["order_no", "customer", "product_name", "demand_qty", "available_qty", "shortage_qty"]),
+      modulePanel("我的待报价", dashboard.sections?.pending_quotes || [], ["quote_no", "customer", "title", "project_stage", "created_date", "age_days", "action"]),
+      modulePanel("我的延期工序", dashboard.sections?.delayed_procedures || [], ["work_assignment_id", "order_no", "product_name", "procedure_name", "work_center_name", "remaining_qty", "planned_finish_date", "owner"])
+    ],
+    notes: body.notes,
+    actions: [
+      ...ownerLinks,
+      ["PMC作战台", owner ? `/pmc?rebuild=1&owner=${encodeURIComponent(owner)}` : "/pmc?rebuild=1"],
+      ["角色工作台", "/roles"]
     ]
   });
 }
@@ -2674,6 +2749,15 @@ function formatDetailCell(column, value, row = {}) {
     const label = value === "overdue" ? "逾期" : value === "due_soon" ? "7天内到期" : value;
     const tone = value === "overdue" ? "red" : value === "due_soon" ? "yellow" : "green";
     return `<span class="pill ${tone}">${escapeHtml(label || "")}</span>`;
+  }
+  if (column === "buttons" && Array.isArray(value)) {
+    return value
+      .map((label) => `<a class="button" href="${escapeHtml(pmcInterventionHref(row, label))}">${escapeHtml(label)}</a>`)
+      .join("");
+  }
+  if (column === "owner_link") {
+    const owner = row?.owner_link || row?.owner || "";
+    return owner ? `<a href="/followup?owner=${encodeURIComponent(owner)}">进入</a>` : "";
   }
   if (["quantity", "demand_qty", "delivered_qty", "remaining_qty", "available_qty", "stock_qty", "shortage_qty", "planned_qty", "finished_qty"].includes(column)) {
     return escapeHtml(formatPmcQuantity(value, row?.unit || row?.raw?.unit || row?.raw?.raw?.Unit || row?.raw?.raw?.单位));
