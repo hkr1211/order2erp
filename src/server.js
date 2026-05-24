@@ -71,6 +71,12 @@ const server = http.createServer(async (req, res) => {
       return sendText(res, 200, pmcMorningBriefText(result.body, params));
     }
 
+    if (req.method === "GET" && url.pathname === "/pmc/brief") {
+      const params = Object.fromEntries(url.searchParams);
+      const result = await queryPmcConsole(params);
+      return sendHtml(res, 200, pmcMorningBriefPage(result.body, params));
+    }
+
     if (req.method === "GET" && url.pathname === "/pmc/intervention") {
       const params = Object.fromEntries(url.searchParams);
       return sendHtml(res, 200, pmcInterventionPage(params));
@@ -1508,7 +1514,7 @@ function pmcConsolePage(body, params = {}) {
   briefParams.set("rebuild", "1");
   if (ownerFilter) briefParams.set("owner", ownerFilter);
   if (openOnly) briefParams.set("open_only", "1");
-  const briefHref = `/pmc/brief.txt?${briefParams.toString()}`;
+  const briefHref = `/pmc/brief?${briefParams.toString()}`;
   const todayText = formatDate(new Date());
   const cards = [
     ["待响应风险", closure.open_total, "红黄牌尚未留痕", closure.open_red > 0 ? "danger" : closure.open_yellow > 0 ? "warning" : "neutral", openOnlyHref],
@@ -1821,6 +1827,77 @@ function pmcMorningBriefText(body = {}, params = {}) {
     }
   });
   return lines.join("\n");
+}
+
+function pmcMorningBriefPage(body = {}, params = {}) {
+  const text = pmcMorningBriefText(body, params);
+  const query = new URLSearchParams();
+  query.set("rebuild", "1");
+  if (params.owner) query.set("owner", params.owner);
+  if (parseBoolean(params.open_only)) query.set("open_only", "1");
+  const queryText = query.toString();
+  const textHref = `/pmc/brief.txt?${queryText}`;
+  const backHref = `/pmc?${queryText || "rebuild=1"}`;
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PMC 早会文本</title>
+  <style>
+    :root { --bg:#f4f6f8; --panel:#fff; --text:#172033; --muted:#667085; --border:#d9dee7; --green:#176b58; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
+    main { width:min(980px, calc(100% - 32px)); margin:0 auto; padding:24px 0 36px; }
+    header { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; padding-bottom:16px; border-bottom:1px solid var(--border); }
+    h1 { margin:0; font-size:28px; letter-spacing:0; }
+    .sub { margin-top:8px; color:var(--muted); font-size:14px; line-height:1.6; }
+    .actions { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+    .button { display:inline-block; min-height:36px; padding:8px 12px; border:1px solid var(--border); border-radius:6px; background:var(--panel); color:var(--text); text-decoration:none; font-size:14px; cursor:pointer; }
+    .button.primary { background:var(--green); border-color:var(--green); color:#fff; }
+    .panel { margin-top:18px; border:1px solid var(--border); border-radius:8px; background:var(--panel); overflow:hidden; }
+    .panel h2 { margin:0; padding:14px 16px; border-bottom:1px solid var(--border); font-size:17px; }
+    textarea { display:block; width:100%; min-height:520px; padding:16px; border:0; resize:vertical; font:14px/1.75 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color:var(--text); background:#fff; }
+    .copy-status { margin-top:10px; color:var(--muted); font-size:13px; min-height:20px; }
+    @media (max-width: 720px) { header { display:block; } .actions { justify-content:flex-start; margin-top:12px; } h1 { font-size:24px; } textarea { min-height:460px; } }
+    ${sharedNavCss()}
+  </style>
+</head>
+<body>
+  <main>
+    ${renderTopNav("/pmc")}
+    <header>
+      <div>
+        <h1>PMC 早会文本</h1>
+        <div class="sub">可直接复制到微信、邮件或早会纪要。页面只读取本地 SQLite 生成的摘要，不访问 ERP。</div>
+      </div>
+      <div class="actions">
+        <button class="button primary" type="button" onclick="copyBrief()">复制文本</button>
+        <a class="button" href="${escapeHtml(textHref)}">打开纯文本</a>
+        <a class="button" href="${escapeHtml(backHref)}">返回PMC</a>
+      </div>
+    </header>
+    <section class="panel">
+      <h2>转发内容</h2>
+      <textarea id="briefText" readonly>${escapeHtml(text)}</textarea>
+    </section>
+    <div class="copy-status" id="copyStatus"></div>
+  </main>
+  <script>
+    async function copyBrief() {
+      const text = document.getElementById("briefText").value;
+      const status = document.getElementById("copyStatus");
+      try {
+        await navigator.clipboard.writeText(text);
+        status.textContent = "已复制，可直接粘贴发送。";
+      } catch {
+        document.getElementById("briefText").select();
+        status.textContent = "浏览器未允许自动复制，已选中文本，可按 Ctrl+C 或 Command+C。";
+      }
+    }
+  </script>
+</body>
+</html>`;
 }
 
 function renderKpiCard(label, value, hint, tone = "", href = "") {
