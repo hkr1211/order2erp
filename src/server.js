@@ -3800,7 +3800,10 @@ function modulePage({ title, subtitle, summary = [], panels = [], notes = [], ac
     .metric strong { display: block; margin-top: 9px; font-size: 25px; line-height: 1; }
     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
     .panel { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); overflow: hidden; }
+    .panel.full-width { grid-column: 1 / -1; }
+    .panel.full-width table { min-width: 1280px; }
     .table-wrap { overflow: auto; }
+    .table-wrap.tall { max-height: 620px; }
     table { width: 100%; min-width: 820px; border-collapse: collapse; }
     th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; font-size: 13px; line-height: 1.45; }
     th { background: #f0f3f6; color: #344054; font-weight: 650; white-space: nowrap; }
@@ -3845,13 +3848,18 @@ function modulePage({ title, subtitle, summary = [], panels = [], notes = [], ac
 </html>`;
 }
 
-function modulePanel(title, rows, columns) {
-  const safeRows = Array.isArray(rows) ? rows.slice(0, 20) : [];
-  return `<section class="panel">
-    <h2>${escapeHtml(title)} <span class="pill">${safeRows.length}</span></h2>
+function modulePanel(title, rows, columns, options = {}) {
+  const allRows = Array.isArray(rows) ? rows : [];
+  const limit = options.limit === "all" ? allRows.length : clampInt(options.limit ?? 20, 1, 1000);
+  const safeRows = allRows.slice(0, limit);
+  const countText = allRows.length > safeRows.length ? `${safeRows.length}/${allRows.length}` : `${safeRows.length}`;
+  const sectionClass = ["panel", options.fullWidth ? "full-width" : ""].filter(Boolean).join(" ");
+  const wrapClass = ["table-wrap", options.tall ? "tall" : ""].filter(Boolean).join(" ");
+  return `<section class="${sectionClass}">
+    <h2>${escapeHtml(title)} <span class="pill">${escapeHtml(countText)}</span></h2>
     ${
       safeRows.length
-        ? `<div class="table-wrap"><table><thead><tr>${columns.map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${safeRows.map((row) => `<tr>${columns.map((column) => `<td>${formatDetailCell(column, row?.[column])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
+        ? `<div class="${wrapClass}"><table><thead><tr>${columns.map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${safeRows.map((row) => `<tr>${columns.map((column) => `<td>${formatDetailCell(column, row?.[column])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
         : `<div class="empty">当前没有${escapeHtml(title)}。</div>`
     }
   </section>`;
@@ -4189,12 +4197,13 @@ function financeCenterPage(body) {
       modulePanel("逾期应收", body.sections.overdue_receivables, ["counterparty", "bill_no", "business_title", "unpaid_amount", "due_date", "due_days", "owner"]),
       modulePanel("7天内应付", body.sections.due_soon_payables, ["counterparty", "bill_no", "business_title", "unpaid_amount", "due_date", "due_days", "status"]),
       modulePanel("供应商未付排行", body.sections.payable_debts, ["counterparty", "unpaid_amount", "records", "overdue_records", "earliest_due_date", "earliest_due_days", "risk_status"]),
-      modulePanel("应收/收款明细", body.sections.receivables, ["counterparty", "bill_no", "business_title", "amount", "paid_amount", "unpaid_amount", "bill_date", "due_date", "payment_terms", "age_days", "due_days", "risk_status"]),
-      modulePanel("应付/付款明细", body.sections.payables, ["counterparty", "bill_no", "business_title", "amount", "paid_amount", "unpaid_amount", "bill_date", "due_date", "payment_terms", "age_days", "due_days", "risk_status"])
+      modulePanel("应收/收款明细", body.sections.receivables, ["counterparty", "bill_no", "business_title", "amount", "paid_amount", "unpaid_amount", "bill_date", "due_date", "payment_terms", "age_days", "due_days", "risk_status"], { fullWidth: true, limit: "all", tall: true }),
+      modulePanel("应付/付款明细", body.sections.payables, ["counterparty", "bill_no", "business_title", "amount", "paid_amount", "unpaid_amount", "bill_date", "due_date", "payment_terms", "age_days", "due_days", "risk_status"], { fullWidth: true, limit: "all", tall: true })
     ],
     notes: body.notes,
     actions: [
       ["谨慎同步财务20条", "/sync?sources=finance_records&pagesize=20"],
+      ["本地查看500条", "/finance?pagesize=500"],
       ["刷新实时ERP", "/finance?refresh=1"],
       ["应收接口", "/api/receivables?pageindex=1&pagesize=20"],
       ["应付接口", "/api/payables?pageindex=1&pagesize=20"]
