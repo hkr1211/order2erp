@@ -4,7 +4,7 @@ import { ErpClient, ERP_VIEWS, normalizeTable, toBusinessView } from "./erpClien
 import { queryOrderDeliveryRisks } from "./orderDeliveryRisks.js";
 import { queryOrderShortages } from "./orderShortages.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
-import { finishHistorySyncRun, initLocalDb, latestErpRequestLogs, latestHistorySyncRuns, latestPmcInterventions, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listMaterialAlerts, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, savePmcIntervention, savePmcSnapshot, startHistorySyncRun, tableStats } from "./localDb.js";
+import { finishHistorySyncRun, initLocalDb, latestErpRequestLogs, latestHistorySyncRuns, latestPmcInterventions, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listMaterialAlerts, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, pmcInterventionSummary, savePmcIntervention, savePmcSnapshot, startHistorySyncRun, tableStats } from "./localDb.js";
 import { syncCoreData } from "./syncService.js";
 import { buildSyncPolicyRows } from "./syncPolicy.js";
 import { buildErpHealthSummary, shouldBlockErpBusinessQuery } from "./erpHealth.js";
@@ -1184,6 +1184,7 @@ function labelFor(key) {
     action_label: "动作",
     note: "备注",
     actor: "处理人",
+    actions: "处理次数",
     days_from_today: "距今天数",
     delivery_date: "交期",
     signed_date: "签订日期",
@@ -1339,8 +1340,10 @@ function labelFor(key) {
 
 function pmcConsolePage(body) {
   const command = body.command_center || {};
+  const interventions = pmcInterventionSummary({ today: new Date(), limit: 8 });
   const cards = [
     ["今日待办", command.today_todos ?? 0, "红黄牌需要处理", command.red_count > 0 ? "danger" : command.yellow_count > 0 ? "warning" : "neutral"],
+    ["今日已处理", interventions.today_actions ?? 0, "本地干预留痕", "neutral"],
     ["红牌问题", command.red_count ?? 0, "必须今天处理", "danger"],
     ["黄牌预警", command.yellow_count ?? 0, "3天内可能恶化", "warning"],
     ["风险占比", `${command.risk_order_ratio ?? 0}%`, "红黄牌订单/总在制订单", command.risk_order_ratio > 20 ? "danger" : command.risk_order_ratio >= 10 ? "warning" : "neutral"],
@@ -1446,6 +1449,11 @@ function pmcConsolePage(body) {
     <div class="zone-title">我的干预清单</div>
     <section class="intervention-list">
       ${pmcTablePanel("待干预动作", body.sections.intervention_tasks, ["task_no", "risk_level", "risk_type", "related_no", "problem", "primary_action", "buttons"], "danger")}
+    </section>
+    <div class="zone-title">干预复盘</div>
+    <section class="risk-board">
+      ${pmcTablePanel("最近处理记录", interventions.recent_actions, ["created_at", "risk_type", "related_no", "action_label", "note", "actor"], "neutral")}
+      ${pmcTablePanel("处理类型汇总", interventions.by_risk_type, ["risk_type", "actions"], "neutral")}
     </section>
     <div class="zone-title">订单作战重点</div>
     <section class="risk-focus">

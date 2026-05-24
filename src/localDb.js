@@ -230,10 +230,43 @@ export function latestPmcInterventions({ limit = 20, related_no = "" } = {}) {
     .prepare(
       `SELECT id, created_at, risk_level, risk_type, related_no, action_label, problem, note, actor, payload_json
        FROM pmc_intervention_logs
-       ORDER BY id DESC
+       ORDER BY created_at DESC, id DESC
        LIMIT ?`
     )
     .all(safeLimit);
+}
+
+export function pmcInterventionSummary({ today = new Date(), limit = 8 } = {}) {
+  const database = initLocalDb();
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 8, 50));
+  const dayStart = startOfLocalDay(today).toISOString();
+  const dayEnd = endOfLocalDay(today).toISOString();
+  const totalActions = database.prepare("SELECT COUNT(*) AS count FROM pmc_intervention_logs").get()?.count || 0;
+  const todayActions = database
+    .prepare("SELECT COUNT(*) AS count FROM pmc_intervention_logs WHERE created_at >= ? AND created_at <= ?")
+    .get(dayStart, dayEnd)?.count || 0;
+  const recentActions = database
+    .prepare(
+      `SELECT id, created_at, risk_level, risk_type, related_no, action_label, problem, note, actor, payload_json
+       FROM pmc_intervention_logs
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`
+    )
+    .all(safeLimit);
+  const byRiskType = database
+    .prepare(
+      `SELECT COALESCE(NULLIF(risk_type, ''), '未分类') AS risk_type, COUNT(*) AS actions
+       FROM pmc_intervention_logs
+       GROUP BY COALESCE(NULLIF(risk_type, ''), '未分类')
+       ORDER BY actions DESC, risk_type`
+    )
+    .all();
+  return {
+    today_actions: todayActions,
+    total_actions: totalActions,
+    recent_actions: recentActions,
+    by_risk_type: byRiskType
+  };
 }
 
 export function startSyncRun(sourceKey) {
@@ -517,4 +550,16 @@ function stringifyScalar(value) {
     return "";
   }
   return typeof value === "object" ? JSON.stringify(value) : String(value);
+}
+
+function startOfLocalDay(date) {
+  const copy = new Date(date);
+  copy.setHours(0, 0, 0, 0);
+  return copy;
+}
+
+function endOfLocalDay(date) {
+  const copy = new Date(date);
+  copy.setHours(23, 59, 59, 999);
+  return copy;
 }
