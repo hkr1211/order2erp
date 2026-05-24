@@ -1409,6 +1409,14 @@ function pmcConsolePage(body) {
     .tag.warning { background: var(--amber-soft); color: var(--amber); }
     .mini-button { display: inline-block; margin: 2px 4px 2px 0; padding: 4px 7px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text); text-decoration: none; font-size: 12px; white-space: nowrap; }
     .mini-button:hover { border-color: var(--green); color: var(--green); }
+    .battle-wrap { overflow-x: auto; }
+    .battle-table { min-width: 1120px; }
+    .battle-node { display: inline-flex; min-width: 54px; min-height: 28px; align-items: center; justify-content: center; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--border); font-size: 12px; font-weight: 700; white-space: nowrap; }
+    .battle-node.none { background: #f8fafc; color: #98a2b3; }
+    .battle-node.done { background: var(--green-soft); color: var(--green); border-color: #b7dfc8; }
+    .battle-node.active { background: #eef4ff; color: #175cd3; border-color: #b2ccff; }
+    .battle-node.yellow { background: var(--amber-soft); color: var(--amber); border-color: #f3c77b; }
+    .battle-node.red { background: var(--red-soft); color: var(--red); border-color: #f2a7a3; }
     .notes { margin-top: 12px; color: var(--muted); font-size: 13px; line-height: 1.7; }
     @media (max-width: 1180px) {
       .kpis { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
@@ -1455,6 +1463,8 @@ function pmcConsolePage(body) {
       ${pmcTablePanel("最近处理记录", interventions.recent_actions, ["created_at", "risk_type", "related_no", "action_label", "note", "actor"], "neutral")}
       ${pmcTablePanel("处理类型汇总", interventions.by_risk_type, ["risk_type", "actions"], "neutral")}
     </section>
+    <div class="zone-title">订单作战地图</div>
+    ${pmcBattleMapPanel(body.sections.order_battle_map, body.sections.order_battle_stages)}
     <div class="zone-title">订单作战重点</div>
     <section class="risk-focus">
       ${pmcTablePanel("重点风险", body.sections.priority_risks, ["exception_type", "priority", "related_no", "item", "quantity", "due_date", "responsible_role", "action"], "danger")}
@@ -1493,6 +1503,25 @@ function pmcTablePanel(title, rows, columns, tone = "") {
         : `<div class="empty">当前没有${escapeHtml(title)}。</div>`
     }
   </section>`;
+}
+
+function pmcBattleMapPanel(rows, stages) {
+  const safeRows = Array.isArray(rows) ? rows.slice(0, 12) : [];
+  const safeStages = Array.isArray(stages) && stages.length ? stages : ["熔炼", "轧制", "机加工", "热处理", "表面处理", "质检", "包装", "待发"];
+  return `<section class="panel">
+    <h2>订单作战地图 <span class="tag">${safeRows.length}</span></h2>
+    ${
+      safeRows.length
+        ? `<div class="battle-wrap"><table class="battle-table"><thead><tr><th>订单/派工</th><th>产品</th><th>当前卡点</th>${safeStages.map((stage) => `<th>${escapeHtml(stage)}</th>`).join("")}</tr></thead><tbody>${safeRows.map((row) => `<tr><td>${escapeHtml(row.order_no || row.work_assignment_id || "")}</td><td>${escapeHtml(row.product_name || "")}</td><td>${escapeHtml(row.current_stage || "")}<br><span class="sub">${escapeHtml(row.blocker || "")}</span></td>${safeStages.map((stage) => `<td>${formatBattleNode(row[`stage_${stage}`])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
+        : `<div class="empty">当前没有可生成作战地图的派工数据。</div>`
+    }
+  </section>`;
+}
+
+function formatBattleNode(cell = {}) {
+  const status = cell.status || "none";
+  const title = [cell.procedure_name, cell.work_center_name, cell.remaining_qty !== "" && cell.remaining_qty !== undefined ? `剩余${cell.remaining_qty}` : "", cell.planned_finish_date ? `计划${cell.planned_finish_date}` : "", cell.problem].filter(Boolean).join(" / ");
+  return `<span class="battle-node ${escapeHtml(status)}" title="${escapeHtml(title)}">${escapeHtml(cell.label || "○")}</span>`;
 }
 
 function formatPmcCell(row, column) {

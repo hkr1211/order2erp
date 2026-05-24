@@ -105,6 +105,26 @@ test("buildLocalPmcDashboard groups red and yellow risks with intervention actio
   assert.equal(body.sections.intervention_tasks.some((row) => row.buttons.includes("生成催货文本")), true);
 });
 
+test("buildLocalPmcDashboard builds an order battle map from procedure stages", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-24T08:00:00+08:00"),
+    procedurePlans: [
+      { work_assignment_id: "W-1", order_no: "PO-1", product_name: "钼带", procedure_name: "熔炼", work_center_name: "熔炼炉", remaining_qty: 0, planned_finish_date: "2026-05-20", state: "已完工" },
+      { work_assignment_id: "W-1", order_no: "PO-1", product_name: "钼带", procedure_name: "0.4轧至0.25", work_center_name: "420四辊轧机", remaining_qty: 20, planned_finish_date: "2026-05-23", state: "生产中" },
+      { work_assignment_id: "W-2", order_no: "PO-2", product_name: "钽杯", procedure_name: "质检", work_center_name: "质检", remaining_qty: 5, planned_finish_date: "2026-05-27", state: "待检" }
+    ]
+  });
+
+  assert.deepEqual(body.sections.order_battle_stages, ["熔炼", "轧制", "机加工", "热处理", "表面处理", "质检", "包装", "待发"]);
+  assert.equal(body.summary.battle_map_orders, 2);
+  assert.equal(body.summary.battle_map_red_nodes, 1);
+  assert.equal(body.summary.battle_map_yellow_nodes, 1);
+  assert.equal(body.sections.order_battle_map[0].order_no, "PO-1");
+  assert.equal(body.sections.order_battle_map[0].current_stage, "轧制");
+  assert.equal(body.sections.order_battle_map[0].stage_轧制.status, "red");
+  assert.equal(body.sections.order_battle_map[1].stage_质检.status, "yellow");
+});
+
 test("buildLocalFinanceCenter summarizes receivables and payables by risk", () => {
   const today = new Date("2026-05-23T08:00:00+08:00");
   const receivable = mapFinanceRowForLocal({
