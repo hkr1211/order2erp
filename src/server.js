@@ -971,14 +971,16 @@ function queryFollowupWorkbench(params = {}) {
   const owners = dashboard?.sections?.owner_workbenches || [];
   const selectedOwner = String(params.owner || "").trim() || owners[0]?.owner || "";
   const scopedDashboard = selectedOwner ? queryLocalPmcDashboard({ ...params, owner: selectedOwner }) : dashboard;
+  const enrichedDashboard = scopedDashboard ? enrichPmcInterventionStatus(scopedDashboard) : scopedDashboard;
   return {
     header: { status: 0, message: "ok" },
     body: {
       model: "followup_workbench",
       generated_at: new Date().toISOString(),
       owner: selectedOwner,
+      open_only: parseBoolean(params.open_only),
       owners,
-      dashboard: scopedDashboard,
+      dashboard: enrichedDashboard,
       notes: [
         "跟单工作台只读取本地 SQLite，不访问 ERP。",
         selectedOwner ? `当前按负责人过滤：${selectedOwner}。` : "当前没有可识别负责人，显示空工作台。"
@@ -990,14 +992,18 @@ function queryFollowupWorkbench(params = {}) {
 function followupWorkbenchPage(body) {
   const dashboard = body.dashboard || emptyPmcConsoleBody("当前没有本地 SQLite 订单数据，请先同步订单。");
   const owner = body.owner || "";
+  const openOnly = Boolean(body.open_only);
+  const displayDashboard = openOnly ? filterPmcOpenRisks(dashboard) : dashboard;
   const briefHref = owner ? `/followup/brief?owner=${encodeURIComponent(owner)}&open_only=1` : "/followup/brief?open_only=1";
+  const openOnlyHref = owner ? `/followup?owner=${encodeURIComponent(owner)}&open_only=1` : "/followup?open_only=1";
+  const allHref = owner ? `/followup?owner=${encodeURIComponent(owner)}` : "/followup";
   const ownerLinks = (body.owners || []).slice(0, 20).map((row) => [
     `${row.owner}(${row.todos})`,
     `/followup?owner=${encodeURIComponent(row.owner)}`
   ]);
   return modulePage({
     title: "跟单员工作台",
-    subtitle: owner ? `当前负责人：${owner}。按“先红牌、再黄牌、再正常”的顺序处理。` : "按负责人查看我的订单、缺料、待报价和延期工序。",
+    subtitle: owner ? `当前负责人：${owner}。按“先红牌、再黄牌、再正常”的顺序处理。${openOnly ? " 当前只看待响应风险。" : ""}` : "按负责人查看我的订单、缺料、待报价和延期工序。",
     summary: [
       ["负责人", owner || "--"],
       ["今日待办", dashboard.command_center?.today_todos ?? 0],
@@ -1010,8 +1016,9 @@ function followupWorkbenchPage(body) {
     ],
     panels: [
       modulePanel("负责人切换", body.owners || [], ["owner", "active_orders", "shortage_orders", "pending_quotes", "open_procedures", "todos", "owner_link"]),
-      modulePanel("我的红牌", dashboard.sections?.red_risks || [], ["risk_type", "related_no", "problem", "rule_reason", "owner_role", "buttons"]),
-      modulePanel("我的黄牌", dashboard.sections?.yellow_risks || [], ["risk_type", "related_no", "problem", "rule_reason", "owner_role", "buttons"]),
+      modulePanel("我的待干预动作", displayDashboard.sections?.intervention_tasks || [], ["task_no", "risk_level", "risk_type", "related_no", "problem", "intervention_state", "response_sla", "latest_intervention", "intervention_log", "primary_action", "buttons"], { fullWidth: true }),
+      modulePanel("我的红牌", displayDashboard.sections?.red_risks || [], ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "response_sla", "latest_intervention", "intervention_log", "owner_role", "buttons"], { fullWidth: true }),
+      modulePanel("我的黄牌", displayDashboard.sections?.yellow_risks || [], ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "response_sla", "latest_intervention", "intervention_log", "owner_role", "buttons"], { fullWidth: true }),
       modulePanel("我的交期订单", [...(dashboard.sections?.overdue_orders || []), ...(dashboard.sections?.due_soon_orders || [])], ["order_no", "customer", "product_name", "remaining_qty", "delivery_date", "owner"]),
       modulePanel("我的缺料订单", dashboard.sections?.shortage_orders || [], ["order_no", "customer", "product_name", "demand_qty", "available_qty", "shortage_qty"]),
       modulePanel("我的待报价", dashboard.sections?.pending_quotes || [], ["quote_no", "customer", "title", "project_stage", "created_date", "age_days", "action"]),
@@ -1020,6 +1027,7 @@ function followupWorkbenchPage(body) {
     notes: body.notes,
     actions: [
       ...ownerLinks,
+      openOnly ? ["显示全部", allHref] : ["只看待响应", openOnlyHref],
       ["我的摘要", briefHref],
       ["PMC作战台", owner ? `/pmc?rebuild=1&owner=${encodeURIComponent(owner)}` : "/pmc?rebuild=1"],
       ["角色工作台", "/roles"]
