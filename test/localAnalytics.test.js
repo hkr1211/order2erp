@@ -128,6 +128,29 @@ test("buildLocalPmcDashboard builds an order battle map from procedure stages", 
   assert.equal(body.sections.order_battle_summary.find((row) => row.stage === "质检").yellow_nodes, 1);
 });
 
+test("buildLocalPmcDashboard reports order-procedure match coverage", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-24T08:00:00+08:00"),
+    salesOrders: [
+      { order_no: "PO-1", customer: "客户A", product_name: "钼带", delivery_date: "2026-05-30" },
+      { order_no: "PO-2", customer: "客户B", product_name: "钽杯", delivery_date: "2026-06-02" },
+      { order_no: "PO-3", customer: "客户C", product_name: "铌杯", delivery_date: "2026-06-05" }
+    ],
+    procedurePlans: [
+      { work_assignment_id: "W-1", order_no: "PO-1", product_name: "钼带", procedure_name: "轧制", remaining_qty: 10, planned_finish_date: "2026-05-28" },
+      { work_assignment_id: "W-2", order_no: "", product_name: "未知件", procedure_name: "机加工", remaining_qty: 5, planned_finish_date: "2026-05-29" },
+      { work_assignment_id: "W-3", order_no: "PO-X", product_name: "外部派工", procedure_name: "质检", remaining_qty: 1, planned_finish_date: "2026-05-29" }
+    ]
+  });
+
+  assert.equal(body.summary.procedure_order_match_rate, 33.3);
+  assert.equal(body.summary.unmatched_procedure_plans, 2);
+  assert.equal(body.sections.order_procedure_coverage[0].matched_orders, 1);
+  assert.equal(body.sections.order_procedure_coverage[0].sales_orders_without_procedure, 2);
+  assert.equal(body.sections.unmatched_procedure_plans.length, 2);
+  assert.equal(body.sections.unmatched_procedure_plans[0].work_assignment_id, "W-2");
+});
+
 test("buildLocalFinanceCenter summarizes receivables and payables by risk", () => {
   const today = new Date("2026-05-23T08:00:00+08:00");
   const receivable = mapFinanceRowForLocal({

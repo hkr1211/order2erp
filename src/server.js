@@ -1124,6 +1124,12 @@ function displayValue(value) {
 function viewTitle(viewName) {
   const names = {
     sales_orders: "销售订单",
+    procedure_plans: "派工/工序",
+    matched_orders: "已关联订单",
+    sales_orders_without_procedure: "无派工订单",
+    unmatched_procedure_plans: "未关联派工",
+    match_rate: "匹配率",
+    reason: "原因",
     contract_detail: "销售合同详情",
     contract_lines: "销售合同明细",
     contract_shortages: "合同缺料分析",
@@ -1348,6 +1354,7 @@ function pmcConsolePage(body) {
     ["黄牌预警", command.yellow_count ?? 0, "3天内可能恶化", "warning"],
     ["风险占比", `${command.risk_order_ratio ?? 0}%`, "红黄牌订单/总在制订单", command.risk_order_ratio > 20 ? "danger" : command.risk_order_ratio >= 10 ? "warning" : "neutral"],
     ["延期工序", body.summary.delayed_procedures ?? 0, "派工进度追踪表", "danger"],
+    ["订单工序匹配率", `${body.summary.procedure_order_match_rate ?? 0}%`, "销售订单与派工关联程度", (body.summary.procedure_order_match_rate ?? 0) < 50 ? "warning" : "neutral"],
     ["冲压延期", body.summary.stamping_delayed_procedures ?? 0, "冲压相关逾期派工", "danger"],
     ["缺料订单", body.summary.shortage_orders, "按销售订单产品库存计算", "danger"],
     ["待报价", body.summary.pending_quote_projects, "报价项目待推进", "warning"]
@@ -1467,6 +1474,10 @@ function pmcConsolePage(body) {
       ${pmcTablePanel("处理类型汇总", interventions.by_risk_type, ["risk_type", "actions"], "neutral")}
     </section>
     <div class="zone-title">订单作战地图</div>
+    <section class="risk-board">
+      ${pmcTablePanel("订单-工序覆盖率", body.sections.order_procedure_coverage, ["sales_orders", "procedure_plans", "matched_orders", "sales_orders_without_procedure", "unmatched_procedure_plans", "match_rate"], "warning")}
+      ${pmcTablePanel("未关联派工", body.sections.unmatched_procedure_plans, ["work_assignment_id", "order_no", "product_name", "procedure_name", "work_center_name", "remaining_qty", "reason"], "warning")}
+    </section>
     <section class="battle-grid">
       ${pmcBattleMapPanel(body.sections.order_battle_map, body.sections.order_battle_stages)}
       ${pmcTablePanel("工序瓶颈汇总", body.sections.order_battle_summary, ["stage", "red_nodes", "yellow_nodes", "active_nodes", "done_nodes"], "warning")}

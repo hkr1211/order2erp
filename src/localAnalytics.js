@@ -18,6 +18,7 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
   const stampingDelayedProcedures = delayedProcedures.filter(isStampingProcedure);
   const financeCenter = buildLocalFinanceCenter({ financeRows });
   const orderBattle = buildOrderBattleMap(normalizedProcedures, day);
+  const procedureCoverage = buildOrderProcedureCoverage(normalizedOrders, normalizedProcedures);
   const priorityRisks = [
     ...delayedProcedureTasks(stampingDelayedProcedures, "冲压延期"),
     ...shortageTasks(shortageRows),
@@ -70,6 +71,8 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
       battle_map_orders: orderBattle.rows.length,
       battle_map_red_nodes: orderBattle.red_nodes,
       battle_map_yellow_nodes: orderBattle.yellow_nodes,
+      procedure_order_match_rate: procedureCoverage.match_rate,
+      unmatched_procedure_plans: procedureCoverage.unmatched_procedure_plans.length,
       overdue_receivables: financeCenter.summary.overdue_receivables,
       due_soon_payables: financeCenter.summary.due_soon_payables
     },
@@ -95,6 +98,8 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
       order_battle_stages: orderBattle.stages,
       order_battle_map: orderBattle.rows,
       order_battle_summary: orderBattle.summary,
+      order_procedure_coverage: [procedureCoverage.summary],
+      unmatched_procedure_plans: procedureCoverage.unmatched_procedure_plans,
       workload_by_center: procedureWorkloadByCenter(normalizedProcedures, day),
       overdue_receivables: financeCenter.sections.overdue_receivables,
       due_soon_payables: financeCenter.sections.due_soon_payables
@@ -543,6 +548,42 @@ function battleProblemText(status, row) {
   return "";
 }
 
+function buildOrderProcedureCoverage(orders, procedures) {
+  const orderNos = new Set(orders.map((row) => normalizeKey(row.order_no)).filter(Boolean));
+  const procedureOrderNos = new Set(procedures.map((row) => normalizeKey(row.order_no)).filter(Boolean));
+  const matchedOrderNos = [...orderNos].filter((orderNo) => procedureOrderNos.has(orderNo));
+  const unmatchedProcedures = procedures
+    .filter((row) => {
+      const orderNo = normalizeKey(row.order_no);
+      return !orderNo || !orderNos.has(orderNo);
+    })
+    .map((row) => ({
+      work_assignment_id: row.work_assignment_id,
+      order_no: row.order_no,
+      product_name: row.product_name,
+      procedure_name: row.procedure_name,
+      work_center_name: row.work_center_name,
+      remaining_qty: row.remaining_qty,
+      planned_finish_date: row.planned_finish_date,
+      reason: normalizeKey(row.order_no) ? "派工订单号未命中销售订单" : "派工缺少订单号"
+    }))
+    .slice(0, 30);
+  const salesOrdersWithoutProcedure = orders.filter((row) => !procedureOrderNos.has(normalizeKey(row.order_no))).length;
+  const matchRate = orderNos.size ? Number(((matchedOrderNos.length / orderNos.size) * 100).toFixed(1)) : 0;
+  return {
+    match_rate: matchRate,
+    unmatched_procedure_plans: unmatchedProcedures,
+    summary: {
+      sales_orders: orderNos.size,
+      procedure_plans: procedures.length,
+      matched_orders: matchedOrderNos.length,
+      sales_orders_without_procedure: salesOrdersWithoutProcedure,
+      unmatched_procedure_plans: unmatchedProcedures.length,
+      match_rate: matchRate
+    }
+  };
+}
+
 function deliveryTasks(rows, type) {
   return rows.map((row) => {
     const overdue = Number(row.days_from_today) < 0;
@@ -763,6 +804,10 @@ function quoteAction(priority, quoteStatus) {
 
 function uniqueCount(rows, key) {
   return new Set(rows.map((row) => row?.[key]).filter(Boolean)).size;
+}
+
+function normalizeKey(value) {
+  return String(value || "").trim().toUpperCase();
 }
 
 function parseDate(value) {
