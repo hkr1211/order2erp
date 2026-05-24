@@ -1126,6 +1126,8 @@ function viewTitle(viewName) {
     sales_orders: "销售订单",
     procedure_plans: "派工/工序",
     matched_orders: "已关联订单",
+    exact_matched_orders: "精确匹配",
+    assisted_matched_orders: "辅助匹配",
     sales_orders_without_procedure: "无派工订单",
     unmatched_procedure_plans: "未关联派工",
     match_rate: "匹配率",
@@ -1475,7 +1477,8 @@ function pmcConsolePage(body) {
     </section>
     <div class="zone-title">订单作战地图</div>
     <section class="risk-board">
-      ${pmcTablePanel("订单-工序覆盖率", body.sections.order_procedure_coverage, ["sales_orders", "procedure_plans", "matched_orders", "sales_orders_without_procedure", "unmatched_procedure_plans", "match_rate"], "warning")}
+      ${pmcTablePanel("订单-工序覆盖率", body.sections.order_procedure_coverage, ["sales_orders", "procedure_plans", "matched_orders", "exact_matched_orders", "assisted_matched_orders", "sales_orders_without_procedure", "unmatched_procedure_plans", "match_rate"], "warning")}
+      ${pmcTablePanel("匹配明细", body.sections.order_procedure_matches, ["order_no", "product_name", "work_assignment_id", "procedure_name", "planned_finish_date", "matched_by"], "neutral")}
       ${pmcTablePanel("未关联派工", body.sections.unmatched_procedure_plans, ["work_assignment_id", "order_no", "product_name", "procedure_name", "work_center_name", "remaining_qty", "reason"], "warning")}
     </section>
     <section class="battle-grid">

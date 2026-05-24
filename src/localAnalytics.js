@@ -73,6 +73,7 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
       battle_map_yellow_nodes: orderBattle.yellow_nodes,
       procedure_order_match_rate: procedureCoverage.match_rate,
       unmatched_procedure_plans: procedureCoverage.unmatched_procedure_plans.length,
+      assisted_matched_orders: procedureCoverage.assisted_matched_orders,
       overdue_receivables: financeCenter.summary.overdue_receivables,
       due_soon_payables: financeCenter.summary.due_soon_payables
     },
@@ -99,6 +100,7 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
       order_battle_map: orderBattle.rows,
       order_battle_summary: orderBattle.summary,
       order_procedure_coverage: [procedureCoverage.summary],
+      order_procedure_matches: procedureCoverage.matches,
       unmatched_procedure_plans: procedureCoverage.unmatched_procedure_plans,
       workload_by_center: procedureWorkloadByCenter(normalizedProcedures, day),
       overdue_receivables: financeCenter.sections.overdue_receivables,
@@ -550,12 +552,33 @@ function battleProblemText(status, row) {
 
 function buildOrderProcedureCoverage(orders, procedures) {
   const orderNos = new Set(orders.map((row) => normalizeKey(row.order_no)).filter(Boolean));
-  const procedureOrderNos = new Set(procedures.map((row) => normalizeKey(row.order_no)).filter(Boolean));
-  const matchedOrderNos = [...orderNos].filter((orderNo) => procedureOrderNos.has(orderNo));
+  const orderByNo = new Map(orders.map((row) => [normalizeKey(row.order_no), row]).filter(([key]) => Boolean(key)));
+  const matchedOrderNos = new Set();
+  const matchedProcedureKeys = new Set();
+  const matches = [];
+
+  procedures.forEach((row, index) => {
+    const orderNo = normalizeKey(row.order_no);
+    if (orderNo && orderByNo.has(orderNo)) {
+      matchedOrderNos.add(orderNo);
+      matchedProcedureKeys.add(procedureKey(row, index));
+      matches.push(matchRow(orderByNo.get(orderNo), row, "订单号精确匹配"));
+    }
+  });
+
+  procedures.forEach((row, index) => {
+    const key = procedureKey(row, index);
+    if (matchedProcedureKeys.has(key)) return;
+    const assistedOrder = findAssistedOrderMatch(row, orders, matchedOrderNos);
+    if (!assistedOrder) return;
+    matchedOrderNos.add(normalizeKey(assistedOrder.order_no));
+    matchedProcedureKeys.add(key);
+    matches.push(matchRow(assistedOrder, row, "产品+日期辅助匹配"));
+  });
+
   const unmatchedProcedures = procedures
-    .filter((row) => {
-      const orderNo = normalizeKey(row.order_no);
-      return !orderNo || !orderNos.has(orderNo);
+    .filter((row, index) => {
+      return !matchedProcedureKeys.has(procedureKey(row, index));
     })
     .map((row) => ({
       work_assignment_id: row.work_assignment_id,
@@ -565,23 +588,90 @@ function buildOrderProcedureCoverage(orders, procedures) {
       work_center_name: row.work_center_name,
       remaining_qty: row.remaining_qty,
       planned_finish_date: row.planned_finish_date,
-      reason: normalizeKey(row.order_no) ? "派工订单号未命中销售订单" : "派工缺少订单号"
+      reason: unmatchedProcedureReason(row, orderNos)
     }))
     .slice(0, 30);
-  const salesOrdersWithoutProcedure = orders.filter((row) => !procedureOrderNos.has(normalizeKey(row.order_no))).length;
-  const matchRate = orderNos.size ? Number(((matchedOrderNos.length / orderNos.size) * 100).toFixed(1)) : 0;
+  const salesOrdersWithoutProcedure = orders.filter((row) => !matchedOrderNos.has(normalizeKey(row.order_no))).length;
+  const assistedMatches = matches.filter((row) => row.matched_by === "产品+日期辅助匹配").length;
+  const exactMatches = matches.filter((row) => row.matched_by === "订单号精确匹配").length;
+  const matchRate = orderNos.size ? Number(((matchedOrderNos.size / orderNos.size) * 100).toFixed(1)) : 0;
   return {
     match_rate: matchRate,
+    assisted_matched_orders: assistedMatches,
     unmatched_procedure_plans: unmatchedProcedures,
+    matches: matches.slice(0, 30),
     summary: {
       sales_orders: orderNos.size,
       procedure_plans: procedures.length,
-      matched_orders: matchedOrderNos.length,
+      matched_orders: matchedOrderNos.size,
+      exact_matched_orders: exactMatches,
+      assisted_matched_orders: assistedMatches,
       sales_orders_without_procedure: salesOrdersWithoutProcedure,
       unmatched_procedure_plans: unmatchedProcedures.length,
       match_rate: matchRate
     }
   };
+}
+
+function findAssistedOrderMatch(procedure, orders, alreadyMatchedOrderNos) {
+  const procedureProduct = productMatchKey(procedure.product_name);
+  const finishDate = parseDate(procedure.planned_finish_date);
+  if (!procedureProduct || !finishDate) return null;
+  const candidates = orders
+    .filter((order) => !alreadyMatchedOrderNos.has(normalizeKey(order.order_no)))
+    .map((order) => {
+      const orderProduct = productMatchKey(order.product_name);
+      const deliveryDate = parseDate(order.delivery_date);
+      if (!orderProduct || !deliveryDate) return null;
+      const productScore = productSimilarity(procedureProduct, orderProduct);
+      const dateGap = Math.abs(daysBetween(startOfDay(finishDate), startOfDay(deliveryDate)));
+      if (productScore < 0.9 || dateGap > 14) return null;
+      return { order, productScore, dateGap };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.productScore - a.productScore || a.dateGap - b.dateGap);
+  return candidates[0]?.order || null;
+}
+
+function matchRow(order, procedure, matchedBy) {
+  return {
+    order_no: order.order_no,
+    customer: order.customer,
+    product_name: order.product_name,
+    delivery_date: order.delivery_date,
+    work_assignment_id: procedure.work_assignment_id,
+    procedure_name: procedure.procedure_name,
+    work_center_name: procedure.work_center_name,
+    planned_finish_date: procedure.planned_finish_date,
+    matched_by: matchedBy
+  };
+}
+
+function unmatchedProcedureReason(row, orderNos) {
+  const orderNo = normalizeKey(row.order_no);
+  if (orderNo && !orderNos.has(orderNo)) return "派工订单号未命中销售订单";
+  if (!orderNo && productMatchKey(row.product_name)) return "派工缺少订单号且未找到可靠产品/日期匹配";
+  return "派工缺少订单号";
+}
+
+function procedureKey(row, index) {
+  return row.work_assignment_id || row.erp_id || `${row.product_name || "procedure"}-${row.procedure_name || ""}-${index}`;
+}
+
+function productMatchKey(value) {
+  return String(value || "")
+    .toUpperCase()
+    .replace(/\s+/g, "")
+    .replace(/[()（）\[\]【】,，;；:_\-—/\\]/g, "");
+}
+
+function productSimilarity(left, right) {
+  if (!left || !right) return 0;
+  if (left === right) return 1;
+  if (left.includes(right) || right.includes(left)) {
+    return Math.min(left.length, right.length) / Math.max(left.length, right.length);
+  }
+  return 0;
 }
 
 function deliveryTasks(rows, type) {

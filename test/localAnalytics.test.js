@@ -151,6 +151,27 @@ test("buildLocalPmcDashboard reports order-procedure match coverage", () => {
   assert.equal(body.sections.unmatched_procedure_plans[0].work_assignment_id, "W-2");
 });
 
+test("buildLocalPmcDashboard supports conservative assisted order-procedure matching", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-24T08:00:00+08:00"),
+    salesOrders: [
+      { order_no: "PO-100", customer: "客户A", product_name: "锥形铌杯", delivery_date: "2026-05-30" },
+      { order_no: "PO-200", customer: "客户B", product_name: "钼带", delivery_date: "2026-06-15" }
+    ],
+    procedurePlans: [
+      { work_assignment_id: "W-A", order_no: "", product_name: "锥形铌杯", procedure_name: "落料", remaining_qty: 10, planned_finish_date: "2026-05-28" },
+      { work_assignment_id: "W-B", order_no: "", product_name: "钨棒", procedure_name: "质检", remaining_qty: 2, planned_finish_date: "2026-05-28" }
+    ]
+  });
+
+  assert.equal(body.summary.procedure_order_match_rate, 50);
+  assert.equal(body.summary.assisted_matched_orders, 1);
+  assert.equal(body.sections.order_procedure_matches[0].matched_by, "产品+日期辅助匹配");
+  assert.equal(body.sections.order_procedure_matches[0].order_no, "PO-100");
+  assert.equal(body.sections.unmatched_procedure_plans.length, 1);
+  assert.equal(body.sections.unmatched_procedure_plans[0].work_assignment_id, "W-B");
+});
+
 test("buildLocalFinanceCenter summarizes receivables and payables by risk", () => {
   const today = new Date("2026-05-23T08:00:00+08:00");
   const receivable = mapFinanceRowForLocal({
