@@ -140,6 +140,13 @@ export function initLocalDb(dbPath = process.env.PMC_DB_PATH || DEFAULT_DB_PATH)
       synced_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS erp_quote_exclusions (
+      quote_no TEXT PRIMARY KEY,
+      reason TEXT,
+      actor TEXT,
+      excluded_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS erp_finance_records (
       record_id TEXT PRIMARY KEY,
       direction TEXT NOT NULL,
@@ -291,6 +298,29 @@ export function pmcInterventionSummary({ today = new Date(), limit = 8 } = {}) {
     recent_actions: recentActions,
     by_risk_type: byRiskType
   };
+}
+
+export function excludeQuoteFollowup({ quote_no, reason = "", actor = "内网用户", excluded_at = "" } = {}) {
+  const quoteNo = String(quote_no || "").trim();
+  if (!quoteNo) {
+    throw new Error("quote_no is required");
+  }
+  const database = initLocalDb();
+  const excludedAt = excluded_at || new Date().toISOString();
+  runInTransaction(database, () => {
+    database
+      .prepare("INSERT OR REPLACE INTO erp_quote_exclusions (quote_no, reason, actor, excluded_at) VALUES (?, ?, ?, ?)")
+      .run(quoteNo, reason, actor, excludedAt);
+    database.prepare("DELETE FROM erp_quote_followups WHERE quote_no = ?").run(quoteNo);
+  });
+  return { quote_no: quoteNo, reason, actor, excluded_at: excludedAt };
+}
+
+export function listQuoteExclusions({ limit = 100 } = {}) {
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 100, 1000));
+  return initLocalDb()
+    .prepare("SELECT quote_no, reason, actor, excluded_at FROM erp_quote_exclusions ORDER BY excluded_at DESC LIMIT ?")
+    .all(safeLimit);
 }
 
 export function startSyncRun(sourceKey) {
@@ -537,14 +567,28 @@ function insertProcedurePlans(database, rows) {
 }
 
 function insertQuoteFollowups(database, rows) {
+  const excludedQuoteNos = quoteExclusionSet(database);
   const stmt = database.prepare(`
     INSERT OR REPLACE INTO erp_quote_followups
     (quote_no, priority, quote_status, customer, title, owner, project_stage, estimated_amount, quoted_amount, created_date, age_days, action, risk_flags, raw_json, synced_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   for (const row of rows) {
-    stmt.run(row.quote_no, row.priority, row.quote_status, row.customer, row.title, row.owner, row.project_stage, row.estimated_amount, row.quoted_amount, row.created_date, row.age_days, row.action, stringifyScalar(row.risk_flags), JSON.stringify(row.raw || row), row.synced_at);
+    if (excludedQuoteNos.has(String(row.quote_no || "").trim())) {
+      continue;
+    }
+    stmt.run(row.quote_no, row.priority || "", row.quote_status || "", row.customer || "", row.title || "", row.owner || "", row.project_stage || "", row.estimated_amount ?? null, row.quoted_amount ?? null, row.created_date || "", row.age_days ?? null, row.action || "", stringifyScalar(row.risk_flags), JSON.stringify(row.raw || row), row.synced_at || new Date().toISOString());
   }
+}
+
+function quoteExclusionSet(database) {
+  return new Set(
+    database
+      .prepare("SELECT quote_no FROM erp_quote_exclusions")
+      .all()
+      .map((row) => String(row.quote_no || "").trim())
+      .filter(Boolean)
+  );
 }
 
 function insertFinanceRecords(database, rows) {

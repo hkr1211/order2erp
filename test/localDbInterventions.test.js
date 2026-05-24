@@ -102,3 +102,29 @@ test("latestPmcInterventionsByRelatedNos returns the latest action for each rela
   assert.equal(rowsByNo.get("PO-2").action_label, "加班协调");
   assert.equal(rowsByNo.has("PO-3"), false);
 });
+
+test("excluded quote followups do not return after replacement sync", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "quote-exclusions-"));
+  process.env.PMC_DB_PATH = path.join(tempDir, "pmc.db");
+  const modulePath = `../src/localDb.js?quoteExclusions=${Date.now()}`;
+  const { excludeQuoteFollowup, listQuoteExclusions, listQuoteFollowups, replaceQuoteFollowups } = await import(modulePath);
+
+  const excluded = excludeQuoteFollowup({
+    quote_no: "XM_2022051001",
+    reason: "2022年历史项目，不进入待报价池",
+    actor: "老板"
+  });
+
+  replaceQuoteFollowups([
+    { quote_no: "XM_2022051001", priority: "高", quote_status: "待报价", customer: "李大斌", title: "电子束炉制造", project_stage: "方案制定", estimated_amount: 0, quoted_amount: 0, created_date: "2022-05-10", age_days: 1475, action: "跟进报价", risk_flags: "", raw: {}, synced_at: "2026-05-24T00:00:00.000Z" },
+    { quote_no: "Q-KEEP", priority: "中", quote_status: "待报价", customer: "客户A", title: "钼板询价", project_stage: "核价", estimated_amount: 1000, quoted_amount: 0, created_date: "2026-05-20", age_days: 4, action: "安排报价", risk_flags: "", raw: {}, synced_at: "2026-05-24T00:00:00.000Z" }
+  ]);
+
+  const rows = listQuoteFollowups({ limit: 10 });
+  const exclusions = listQuoteExclusions({ limit: 10 });
+
+  assert.equal(excluded.quote_no, "XM_2022051001");
+  assert.deepEqual(rows.map((row) => row.quote_no), ["Q-KEEP"]);
+  assert.equal(exclusions[0].quote_no, "XM_2022051001");
+  assert.equal(exclusions[0].reason, "2022年历史项目，不进入待报价池");
+});
