@@ -94,6 +94,7 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
       intervention_tasks: interventionTasks,
       order_battle_stages: orderBattle.stages,
       order_battle_map: orderBattle.rows,
+      order_battle_summary: orderBattle.summary,
       workload_by_center: procedureWorkloadByCenter(normalizedProcedures, day),
       overdue_receivables: financeCenter.sections.overdue_receivables,
       due_soon_payables: financeCenter.sections.due_soon_payables
@@ -442,9 +443,26 @@ function buildOrderBattleMap(rows, today) {
   return {
     stages: BATTLE_STAGES,
     rows: rowsOut,
+    summary: battleStageSummary(rowsOut),
     red_nodes: rowsOut.reduce((sum, row) => sum + row.red_nodes, 0),
     yellow_nodes: rowsOut.reduce((sum, row) => sum + row.yellow_nodes, 0)
   };
+}
+
+function battleStageSummary(rows) {
+  return BATTLE_STAGES.map((stage) => {
+    const cells = rows.map((row) => row[`stage_${stage}`] || emptyBattleCell(stage));
+    return {
+      stage,
+      red_nodes: cells.filter((cell) => cell.status === "red").length,
+      yellow_nodes: cells.filter((cell) => cell.status === "yellow").length,
+      active_nodes: cells.filter((cell) => cell.status === "active").length,
+      done_nodes: cells.filter((cell) => cell.status === "done").length,
+      total_nodes: cells.filter((cell) => cell.status !== "none").length
+    };
+  })
+    .filter((row) => row.total_nodes > 0 || row.red_nodes > 0 || row.yellow_nodes > 0)
+    .sort((a, b) => b.red_nodes - a.red_nodes || b.yellow_nodes - a.yellow_nodes || b.active_nodes - a.active_nodes || BATTLE_STAGES.indexOf(a.stage) - BATTLE_STAGES.indexOf(b.stage));
 }
 
 function emptyBattleCell(stage) {
@@ -479,6 +497,8 @@ function battleCellForProcedure(row, today) {
     stage,
     status,
     label: battleStatusLabel(status),
+    order_no: row.order_no || "",
+    work_assignment_id: row.work_assignment_id || "",
     procedure_name: row.procedure_name || "",
     work_center_name: row.work_center_name || "",
     remaining_qty: row.remaining_qty,

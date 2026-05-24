@@ -1417,11 +1417,14 @@ function pmcConsolePage(body) {
     .battle-node.active { background: #eef4ff; color: #175cd3; border-color: #b2ccff; }
     .battle-node.yellow { background: var(--amber-soft); color: var(--amber); border-color: #f3c77b; }
     .battle-node.red { background: var(--red-soft); color: var(--red); border-color: #f2a7a3; }
+    a.battle-node { text-decoration: none; }
+    .battle-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr); gap: 12px; margin-bottom: 12px; align-items: start; }
     .notes { margin-top: 12px; color: var(--muted); font-size: 13px; line-height: 1.7; }
     @media (max-width: 1180px) {
       .kpis { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
       .risk-board { grid-template-columns: 1fr; }
       .risk-focus { grid-template-columns: 1fr; }
+      .battle-grid { grid-template-columns: 1fr; }
       .layout { grid-template-columns: 1fr; }
     }
     @media (max-width: 720px) {
@@ -1464,7 +1467,10 @@ function pmcConsolePage(body) {
       ${pmcTablePanel("处理类型汇总", interventions.by_risk_type, ["risk_type", "actions"], "neutral")}
     </section>
     <div class="zone-title">订单作战地图</div>
-    ${pmcBattleMapPanel(body.sections.order_battle_map, body.sections.order_battle_stages)}
+    <section class="battle-grid">
+      ${pmcBattleMapPanel(body.sections.order_battle_map, body.sections.order_battle_stages)}
+      ${pmcTablePanel("工序瓶颈汇总", body.sections.order_battle_summary, ["stage", "red_nodes", "yellow_nodes", "active_nodes", "done_nodes"], "warning")}
+    </section>
     <div class="zone-title">订单作战重点</div>
     <section class="risk-focus">
       ${pmcTablePanel("重点风险", body.sections.priority_risks, ["exception_type", "priority", "related_no", "item", "quantity", "due_date", "responsible_role", "action"], "danger")}
@@ -1521,7 +1527,19 @@ function pmcBattleMapPanel(rows, stages) {
 function formatBattleNode(cell = {}) {
   const status = cell.status || "none";
   const title = [cell.procedure_name, cell.work_center_name, cell.remaining_qty !== "" && cell.remaining_qty !== undefined ? `剩余${cell.remaining_qty}` : "", cell.planned_finish_date ? `计划${cell.planned_finish_date}` : "", cell.problem].filter(Boolean).join(" / ");
-  return `<span class="battle-node ${escapeHtml(status)}" title="${escapeHtml(title)}">${escapeHtml(cell.label || "○")}</span>`;
+  const label = escapeHtml(cell.label || "○");
+  if (status === "red" || status === "yellow" || status === "active") {
+    const row = {
+      risk_level: status === "red" ? "红牌" : status === "yellow" ? "黄牌" : "关注",
+      risk_type: status === "red" ? "产能瓶颈" : status === "yellow" ? "产能预警" : "工序跟进",
+      related_no: cell.order_no || cell.work_assignment_id || "",
+      problem: title,
+      primary_action: status === "red" ? "确认资源安排并处理延期工序" : "确认工序进度和完成时间",
+      buttons: []
+    };
+    return `<a class="battle-node ${escapeHtml(status)}" title="${escapeHtml(title)}" href="${escapeHtml(pmcInterventionHref(row, status === "red" ? "加班协调" : "协调工序"))}">${label}</a>`;
+  }
+  return `<span class="battle-node ${escapeHtml(status)}" title="${escapeHtml(title)}">${label}</span>`;
 }
 
 function formatPmcCell(row, column) {

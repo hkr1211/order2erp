@@ -123,6 +123,9 @@ test("buildLocalPmcDashboard builds an order battle map from procedure stages", 
   assert.equal(body.sections.order_battle_map[0].current_stage, "轧制");
   assert.equal(body.sections.order_battle_map[0].stage_轧制.status, "red");
   assert.equal(body.sections.order_battle_map[1].stage_质检.status, "yellow");
+  assert.equal(body.sections.order_battle_summary[0].stage, "轧制");
+  assert.equal(body.sections.order_battle_summary[0].red_nodes, 1);
+  assert.equal(body.sections.order_battle_summary.find((row) => row.stage === "质检").yellow_nodes, 1);
 });
 
 test("buildLocalFinanceCenter summarizes receivables and payables by risk", () => {
