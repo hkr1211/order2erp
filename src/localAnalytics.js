@@ -27,6 +27,28 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
   ]
     .sort((a, b) => riskTypeWeight(b.exception_type) - riskTypeWeight(a.exception_type) || priorityWeight(b.priority) - priorityWeight(a.priority) || String(a.due_date || "").localeCompare(String(b.due_date || "")))
     .slice(0, 12);
+  const redRisks = [
+    ...commandRiskRows(delayedProcedureTasks(stampingDelayedProcedures, "冲压延期"), "产能瓶颈", "交期超期"),
+    ...commandRiskRows(shortageTasks(shortageRows), "物料断供", "物料断供"),
+    ...commandRiskRows(deliveryTasks(overdueOrders, "交期逾期"), "交期超期", "交期超期")
+  ];
+  const yellowRisks = [
+    ...commandRiskRows(deliveryTasks(dueSoonOrders, "临期交付"), "交期预警", "交期预警"),
+    ...commandRiskRows(delayedProcedureTasks(delayedProcedures.filter((row) => !isStampingProcedure(row)), "工序延期"), "产能预警", "产能预警"),
+    ...commandRiskRows(lowStockTasks(lowStockRows), "物料预警", "物料预警"),
+    ...quoteRiskRows(pendingQuotes)
+  ];
+  const interventionTasks = [...redRisks, ...yellowRisks].map((row, index) => ({
+    task_no: `ACT-${String(index + 1).padStart(3, "0")}`,
+    risk_level: row.risk_level,
+    risk_type: row.risk_type,
+    related_no: row.related_no,
+    problem: row.problem,
+    primary_action: row.primary_action,
+    buttons: row.buttons,
+    owner_role: row.owner_role,
+    due_date: row.due_date
+  }));
 
   return {
     model: "pmc_console",
@@ -47,6 +69,13 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
       overdue_receivables: financeCenter.summary.overdue_receivables,
       due_soon_payables: financeCenter.summary.due_soon_payables
     },
+    command_center: {
+      red_count: redRisks.length,
+      yellow_count: yellowRisks.length,
+      green_count: Math.max(0, normalizedOrders.length - uniqueCount([...overdueOrders, ...dueSoonOrders], "order_no")),
+      today_todos: redRisks.length + yellowRisks.length,
+      risk_order_ratio: normalizedOrders.length ? Number(((uniqueCount([...overdueOrders, ...dueSoonOrders, ...shortageRows], "order_no") / normalizedOrders.length) * 100).toFixed(1)) : 0
+    },
     sections: {
       overdue_orders: overdueOrders,
       due_soon_orders: dueSoonOrders,
@@ -56,6 +85,9 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
       delayed_procedures: delayedProcedures,
       stamping_delayed_procedures: stampingDelayedProcedures,
       priority_risks: priorityRisks,
+      red_risks: redRisks,
+      yellow_risks: yellowRisks,
+      intervention_tasks: interventionTasks,
       workload_by_center: procedureWorkloadByCenter(normalizedProcedures, day),
       overdue_receivables: financeCenter.sections.overdue_receivables,
       due_soon_payables: financeCenter.sections.due_soon_payables
@@ -416,6 +448,66 @@ function delayedProcedureTasks(rows, type) {
     action: type === "冲压延期" ? "优先确认冲压产能、模具和插单影响" : "确认延期原因并调整工序计划",
     status: row.state || "待处理"
   }));
+}
+
+function commandRiskRows(rows, riskType, fallbackType) {
+  return rows.map((row) => {
+    const type = riskType || fallbackType || row.exception_type;
+    const buttons = interventionButtons(type);
+    return {
+      risk_level: isRedRiskType(type) ? "红牌" : "黄牌",
+      risk_type: type,
+      related_no: row.related_no,
+      problem: commandProblemText(type, row),
+      item: row.item,
+      quantity: row.quantity,
+      due_date: row.due_date,
+      owner_role: row.responsible_role,
+      primary_action: row.action,
+      buttons,
+      source_status: row.status
+    };
+  });
+}
+
+function quoteRiskRows(rows) {
+  return rows.map((row) => ({
+    risk_level: "黄牌",
+    risk_type: "报价预警",
+    related_no: row.quote_no,
+    problem: `${row.title || "报价项目"}待处理${row.customer ? `，客户：${row.customer}` : ""}`,
+    item: row.title,
+    quantity: row.estimated_amount,
+    due_date: row.created_date,
+    owner_role: row.owner || "销售/报价",
+    primary_action: row.action || "补齐需求资料并安排报价",
+    buttons: ["生成报价跟进", "客户沟通", "标记处理中"],
+    source_status: row.quote_status
+  }));
+}
+
+function commandProblemText(type, row) {
+  if (type === "冲压延期") return `${row.item || "冲压工序"}未按计划完成，剩余${row.quantity ?? ""}`;
+  if (type === "物料断供") return `${row.item || "物料"}缺口${row.quantity ?? ""}，影响订单${row.related_no || ""}`;
+  if (type === "交期超期") return `${row.related_no || "订单"}已超过承诺交期，需今天处理`;
+  if (type === "交期预警") return `${row.related_no || "订单"}即将到期，需提前协调生产/发货`;
+  if (type === "产能预警") return `${row.item || "工序"}存在延期，需确认产能安排`;
+  if (type === "物料预警") return `${row.item || "物料"}库存偏低，需确认补料或替代方案`;
+  return row.action || row.item || type;
+}
+
+function interventionButtons(type) {
+  if (type === "冲压延期") return ["加班协调", "外协申请", "模拟排程", "标记处理中"];
+  if (type === "物料断供") return ["生成催货文本", "申请调拨", "找替代料", "标记处理中"];
+  if (type === "交期超期") return ["紧急发货", "客户沟通", "改排程", "标记处理中"];
+  if (type === "交期预警") return ["加急排产", "协调工序", "客户预沟通", "标记处理中"];
+  if (type === "产能预警") return ["加班/增班", "外协评估", "调整顺序", "标记处理中"];
+  if (type === "物料预警") return ["确认物流", "备选方案", "生成催货文本", "标记处理中"];
+  return ["查看详情", "标记处理中"];
+}
+
+function isRedRiskType(type) {
+  return ["冲压延期", "物料断供", "交期超期"].includes(type);
 }
 
 function isStampingProcedure(row) {

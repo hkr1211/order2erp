@@ -1320,17 +1320,16 @@ function labelFor(key) {
 }
 
 function pmcConsolePage(body) {
+  const command = body.command_center || {};
   const cards = [
-    ["今日订单", body.summary.today_orders ?? "--", "今日签订订单数量", "neutral"],
-    ["本月订单", body.summary.month_orders ?? "--", "本月签订订单数量", "neutral"],
-    ["逾期订单", body.summary.overdue_orders, "交期已过且未交付", "danger"],
-    ["7天内交期", body.summary.due_soon_orders, "临近交付窗口", "warning"],
-    ["缺料订单", body.summary.shortage_orders, "按销售订单产品库存计算", "danger"],
-    ["待报价项目", body.summary.pending_quote_projects, "项目/商机待报价", "warning"],
-    ["低库存预警", body.summary.low_stock, "可用库存低于阈值", "warning"],
+    ["今日待办", command.today_todos ?? 0, "红黄牌需要处理", command.red_count > 0 ? "danger" : command.yellow_count > 0 ? "warning" : "neutral"],
+    ["红牌问题", command.red_count ?? 0, "必须今天处理", "danger"],
+    ["黄牌预警", command.yellow_count ?? 0, "3天内可能恶化", "warning"],
+    ["风险占比", `${command.risk_order_ratio ?? 0}%`, "红黄牌订单/总在制订单", command.risk_order_ratio > 20 ? "danger" : command.risk_order_ratio >= 10 ? "warning" : "neutral"],
     ["延期工序", body.summary.delayed_procedures ?? 0, "派工进度追踪表", "danger"],
     ["冲压延期", body.summary.stamping_delayed_procedures ?? 0, "冲压相关逾期派工", "danger"],
-    ["逾期应收", body.summary.overdue_receivables ?? 0, "已到期未收款项", "warning"]
+    ["缺料订单", body.summary.shortage_orders, "按销售订单产品库存计算", "danger"],
+    ["待报价", body.summary.pending_quote_projects, "报价项目待推进", "warning"]
   ];
   return `<!doctype html>
 <html lang="zh-CN">
@@ -1369,8 +1368,11 @@ function pmcConsolePage(body) {
     .kpi .label { color: var(--muted); font-size: 13px; }
     .kpi .value { margin-top: 10px; font-size: 30px; line-height: 1; font-weight: 750; }
     .kpi .hint { margin-top: 12px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .zone-title { margin: 20px 0 10px; font-size: 18px; font-weight: 750; }
     .layout { display: grid; grid-template-columns: 1.05fr 1fr; gap: 12px; align-items: start; }
+    .risk-board { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; align-items: start; }
     .risk-focus { display: grid; grid-template-columns: 1.2fr 1fr; gap: 12px; margin-bottom: 12px; align-items: start; }
+    .intervention-list { margin-bottom: 12px; }
     .panel { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); overflow: hidden; }
     .panel h2 { margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--border); font-size: 17px; letter-spacing: 0; }
     .panel h2.danger { color: var(--red); }
@@ -1387,6 +1389,7 @@ function pmcConsolePage(body) {
     .notes { margin-top: 12px; color: var(--muted); font-size: 13px; line-height: 1.7; }
     @media (max-width: 1180px) {
       .kpis { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+      .risk-board { grid-template-columns: 1fr; }
       .risk-focus { grid-template-columns: 1fr; }
       .layout { grid-template-columns: 1fr; }
     }
@@ -1415,10 +1418,21 @@ function pmcConsolePage(body) {
     <section class="kpis">
       ${cards.map(([label, value, hint, tone]) => `<div class="kpi ${tone}"><div class="label">${escapeHtml(label)}</div><div class="value">${escapeHtml(value)}</div><div class="hint">${escapeHtml(hint)}</div></div>`).join("\n")}
     </section>
+    <div class="zone-title">红黄牌风险区</div>
+    <section class="risk-board">
+      ${pmcTablePanel("红牌：今天必须处理", body.sections.red_risks, ["risk_type", "related_no", "problem", "owner_role", "buttons"], "danger")}
+      ${pmcTablePanel("黄牌：3天内可能恶化", body.sections.yellow_risks, ["risk_type", "related_no", "problem", "owner_role", "buttons"], "warning")}
+    </section>
+    <div class="zone-title">我的干预清单</div>
+    <section class="intervention-list">
+      ${pmcTablePanel("待干预动作", body.sections.intervention_tasks, ["task_no", "risk_level", "risk_type", "related_no", "problem", "primary_action", "buttons"], "danger")}
+    </section>
+    <div class="zone-title">订单作战重点</div>
     <section class="risk-focus">
       ${pmcTablePanel("重点风险", body.sections.priority_risks, ["exception_type", "priority", "related_no", "item", "quantity", "due_date", "responsible_role", "action"], "danger")}
       ${pmcTablePanel("冲压延期", body.sections.stamping_delayed_procedures, ["work_assignment_id", "product_name", "procedure_name", "work_center_name", "remaining_qty", "planned_finish_date", "owner"], "danger")}
     </section>
+    <div class="zone-title">原始明细</div>
     <section class="layout">
       <div class="stack">
         ${pmcTablePanel("逾期订单", body.sections.overdue_orders, ["order_no", "customer", "product_name", "remaining_qty", "delivery_date"], "danger")}

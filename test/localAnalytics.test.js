@@ -77,6 +77,34 @@ test("buildLocalPmcDashboard promotes stamping delays into first-screen risks", 
   assert.equal(body.sections.priority_risks.some((row) => row.exception_type === "订单缺料"), true);
 });
 
+test("buildLocalPmcDashboard groups red and yellow risks with intervention actions", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-24T08:00:00+08:00"),
+    salesOrders: [
+      { order_no: "PO-RED", customer: "客户A", product_name: "钼板", delivery_date: "2026-05-20", signed_date: "2026-05-01", remaining_qty: 5 },
+      { order_no: "PO-YELLOW", customer: "客户B", product_name: "钽杯", delivery_date: "2026-05-28", signed_date: "2026-05-02", remaining_qty: 3 }
+    ],
+    materialAlerts: [
+      { alert_type: "shortage", order_no: "PO-RED", customer: "客户A", product_name: "钼板", shortage_qty: 2, delivery_date: "2026-05-20" },
+      { alert_type: "low_stock", product_code: "MO-1", product_name: "钼粉", available_qty: 1, stock_qty: 1 }
+    ],
+    procedurePlans: [
+      { work_assignment_id: "W-RED", order_no: "PO-RED", product_name: "钼板", procedure_name: "落料", work_center_name: "冲压工", remaining_qty: 8, planned_finish_date: "2026-05-20", state: "生产中" }
+    ],
+    quoteFollowups: [
+      { quote_no: "Q-YELLOW", title: "铌件询价", customer: "客户C", project_stage: "核价", quoted_amount: 0, priority: "高", quote_status: "待报价" }
+    ]
+  });
+
+  assert.equal(body.command_center.red_count, 3);
+  assert.equal(body.command_center.yellow_count, 3);
+  assert.equal(body.command_center.today_todos, 6);
+  assert.equal(body.sections.red_risks.some((row) => row.risk_type === "交期超期" && row.buttons.includes("客户沟通")), true);
+  assert.equal(body.sections.yellow_risks.some((row) => row.risk_type === "交期预警" && row.buttons.includes("协调工序")), true);
+  assert.equal(body.sections.intervention_tasks[0].primary_action, "优先确认冲压产能、模具和插单影响");
+  assert.equal(body.sections.intervention_tasks.some((row) => row.buttons.includes("生成催货文本")), true);
+});
+
 test("buildLocalFinanceCenter summarizes receivables and payables by risk", () => {
   const today = new Date("2026-05-23T08:00:00+08:00");
   const receivable = mapFinanceRowForLocal({
