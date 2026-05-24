@@ -15,7 +15,18 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
       const finishDate = parseDate(row.planned_finish_date);
       return finishDate && startOfDay(finishDate) < day;
     });
+  const stampingDelayedProcedures = delayedProcedures.filter(isStampingProcedure);
   const financeCenter = buildLocalFinanceCenter({ financeRows });
+  const priorityRisks = [
+    ...delayedProcedureTasks(stampingDelayedProcedures, "冲压延期"),
+    ...shortageTasks(shortageRows),
+    ...deliveryTasks(overdueOrders, "交期逾期"),
+    ...deliveryTasks(dueSoonOrders, "临期交付"),
+    ...delayedProcedureTasks(delayedProcedures.filter((row) => !isStampingProcedure(row)), "工序延期"),
+    ...lowStockTasks(lowStockRows)
+  ]
+    .sort((a, b) => riskTypeWeight(b.exception_type) - riskTypeWeight(a.exception_type) || priorityWeight(b.priority) - priorityWeight(a.priority) || String(a.due_date || "").localeCompare(String(b.due_date || "")))
+    .slice(0, 12);
 
   return {
     model: "pmc_console",
@@ -31,6 +42,8 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
       low_stock: lowStockRows.length,
       procedure_plan_rows: normalizedProcedures.length,
       delayed_procedures: delayedProcedures.length,
+      stamping_delayed_procedures: stampingDelayedProcedures.length,
+      priority_risks: priorityRisks.length,
       overdue_receivables: financeCenter.summary.overdue_receivables,
       due_soon_payables: financeCenter.summary.due_soon_payables
     },
@@ -41,6 +54,8 @@ export function buildLocalPmcDashboard({ salesOrders = [], materialAlerts = [], 
       pending_quotes: pendingQuotes,
       low_stock: lowStockRows,
       delayed_procedures: delayedProcedures,
+      stamping_delayed_procedures: stampingDelayedProcedures,
+      priority_risks: priorityRisks,
       workload_by_center: procedureWorkloadByCenter(normalizedProcedures, day),
       overdue_receivables: financeCenter.sections.overdue_receivables,
       due_soon_payables: financeCenter.sections.due_soon_payables
@@ -388,9 +403,37 @@ function lowStockTasks(rows) {
   }));
 }
 
+function delayedProcedureTasks(rows, type) {
+  return rows.map((row) => ({
+    exception_type: type,
+    priority: type === "冲压延期" ? "高" : "中",
+    related_no: row.work_assignment_id || row.order_no,
+    customer: "",
+    item: [row.product_name, row.procedure_name, row.work_center_name].filter(Boolean).join(" / "),
+    quantity: row.remaining_qty,
+    due_date: row.planned_finish_date,
+    responsible_role: type === "冲压延期" ? "PMC/冲压工段" : "PMC/生产",
+    action: type === "冲压延期" ? "优先确认冲压产能、模具和插单影响" : "确认延期原因并调整工序计划",
+    status: row.state || "待处理"
+  }));
+}
+
+function isStampingProcedure(row) {
+  const text = [row.work_center_name, row.procedure_name, row.owner].filter(Boolean).join(" ");
+  return /冲压|冲床|落料|引伸|拉伸|切边|压型/.test(text);
+}
+
 function priorityWeight(priority) {
   if (priority === "高") return 3;
   if (priority === "中") return 2;
+  return 1;
+}
+
+function riskTypeWeight(type) {
+  if (type === "冲压延期") return 5;
+  if (type === "订单缺料") return 4;
+  if (type === "交期逾期") return 3;
+  if (type === "临期交付") return 2;
   return 1;
 }
 

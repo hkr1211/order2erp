@@ -1329,6 +1329,7 @@ function pmcConsolePage(body) {
     ["待报价项目", body.summary.pending_quote_projects, "项目/商机待报价", "warning"],
     ["低库存预警", body.summary.low_stock, "可用库存低于阈值", "warning"],
     ["延期工序", body.summary.delayed_procedures ?? 0, "派工进度追踪表", "danger"],
+    ["冲压延期", body.summary.stamping_delayed_procedures ?? 0, "冲压相关逾期派工", "danger"],
     ["逾期应收", body.summary.overdue_receivables ?? 0, "已到期未收款项", "warning"]
   ];
   return `<!doctype html>
@@ -1369,6 +1370,7 @@ function pmcConsolePage(body) {
     .kpi .value { margin-top: 10px; font-size: 30px; line-height: 1; font-weight: 750; }
     .kpi .hint { margin-top: 12px; color: var(--muted); font-size: 12px; line-height: 1.4; }
     .layout { display: grid; grid-template-columns: 1.05fr 1fr; gap: 12px; align-items: start; }
+    .risk-focus { display: grid; grid-template-columns: 1.2fr 1fr; gap: 12px; margin-bottom: 12px; align-items: start; }
     .panel { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); overflow: hidden; }
     .panel h2 { margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--border); font-size: 17px; letter-spacing: 0; }
     .panel h2.danger { color: var(--red); }
@@ -1385,6 +1387,7 @@ function pmcConsolePage(body) {
     .notes { margin-top: 12px; color: var(--muted); font-size: 13px; line-height: 1.7; }
     @media (max-width: 1180px) {
       .kpis { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+      .risk-focus { grid-template-columns: 1fr; }
       .layout { grid-template-columns: 1fr; }
     }
     @media (max-width: 720px) {
@@ -1411,6 +1414,10 @@ function pmcConsolePage(body) {
     </header>
     <section class="kpis">
       ${cards.map(([label, value, hint, tone]) => `<div class="kpi ${tone}"><div class="label">${escapeHtml(label)}</div><div class="value">${escapeHtml(value)}</div><div class="hint">${escapeHtml(hint)}</div></div>`).join("\n")}
+    </section>
+    <section class="risk-focus">
+      ${pmcTablePanel("重点风险", body.sections.priority_risks, ["exception_type", "priority", "related_no", "item", "quantity", "due_date", "responsible_role", "action"], "danger")}
+      ${pmcTablePanel("冲压延期", body.sections.stamping_delayed_procedures, ["work_assignment_id", "product_name", "procedure_name", "work_center_name", "remaining_qty", "planned_finish_date", "owner"], "danger")}
     </section>
     <section class="layout">
       <div class="stack">

@@ -58,6 +58,25 @@ test("buildLocalPmcDashboard includes synced quote, procedure, and finance data"
   assert.equal(body.source_status.sqlite_quote_followups.rows, 2);
 });
 
+test("buildLocalPmcDashboard promotes stamping delays into first-screen risks", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-24T08:00:00+08:00"),
+    procedurePlans: [
+      { work_assignment_id: "W-1", order_no: "SO-1", product_name: "铌杯", procedure_name: "落料", work_center_name: "冲压工", planned_qty: 100, finished_qty: 20, remaining_qty: 80, planned_finish_date: "2026-05-20", owner: "张三", state: "生产中" },
+      { work_assignment_id: "W-2", order_no: "SO-2", product_name: "钼带", procedure_name: "轧制", work_center_name: "420四辊轧机", planned_qty: 50, finished_qty: 10, remaining_qty: 40, planned_finish_date: "2026-05-21", owner: "李四", state: "生产中" }
+    ],
+    materialAlerts: [
+      { alert_type: "shortage", order_no: "SO-3", customer: "客户C", product_name: "钽杯", shortage_qty: 5 }
+    ]
+  });
+
+  assert.equal(body.summary.delayed_procedures, 2);
+  assert.equal(body.summary.stamping_delayed_procedures, 1);
+  assert.equal(body.sections.stamping_delayed_procedures[0].work_assignment_id, "W-1");
+  assert.equal(body.sections.priority_risks[0].exception_type, "冲压延期");
+  assert.equal(body.sections.priority_risks.some((row) => row.exception_type === "订单缺料"), true);
+});
+
 test("buildLocalFinanceCenter summarizes receivables and payables by risk", () => {
   const today = new Date("2026-05-23T08:00:00+08:00");
   const receivable = mapFinanceRowForLocal({
