@@ -1493,18 +1493,19 @@ function pmcConsolePage(body, params = {}) {
   const allHref = `/pmc?${viewParams.toString()}`;
   viewParams.set("open_only", "1");
   const openOnlyHref = `/pmc?${viewParams.toString()}`;
+  const todayText = formatDate(new Date());
   const cards = [
-    ["待响应风险", closure.open_total, "红黄牌尚未留痕", closure.open_red > 0 ? "danger" : closure.open_yellow > 0 ? "warning" : "neutral"],
-    ["今日已处理", interventions.today_actions ?? 0, "本地干预留痕", "neutral"],
-    ["红牌待响应", closure.open_red, `红牌总数 ${command.red_count ?? 0}`, closure.open_red > 0 ? "danger" : "neutral"],
-    ["黄牌待响应", closure.open_yellow, `黄牌总数 ${command.yellow_count ?? 0}`, closure.open_yellow > 0 ? "warning" : "neutral"],
-    ["已响应风险", closure.responded_total, "按关联单号统计", "neutral"],
-    ["风险占比", `${command.risk_order_ratio ?? 0}%`, "红黄牌订单/总在制订单", command.risk_order_ratio > 20 ? "danger" : command.risk_order_ratio >= 10 ? "warning" : "neutral"],
-    ["延期工序", body.summary.delayed_procedures ?? 0, "派工进度追踪表", "danger"],
-    ["订单工序匹配率", `${body.summary.procedure_order_match_rate ?? 0}%`, "销售订单与派工关联程度", (body.summary.procedure_order_match_rate ?? 0) < 50 ? "warning" : "neutral"],
-    ["冲压延期", body.summary.stamping_delayed_procedures ?? 0, "冲压相关逾期派工", "danger"],
-    ["缺料订单", body.summary.shortage_orders, "按销售订单产品库存计算", "danger"],
-    ["待报价", body.summary.pending_quote_projects, "报价项目待推进", "warning"]
+    ["待响应风险", closure.open_total, "红黄牌尚未留痕", closure.open_red > 0 ? "danger" : closure.open_yellow > 0 ? "warning" : "neutral", openOnlyHref],
+    ["今日已处理", interventions.today_actions ?? 0, "本地干预留痕", "neutral", `/interventions?date_from=${todayText}&date_to=${todayText}`],
+    ["红牌待响应", closure.open_red, `红牌总数 ${command.red_count ?? 0}`, closure.open_red > 0 ? "danger" : "neutral", openOnlyHref],
+    ["黄牌待响应", closure.open_yellow, `黄牌总数 ${command.yellow_count ?? 0}`, closure.open_yellow > 0 ? "warning" : "neutral", openOnlyHref],
+    ["已响应风险", closure.responded_total, "按关联单号统计", "neutral", "/reports"],
+    ["风险占比", `${command.risk_order_ratio ?? 0}%`, "红黄牌订单/总在制订单", command.risk_order_ratio > 20 ? "danger" : command.risk_order_ratio >= 10 ? "warning" : "neutral", "/reports"],
+    ["延期工序", body.summary.delayed_procedures ?? 0, "派工进度追踪表", "danger", "/dispatch"],
+    ["订单工序匹配率", `${body.summary.procedure_order_match_rate ?? 0}%`, "销售订单与派工关联程度", (body.summary.procedure_order_match_rate ?? 0) < 50 ? "warning" : "neutral", "/procedure-links"],
+    ["冲压延期", body.summary.stamping_delayed_procedures ?? 0, "冲压相关逾期派工", "danger", "/dispatch"],
+    ["缺料订单", body.summary.shortage_orders, "按销售订单产品库存计算", "danger", "/materials"],
+    ["待报价", body.summary.pending_quote_projects, "报价项目待推进", "warning", "/quotes"]
   ];
   return `<!doctype html>
 <html lang="zh-CN">
@@ -1538,6 +1539,8 @@ function pmcConsolePage(body, params = {}) {
     .button.primary { background: var(--green); border-color: var(--green); color: #ffffff; }
     .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 10px; margin: 18px 0; }
     .kpi { min-height: 112px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+    a.kpi { color: inherit; text-decoration: none; transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease; }
+    a.kpi:hover { transform: translateY(-1px); box-shadow: 0 8px 18px rgba(23, 32, 51, .08); border-color: #98a2b3; }
     .kpi.warning { background: var(--amber-soft); border-color: #f3c77b; }
     .kpi.danger { background: var(--red-soft); border-color: #f2a7a3; }
     .kpi .label { color: var(--muted); font-size: 13px; }
@@ -1617,7 +1620,7 @@ function pmcConsolePage(body, params = {}) {
       </div>
     </header>
     <section class="kpis">
-      ${cards.map(([label, value, hint, tone]) => `<div class="kpi ${tone}"><div class="label">${escapeHtml(label)}</div><div class="value">${escapeHtml(value)}</div><div class="hint">${escapeHtml(hint)}</div></div>`).join("\n")}
+      ${cards.map(([label, value, hint, tone, href]) => renderKpiCard(label, value, hint, tone, href)).join("\n")}
     </section>
     <div class="zone-title">今日早会风险摘要</div>
     <section class="intervention-list">
@@ -1768,6 +1771,14 @@ function filterPmcOpenRisks(body = {}) {
       intervention_tasks: (sections.intervention_tasks || []).filter(openRow)
     }
   };
+}
+
+function renderKpiCard(label, value, hint, tone = "", href = "") {
+  const content = `<div class="label">${escapeHtml(label)}</div><div class="value">${escapeHtml(value)}</div><div class="hint">${escapeHtml(hint)}</div>`;
+  const className = `kpi ${tone || ""}`.trim();
+  return href
+    ? `<a class="${escapeHtml(className)}" href="${escapeHtml(href)}">${content}</a>`
+    : `<div class="${escapeHtml(className)}">${content}</div>`;
 }
 
 function pmcTablePanel(title, rows, columns, tone = "", extraClass = "") {
