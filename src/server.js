@@ -997,6 +997,7 @@ function followupWorkbenchPage(body) {
   const briefHref = owner ? `/followup/brief?owner=${encodeURIComponent(owner)}&open_only=1` : "/followup/brief?open_only=1";
   const openOnlyHref = owner ? `/followup?owner=${encodeURIComponent(owner)}&open_only=1` : "/followup?open_only=1";
   const allHref = owner ? `/followup?owner=${encodeURIComponent(owner)}` : "/followup";
+  const closure = pmcClosureSummary(dashboard.sections || {});
   const ownerLinks = (body.owners || []).slice(0, 20).map((row) => [
     `${row.owner}(${row.todos})`,
     `/followup?owner=${encodeURIComponent(row.owner)}`
@@ -1007,6 +1008,8 @@ function followupWorkbenchPage(body) {
     summary: [
       ["负责人", owner || "--"],
       ["今日待办", dashboard.command_center?.today_todos ?? 0],
+      ["待响应风险", closure.open_total],
+      ["已响应风险", closure.responded_total],
       ["红牌", dashboard.command_center?.red_count ?? 0],
       ["黄牌", dashboard.command_center?.yellow_count ?? 0],
       ["缺料订单", dashboard.summary?.shortage_orders ?? 0],
