@@ -1612,7 +1612,7 @@ function pmcConsolePage(body) {
     </section>
     <div class="zone-title">今日早会风险摘要</div>
     <section class="intervention-list">
-      ${pmcTablePanel("老板/管理层重点", body.sections.morning_brief, ["priority_no", "risk_level", "headline", "related_no", "owner_role", "next_action", "meeting_focus", "buttons"], "danger")}
+      ${pmcTablePanel("老板/管理层重点", body.sections.morning_brief, ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "latest_intervention", "latest_actor", "next_action", "meeting_focus", "intervention_log", "buttons"], "danger", "command-panel")}
     </section>
     <div class="zone-title">红黄牌风险区</div>
     <section class="risk-board risk-board-command">
@@ -1680,7 +1680,7 @@ function enrichPmcInterventionStatus(body) {
   const latestByNo = latestPmcInterventionsByRelatedNos(relatedNos);
   const nextSections = { ...sections };
   for (const name of targetSections) {
-    nextSections[name] = (Array.isArray(sections[name]) ? sections[name] : []).map((row) => {
+    const enrichedRows = (Array.isArray(sections[name]) ? sections[name] : []).map((row) => {
       const latest = latestByNo.get(row.related_no);
       const closure = pmcRiskClosure(row, latest);
       return {
@@ -1694,8 +1694,17 @@ function enrichPmcInterventionStatus(body) {
         intervention_log: interventionLogHref(row.related_no)
       };
     });
+    nextSections[name] = name === "morning_brief" ? sortMorningBriefByResponse(enrichedRows) : enrichedRows;
   }
   return { ...body, sections: nextSections };
+}
+
+function sortMorningBriefByResponse(rows = []) {
+  return [...rows].sort((a, b) => {
+    const aOpen = a.intervention_state === "已响应" ? 1 : 0;
+    const bOpen = b.intervention_state === "已响应" ? 1 : 0;
+    return aOpen - bOpen || Number(a.priority_no || 999) - Number(b.priority_no || 999);
+  });
 }
 
 function pmcRiskClosure(row = {}, latest = null) {
@@ -5019,7 +5028,7 @@ function reportCenterPage(body) {
       ["早会重点", body.summary.morning_brief_items || 0]
     ],
     panels: [
-      modulePanel("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "next_action", "meeting_focus", "intervention_log", "morning_action"], { fullWidth: true }),
+      modulePanel("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "latest_intervention", "latest_actor", "next_action", "meeting_focus", "intervention_log", "morning_action"], { fullWidth: true }),
       modulePanel("风险闭环待办", body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention", "responsible_role", "action"], { fullWidth: true }),
       modulePanel("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "note", "actor"], { fullWidth: true }),
       modulePanel("订单状态样本", body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]),
@@ -5104,7 +5113,7 @@ function reportPrintPage(body) {
     <section class="summary">
       ${summaryRows.map(([label, value]) => `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value ?? "")}</strong></div>`).join("")}
     </section>
-    ${printTable("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "next_action", "meeting_focus"])}
+    ${printTable("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "latest_intervention", "latest_actor", "next_action", "meeting_focus"])}
     ${printTable("风险闭环待办", body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"])}
     ${printTable("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "note", "actor"])}
     ${printTable("订单状态样本", body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"])}
@@ -5148,7 +5157,7 @@ function reportCenterCsv(body) {
       早会重点: body.summary.morning_brief_items || 0
     })
   ]);
-  appendCsvSection(lines, "今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "next_action", "meeting_focus"]));
+  appendCsvSection(lines, "今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "latest_intervention", "latest_actor", "next_action", "meeting_focus"]));
   appendCsvSection(lines, "风险闭环待办", tableRowsForCsv(body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"]));
   appendCsvSection(lines, "今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "note", "actor"]));
   appendCsvSection(lines, "订单状态样本", tableRowsForCsv(body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]));
@@ -5196,7 +5205,7 @@ function reportCenterExcel(body) {
   <h1>蕴杰金属 PMC 日报</h1>
   <div class="meta">生成时间：${escapeHtml(generatedAt)}</div>
   ${excelTable("指标汇总", summaryRows)}
-  ${excelTable("今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "next_action", "meeting_focus"]))}
+  ${excelTable("今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "latest_intervention", "latest_actor", "next_action", "meeting_focus"]))}
   ${excelTable("风险闭环待办", tableRowsForCsv(body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"]))}
   ${excelTable("今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "note", "actor"]))}
   ${excelTable("订单状态样本", tableRowsForCsv(body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]))}
