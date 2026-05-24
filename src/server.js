@@ -62,7 +62,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/pmc") {
       const params = Object.fromEntries(url.searchParams);
       const result = await queryPmcConsole(params);
-      return sendHtml(res, 200, pmcConsolePage(result.body));
+      return sendHtml(res, 200, pmcConsolePage(result.body, params));
     }
 
     if (req.method === "GET" && url.pathname === "/pmc/intervention") {
@@ -1479,12 +1479,20 @@ function labelFor(key) {
   return labels[key] || key;
 }
 
-function pmcConsolePage(body) {
+function pmcConsolePage(body, params = {}) {
   body = enrichPmcInterventionStatus(body);
+  const openOnly = parseBoolean(params.open_only);
   const command = body.command_center || {};
   const interventions = pmcInterventionSummary({ today: new Date(), limit: 8 });
   const ownerFilter = body.owner_filter || "";
   const closure = pmcClosureSummary(body.sections);
+  const displayBody = openOnly ? filterPmcOpenRisks(body) : body;
+  const viewParams = new URLSearchParams();
+  viewParams.set("rebuild", "1");
+  if (ownerFilter) viewParams.set("owner", ownerFilter);
+  const allHref = `/pmc?${viewParams.toString()}`;
+  viewParams.set("open_only", "1");
+  const openOnlyHref = `/pmc?${viewParams.toString()}`;
   const cards = [
     ["待响应风险", closure.open_total, "红黄牌尚未留痕", closure.open_red > 0 ? "danger" : closure.open_yellow > 0 ? "warning" : "neutral"],
     ["今日已处理", interventions.today_actions ?? 0, "本地干预留痕", "neutral"],
@@ -1598,13 +1606,14 @@ function pmcConsolePage(body) {
     <header>
       <div>
         <h1>蕴杰金属数字 PMC 控制台</h1>
-        <div class="sub">内网免登录版 · 老板 / PMC / 销售共用 · 更新时间 ${escapeHtml(formatDateTime(body.generated_at))}${body.cached ? " · 读取本地快照" : ""}${ownerFilter ? ` · 跟单员视图：${escapeHtml(ownerFilter)}` : ""}</div>
+        <div class="sub">内网免登录版 · 老板 / PMC / 销售共用 · 更新时间 ${escapeHtml(formatDateTime(body.generated_at))}${body.cached ? " · 读取本地快照" : ""}${ownerFilter ? ` · 跟单员视图：${escapeHtml(ownerFilter)}` : ""}${openOnly ? " · 当前只看待响应风险" : ""}</div>
       </div>
       <div class="actions">
         ${ownerFilter ? '<a class="button" href="/pmc?rebuild=1">返回全局</a>' : ""}
+        ${openOnly ? `<a class="button primary" href="${escapeHtml(allHref)}">显示全部</a>` : `<a class="button primary" href="${escapeHtml(openOnlyHref)}">只看待响应</a>`}
         <a class="button" href="/procedure-links">人工绑定派工</a>
         <a class="button" href="/interventions">干预台账</a>
-        <a class="button primary" href="/pmc?rebuild=1">从 SQLite 重新生成</a>
+        <a class="button" href="/pmc?rebuild=1">从 SQLite 重新生成</a>
       </div>
     </header>
     <section class="kpis">
@@ -1612,20 +1621,20 @@ function pmcConsolePage(body) {
     </section>
     <div class="zone-title">今日早会风险摘要</div>
     <section class="intervention-list">
-      ${pmcTablePanel("老板/管理层重点", body.sections.morning_brief, ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "latest_intervention", "latest_actor", "next_action", "meeting_focus", "intervention_log", "buttons"], "danger", "command-panel")}
+      ${pmcTablePanel("老板/管理层重点", displayBody.sections.morning_brief, ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "latest_intervention", "latest_actor", "next_action", "meeting_focus", "intervention_log", "buttons"], "danger", "command-panel")}
     </section>
     <div class="zone-title">红黄牌风险区</div>
     <section class="risk-board risk-board-command">
-      ${pmcTablePanel("红牌：今天必须处理", body.sections.red_risks, ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "intervention_log", "owner_role", "buttons"], "danger", "command-panel")}
-      ${pmcTablePanel("黄牌：3天内可能恶化", body.sections.yellow_risks, ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "intervention_log", "owner_role", "buttons"], "warning", "command-panel")}
+      ${pmcTablePanel("红牌：今天必须处理", displayBody.sections.red_risks, ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "intervention_log", "owner_role", "buttons"], "danger", "command-panel")}
+      ${pmcTablePanel("黄牌：3天内可能恶化", displayBody.sections.yellow_risks, ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "intervention_log", "owner_role", "buttons"], "warning", "command-panel")}
     </section>
     <div class="zone-title">跟单员视图</div>
     <section class="intervention-list">
-      ${pmcTablePanel("负责人入口", body.sections.owner_workbenches, ["owner", "active_orders", "shortage_orders", "pending_quotes", "open_procedures", "todos", "owner_link"], "neutral")}
+      ${pmcTablePanel("负责人入口", displayBody.sections.owner_workbenches, ["owner", "active_orders", "shortage_orders", "pending_quotes", "open_procedures", "todos", "owner_link"], "neutral")}
     </section>
     <div class="zone-title">我的干预清单</div>
     <section class="intervention-list">
-      ${pmcTablePanel("待干预动作", body.sections.intervention_tasks, ["task_no", "risk_level", "risk_type", "related_no", "problem", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "intervention_log", "primary_action", "buttons"], "danger")}
+      ${pmcTablePanel("待干预动作", displayBody.sections.intervention_tasks, ["task_no", "risk_level", "risk_type", "related_no", "problem", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "intervention_log", "primary_action", "buttons"], "danger")}
     </section>
     <div class="zone-title">干预复盘</div>
     <section class="risk-board">
@@ -1743,6 +1752,21 @@ function pmcClosureSummary(sections = {}) {
     open_red: (sections.red_risks || []).filter((row) => row.intervention_state !== "已响应").length,
     open_yellow: (sections.yellow_risks || []).filter((row) => row.intervention_state !== "已响应").length,
     responded_total: rows.length - openRows.length
+  };
+}
+
+function filterPmcOpenRisks(body = {}) {
+  const sections = body.sections || {};
+  const openRow = (row) => row?.intervention_state !== "已响应";
+  return {
+    ...body,
+    sections: {
+      ...sections,
+      morning_brief: (sections.morning_brief || []).filter(openRow),
+      red_risks: (sections.red_risks || []).filter(openRow),
+      yellow_risks: (sections.yellow_risks || []).filter(openRow),
+      intervention_tasks: (sections.intervention_tasks || []).filter(openRow)
+    }
   };
 }
 
