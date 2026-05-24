@@ -265,21 +265,25 @@ function buildOwnerWorkbenches({ salesOrders = [], materialAlerts = [], quoteFol
   const orderOwnerByNo = new Map();
   for (const row of salesOrders) {
     const owner = row.owner || "未分配";
+    if (!isFollowupOwner(owner) || isCompletedForFollowup(row)) continue;
     if (row.order_no) orderOwnerByNo.set(row.order_no, owner);
     const current = ownerWorkbenchRow(grouped, owner);
     current.active_orders += 1;
   }
   for (const row of materialAlerts.filter((item) => item.alert_type === "shortage")) {
     const owner = row.owner || orderOwnerByNo.get(row.order_no) || "未分配";
+    if (!isFollowupOwner(owner)) continue;
     ownerWorkbenchRow(grouped, owner).shortage_orders += 1;
   }
   for (const row of quoteFollowups) {
     const owner = row.owner || "未分配";
+    if (!isFollowupOwner(owner)) continue;
     const current = ownerWorkbenchRow(grouped, owner);
     if (row.quote_status !== "已报价待确认") current.pending_quotes += 1;
   }
   for (const row of procedurePlans) {
     const owner = row.owner || orderOwnerByNo.get(row.order_no) || "未分配";
+    if (!isFollowupOwner(owner)) continue;
     const current = ownerWorkbenchRow(grouped, owner);
     current.procedure_plans += 1;
     if ((number(row.remaining_qty) || 0) > 0) current.open_procedures += 1;
@@ -311,6 +315,18 @@ function ownerWorkbenchRow(grouped, owner) {
 
 function ownerMatches(value, ownerFilter) {
   return (value || "未分配") === ownerFilter;
+}
+
+const NON_FOLLOWUP_OWNERS = new Set(["葛梓"]);
+
+function isFollowupOwner(owner) {
+  const name = String(owner || "").trim();
+  return Boolean(name) && name !== "未分配" && !NON_FOLLOWUP_OWNERS.has(name);
+}
+
+function isCompletedForFollowup(row) {
+  const statusText = [row.status_text, row.ckjz, row.fhjz, row.raw?.ckjz, row.raw?.fhjz].filter(Boolean).join(" ");
+  return /发货完毕|已发货|出库完毕|已出库/.test(statusText);
 }
 
 export function mapFinanceRowForLocal(row, direction, today = new Date()) {

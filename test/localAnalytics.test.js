@@ -157,6 +157,23 @@ test("buildLocalPmcDashboard filters a merchandiser workbench by owner", () => {
   assert.equal(body.sections.owner_workbenches.some((row) => row.owner === "张三" && row.active_orders === 1), true);
 });
 
+test("buildLocalPmcDashboard excludes finance and completed orders from followup owners", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-24T08:00:00+08:00"),
+    salesOrders: [
+      { order_no: "PO-FIN", customer: "客户A", owner: "葛梓", product_name: "来料加工", signed_date: "2026-02-28", status_text: "出库完毕 / 发货完毕 / 未收款 / 审批通过" },
+      { order_no: "PO-DONE", customer: "客户B", owner: "李四", product_name: "钼板", signed_date: "2026-05-01", status_text: "发货完毕 / 已收款" },
+      { order_no: "PO-OPEN", customer: "客户C", owner: "张三", product_name: "钽杯", delivery_date: "2026-05-28", signed_date: "2026-05-01", status_text: "生产中" }
+    ]
+  });
+
+  const owners = body.sections.owner_workbenches.map((row) => row.owner);
+
+  assert.equal(owners.includes("葛梓"), false);
+  assert.equal(owners.includes("李四"), false);
+  assert.equal(owners.includes("张三"), true);
+});
+
 test("buildLocalPmcDashboard builds an order battle map from procedure stages", () => {
   const body = buildLocalPmcDashboard({
     today: new Date("2026-05-24T08:00:00+08:00"),

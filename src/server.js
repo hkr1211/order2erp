@@ -969,8 +969,10 @@ function roleWorkbenchesPage() {
 function queryFollowupWorkbench(params = {}) {
   const dashboard = queryLocalPmcDashboard(params);
   const owners = dashboard?.sections?.owner_workbenches || [];
-  const selectedOwner = String(params.owner || "").trim() || owners[0]?.owner || "";
-  const scopedDashboard = selectedOwner ? queryLocalPmcDashboard({ ...params, owner: selectedOwner }) : dashboard;
+  const requestedOwner = String(params.owner || "").trim();
+  const knownOwner = requestedOwner ? owners.some((row) => row.owner === requestedOwner) : false;
+  const selectedOwner = requestedOwner ? (knownOwner ? requestedOwner : "") : owners[0]?.owner || "";
+  const scopedDashboard = selectedOwner ? queryLocalPmcDashboard({ ...params, owner: selectedOwner }) : requestedOwner ? null : dashboard;
   const enrichedDashboard = scopedDashboard ? enrichPmcInterventionStatus(scopedDashboard) : scopedDashboard;
   return {
     header: { status: 0, message: "ok" },
@@ -983,14 +985,15 @@ function queryFollowupWorkbench(params = {}) {
       dashboard: enrichedDashboard,
       notes: [
         "跟单工作台只读取本地 SQLite，不访问 ERP。",
+        requestedOwner && !knownOwner ? `${requestedOwner} 当前不在跟单负责人名单内，可能属于财务/管理等非跟单角色。` : "",
         selectedOwner ? `当前按负责人过滤：${selectedOwner}。` : "当前没有可识别负责人，显示空工作台。"
-      ]
+      ].filter(Boolean)
     }
   };
 }
 
 function followupWorkbenchPage(body) {
-  const dashboard = body.dashboard || emptyPmcConsoleBody("当前没有本地 SQLite 订单数据，请先同步订单。");
+  const dashboard = body.dashboard || emptyPmcConsoleBody({ today: new Date(), monthStart: new Date(), monthEnd: new Date(), dashboardParams: {}, message: "当前没有本地 SQLite 订单数据，请先同步订单。" });
   const owner = body.owner || "";
   const openOnly = Boolean(body.open_only);
   const displayDashboard = openOnly ? filterPmcOpenRisks(dashboard) : dashboard;
@@ -1039,7 +1042,7 @@ function followupWorkbenchPage(body) {
 }
 
 function followupBriefText(body = {}, params = {}) {
-  const dashboard = body.dashboard || emptyPmcConsoleBody("当前没有本地 SQLite 订单数据，请先同步订单。");
+  const dashboard = body.dashboard || emptyPmcConsoleBody({ today: new Date(), monthStart: new Date(), monthEnd: new Date(), dashboardParams: {}, message: "当前没有本地 SQLite 订单数据，请先同步订单。" });
   return pmcMorningBriefText(dashboard, { ...params, open_only: params.open_only ?? "1" });
 }
 
