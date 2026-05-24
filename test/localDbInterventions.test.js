@@ -200,12 +200,19 @@ test("local user roles can mark finance staff as non-followup", async () => {
     note: "财务应收负责人，不进入跟单员工作台",
     updated_at: "2026-05-24T09:00:00.000Z"
   });
+  saveLocalUserRole({
+    name: "葛梓",
+    role: "财务经理",
+    is_followup: 1,
+    note: "临时允许查看跟单池",
+    updated_at: "2026-05-24T10:00:00.000Z"
+  });
 
   const rows = listLocalUserRoles({ limit: 10 });
 
   assert.equal(rows.length, 1);
   assert.equal(rows[0].name, "葛梓");
   assert.equal(rows[0].role, "财务经理");
-  assert.equal(rows[0].is_followup, 0);
-  assert.equal(rows[0].note, "财务应收负责人，不进入跟单员工作台");
+  assert.equal(rows[0].is_followup, 1);
+  assert.equal(rows[0].note, "临时允许查看跟单池");
 });

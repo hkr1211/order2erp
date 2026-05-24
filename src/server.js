@@ -4,7 +4,7 @@ import { ErpClient, ERP_VIEWS, normalizeTable, toBusinessView } from "./erpClien
 import { queryOrderDeliveryRisks } from "./orderDeliveryRisks.js";
 import { queryOrderShortages } from "./orderShortages.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
-import { finishHistorySyncRun, initLocalDb, latestErpRequestLogs, latestHistorySyncRuns, latestPmcInterventions, latestPmcInterventionsByRelatedNos, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listLocalUserRoles, listMaterialAlerts, listOrderProcedureLinks, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, pmcInterventionSummary, saveOrderProcedureLink, savePmcIntervention, savePmcSnapshot, startHistorySyncRun, tableStats } from "./localDb.js";
+import { finishHistorySyncRun, initLocalDb, latestErpRequestLogs, latestHistorySyncRuns, latestPmcInterventions, latestPmcInterventionsByRelatedNos, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listLocalUserRoles, listMaterialAlerts, listOrderProcedureLinks, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, pmcInterventionSummary, saveLocalUserRole, saveOrderProcedureLink, savePmcIntervention, savePmcSnapshot, startHistorySyncRun, tableStats } from "./localDb.js";
 import { syncCoreData } from "./syncService.js";
 import { buildSyncPolicyRows } from "./syncPolicy.js";
 import { buildErpHealthSummary, shouldBlockErpBusinessQuery } from "./erpHealth.js";
@@ -217,6 +217,12 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/user-roles") {
       return sendHtml(res, 200, userRolesPage(queryUserRoles().body));
+    }
+
+    if (req.method === "GET" && url.pathname === "/user-roles/save") {
+      const params = Object.fromEntries(url.searchParams);
+      const saved = saveLocalUserRole(params);
+      return sendHtml(res, 200, userRolesPage(queryUserRoles(saved).body));
     }
 
     if (req.method === "GET" && url.pathname === "/sqlite-coverage") {
@@ -1376,6 +1382,8 @@ function labelFor(key) {
     escalation_state: "升级状态",
     intervention_action: "处理入口",
     intervention_log: "处理记录",
+    role_action: "标记跟单",
+    exclude_action: "标记非跟单",
     days_from_today: "距今天数",
     delivery_date: "交期",
     signed_date: "签订日期",
@@ -3193,6 +3201,12 @@ function formatDetailCell(column, value, row = {}) {
   }
   if (column === "intervention_log" && value) {
     return `<a class="button" href="${escapeHtml(value)}">查看</a>`;
+  }
+  if (column === "role_action" && value) {
+    return `<a class="button" href="${escapeHtml(value)}">标记跟单</a>`;
+  }
+  if (column === "exclude_action" && value) {
+    return `<a class="button" href="${escapeHtml(value)}">标记非跟单</a>`;
   }
   if (["quantity", "demand_qty", "delivered_qty", "remaining_qty", "available_qty", "stock_qty", "shortage_qty", "planned_qty", "finished_qty"].includes(column)) {
     return escapeHtml(formatPmcQuantity(value, row?.unit || row?.raw?.unit || row?.raw?.raw?.Unit || row?.raw?.raw?.单位));
@@ -6080,7 +6094,7 @@ function systemStatusPage(body) {
   });
 }
 
-function queryUserRoles() {
+function queryUserRoles(saved = null) {
   const dashboard = queryLocalPmcDashboard({ local_limit: 5000 });
   const configuredRoles = listLocalUserRoles({ limit: 500 });
   const detectedOwners = dashboard?.sections?.owner_workbenches || [];
@@ -6093,13 +6107,16 @@ function queryUserRoles() {
     pending_quotes: row.pending_quotes,
     open_procedures: row.open_procedures,
     todos: row.todos,
-    configured: configuredNames.has(row.owner) ? "已配置" : "自动识别"
+    configured: configuredNames.has(row.owner) ? "已配置" : "自动识别",
+    role_action: roleSaveHref({ name: row.owner, role: "跟单员", is_followup: 1, note: "从跟单负责人池确认" }),
+    exclude_action: roleSaveHref({ name: row.owner, role: "非跟单", is_followup: 0, note: "人工标记为非跟单" })
   }));
   return {
     header: { status: 0, message: "ok" },
     body: {
       model: "user_roles",
       generated_at: new Date().toISOString(),
+      saved,
       summary: {
         configured_roles: configuredRoles.length,
         non_followup_roles: configuredRoles.filter((row) => Number(row.is_followup) === 0).length,
@@ -6131,9 +6148,11 @@ function userRolesPage(body) {
       ["识别到跟单负责人", body.summary.detected_followup_owners]
     ],
     panels: [
+      body.saved ? userRoleSavedPanel(body.saved) : "",
+      userRoleFormPanel(body.saved || {}),
       modulePanel("本地角色配置", body.sections.configured_roles, ["name", "role", "followup_text", "note", "updated_at"], { fullWidth: true }),
-      modulePanel("当前跟单负责人池", body.sections.detected_followup_owners, ["name", "configured", "active_orders", "shortage_orders", "pending_quotes", "open_procedures", "todos"], { fullWidth: true })
-    ],
+      modulePanel("当前跟单负责人池", body.sections.detected_followup_owners, ["name", "configured", "active_orders", "shortage_orders", "pending_quotes", "open_procedures", "todos", "role_action", "exclude_action"], { fullWidth: true })
+    ].filter(Boolean),
     notes: body.notes,
     actions: [
       ["系统状态", "/system"],
@@ -6141,6 +6160,38 @@ function userRolesPage(body) {
       ["角色工作台", "/roles"]
     ]
   });
+}
+
+function userRoleSavedPanel(saved) {
+  const followupText = Number(saved.is_followup) === 0 ? "非跟单" : "跟单";
+  return `<section class="panel full-width"><h2>已保存 <span class="pill">${escapeHtml(saved.name)}</span></h2><div class="empty">${escapeHtml(saved.name)} 已标记为 ${escapeHtml(saved.role)} / ${escapeHtml(followupText)}。</div></section>`;
+}
+
+function userRoleFormPanel(params = {}) {
+  const inputStyle = "width:100%;min-height:36px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text);font-size:14px;";
+  const labelStyle = "display:block;margin-bottom:6px;color:var(--muted);font-size:13px;";
+  const field = (name, label, value = "") => `<label><span style="${labelStyle}">${escapeHtml(label)}</span><input style="${inputStyle}" name="${escapeHtml(name)}" value="${escapeHtml(value)}"></label>`;
+  const selected = (value) => Number(params.is_followup ?? 1) === value ? " selected" : "";
+  return `<section class="panel full-width">
+    <h2>维护人员角色</h2>
+    <form action="/user-roles/save" method="get" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;padding:14px 16px;align-items:end;">
+      ${field("name", "姓名", params.name || "")}
+      ${field("role", "角色", params.role || "跟单员")}
+      <label><span style="${labelStyle}">是否跟单</span><select style="${inputStyle}" name="is_followup"><option value="1"${selected(1)}>是</option><option value="0"${selected(0)}>否</option></select></label>
+      ${field("note", "备注", params.note || "")}
+      <button class="button primary" type="submit" style="min-height:36px;cursor:pointer;">保存角色</button>
+    </form>
+  </section>`;
+}
+
+function roleSaveHref({ name, role, is_followup, note }) {
+  const query = new URLSearchParams({
+    name: name || "",
+    role: role || "",
+    is_followup: String(is_followup),
+    note: note || ""
+  });
+  return `/user-roles/save?${query.toString()}`;
 }
 
 function systemToolRows() {
