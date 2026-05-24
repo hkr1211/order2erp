@@ -757,6 +757,7 @@ function homePage() {
       margin-top: 8px;
       font-size: 24px;
       line-height: 1;
+      overflow-wrap: anywhere;
     }
     h2 {
       margin: 24px 0 0;
@@ -781,6 +782,7 @@ function homePage() {
       display: block;
       font-size: 17px;
       margin-bottom: 8px;
+      overflow-wrap: anywhere;
     }
     code {
       display: block;
@@ -951,12 +953,14 @@ function apiResultPage(payload, url) {
     .button { display: inline-flex; align-items: center; min-height: 36px; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel); color: var(--text); text-decoration: none; font-size: 14px; }
     .button.primary { background: var(--accent); border-color: var(--accent); color: #ffffff; }
     .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin: 18px 0; }
+    .topbar > *, .summary > * { min-width: 0; }
     .metric { min-height: 82px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
     .metric .label { color: var(--muted); font-size: 13px; }
-    .metric .value { margin-top: 8px; font-size: 24px; line-height: 1; font-weight: 700; }
-    .table-wrap { overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+    .metric .value { margin-top: 8px; font-size: 24px; line-height: 1; font-weight: 700; overflow-wrap: anywhere; }
+    .table-wrap { max-width: 100%; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
     table { width: 100%; border-collapse: collapse; min-width: 920px; }
     th, td { padding: 11px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; font-size: 14px; line-height: 1.45; }
+    td { overflow-wrap: anywhere; word-break: break-word; }
     th { position: sticky; top: 0; z-index: 1; background: #f0f3f6; color: #334155; font-weight: 650; white-space: nowrap; }
     tr:hover td { background: #fbfcfd; }
     .empty { padding: 32px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--muted); }
@@ -1418,7 +1422,7 @@ function pmcConsolePage(body) {
     .kpi.warning { background: var(--amber-soft); border-color: #f3c77b; }
     .kpi.danger { background: var(--red-soft); border-color: #f2a7a3; }
     .kpi .label { color: var(--muted); font-size: 13px; }
-    .kpi .value { margin-top: 10px; font-size: 30px; line-height: 1; font-weight: 750; }
+    .kpi .value { margin-top: 10px; font-size: 30px; line-height: 1; font-weight: 750; overflow-wrap: anywhere; }
     .kpi .hint { margin-top: 12px; color: var(--muted); font-size: 12px; line-height: 1.4; }
     .zone-title { margin: 20px 0 10px; font-size: 18px; font-weight: 750; }
     .layout { display: grid; grid-template-columns: 1.05fr 1fr; gap: 12px; align-items: start; }
@@ -1426,12 +1430,13 @@ function pmcConsolePage(body) {
     .risk-board-command { grid-template-columns: 1fr; }
     .risk-focus { display: grid; grid-template-columns: 1.2fr 1fr; gap: 12px; margin-bottom: 12px; align-items: start; }
     .intervention-list { margin-bottom: 12px; }
+    .layout > *, .risk-board > *, .risk-focus > *, .battle-grid > *, .kpis > *, .stack > * { min-width: 0; }
     .panel { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); overflow: hidden; }
     .panel.command-panel { border-color: #cfd6e2; }
     .panel h2 { margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--border); font-size: 17px; letter-spacing: 0; }
     .panel h2.danger { color: var(--red); }
     .panel h2.warning { color: var(--amber); }
-    .table-scroll { width: 100%; overflow: auto; }
+    .table-scroll { width: 100%; max-width: 100%; overflow: auto; }
     .command-panel .table-scroll { max-height: 430px; }
     .command-panel thead th { position: sticky; top: 0; z-index: 1; }
     .command-panel table { min-width: 1180px; }
@@ -1439,6 +1444,7 @@ function pmcConsolePage(body) {
     .command-panel td:last-child { min-width: 190px; }
     table { width: 100%; border-collapse: collapse; }
     th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; font-size: 13px; line-height: 1.45; }
+    td { overflow-wrap: anywhere; word-break: break-word; }
     th { background: #f0f3f6; color: #344054; font-weight: 650; white-space: nowrap; }
     tr:last-child td { border-bottom: 0; }
     .empty { padding: 20px 16px; color: var(--muted); font-size: 14px; }
@@ -1448,7 +1454,7 @@ function pmcConsolePage(body) {
     .tag.warning { background: var(--amber-soft); color: var(--amber); }
     .mini-button { display: inline-block; margin: 2px 4px 2px 0; padding: 4px 7px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text); text-decoration: none; font-size: 12px; white-space: nowrap; }
     .mini-button:hover { border-color: var(--green); color: var(--green); }
-    .battle-wrap { overflow-x: auto; }
+    .battle-wrap { max-width: 100%; overflow-x: auto; }
     .battle-table { min-width: 1120px; }
     .battle-node { display: inline-flex; min-width: 54px; min-height: 28px; align-items: center; justify-content: center; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--border); font-size: 12px; font-weight: 700; white-space: nowrap; }
     .battle-node.none { background: #f8fafc; color: #98a2b3; }
@@ -2302,6 +2308,7 @@ function orderCenterPage(body, url) {
     .button, .filter { min-height: 36px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); text-decoration: none; font-size: 14px; }
     .button.primary, .filter.active { background: #176b58; border-color: #176b58; color: #ffffff; }
     .toolbar { display: flex; justify-content: space-between; gap: 12px; align-items: flex-end; margin: 18px 0; }
+    header > *, .toolbar > *, .metrics > * { min-width: 0; }
     form { display: flex; gap: 8px; flex-wrap: wrap; }
     input { min-height: 36px; width: 280px; max-width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
     .pager { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0 0 14px; color: var(--muted); font-size: 13px; }
@@ -2309,10 +2316,11 @@ function orderCenterPage(body, url) {
     .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
     .metric { padding: 13px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
     .metric span { display: block; color: var(--muted); font-size: 13px; }
-    .metric strong { display: block; margin-top: 8px; font-size: 24px; line-height: 1; }
-    .table-wrap { overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+    .metric strong { display: block; margin-top: 8px; font-size: 24px; line-height: 1; overflow-wrap: anywhere; }
+    .table-wrap { max-width: 100%; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
     table { width: 100%; min-width: 1180px; border-collapse: collapse; }
     th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; font-size: 13px; line-height: 1.45; }
+    td { overflow-wrap: anywhere; word-break: break-word; }
     th { position: sticky; top: 0; z-index: 1; background: #f0f3f6; color: #344054; font-weight: 650; white-space: nowrap; }
     .light { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-weight: 650; }
     .dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
@@ -2587,10 +2595,12 @@ function orderDetailPage(body, url) {
     .metric strong, .info strong { display: block; margin-top: 8px; font-size: 23px; line-height: 1.15; overflow-wrap: anywhere; }
     .info strong { font-size: 15px; font-weight: 650; }
     .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+    header > *, .summary > *, .grid > * { min-width: 0; }
     .panel { margin-top: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); overflow: hidden; }
-    .table-wrap { overflow: auto; }
+    .table-wrap { max-width: 100%; overflow: auto; }
     table { width: 100%; min-width: 980px; border-collapse: collapse; }
     th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; font-size: 13px; line-height: 1.45; }
+    td { overflow-wrap: anywhere; word-break: break-word; }
     th { background: #f0f3f6; color: #344054; font-weight: 650; white-space: nowrap; }
     tr:last-child td { border-bottom: 0; }
     .pill { display: inline-block; padding: 3px 7px; border-radius: 999px; font-size: 12px; white-space: nowrap; }
@@ -3797,15 +3807,17 @@ function modulePage({ title, subtitle, summary = [], panels = [], notes = [], ac
     .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 18px 0; }
     .metric { min-height: 92px; padding: 13px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
     .metric span { display: block; color: var(--muted); font-size: 13px; }
-    .metric strong { display: block; margin-top: 9px; font-size: 25px; line-height: 1; }
+    .metric strong { display: block; margin-top: 9px; font-size: 25px; line-height: 1; overflow-wrap: anywhere; }
     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+    header > *, .summary > *, .grid > * { min-width: 0; }
     .panel { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); overflow: hidden; }
-    .panel.full-width { grid-column: 1 / -1; }
-    .panel.full-width table { min-width: 1280px; }
-    .table-wrap { overflow: auto; }
+    .panel.full-width, .panel.auto-wide { grid-column: 1 / -1; }
+    .panel.full-width table, .panel.auto-wide table { min-width: 1280px; }
+    .table-wrap { max-width: 100%; overflow: auto; }
     .table-wrap.tall { max-height: 620px; }
     table { width: 100%; min-width: 820px; border-collapse: collapse; }
     th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; font-size: 13px; line-height: 1.45; }
+    td { overflow-wrap: anywhere; word-break: break-word; }
     th { background: #f0f3f6; color: #344054; font-weight: 650; white-space: nowrap; }
     tr:last-child td { border-bottom: 0; }
     .empty { padding: 20px 16px; color: var(--muted); font-size: 14px; }
@@ -3853,7 +3865,8 @@ function modulePanel(title, rows, columns, options = {}) {
   const limit = options.limit === "all" ? allRows.length : clampInt(options.limit ?? 20, 1, 1000);
   const safeRows = allRows.slice(0, limit);
   const countText = allRows.length > safeRows.length ? `${safeRows.length}/${allRows.length}` : `${safeRows.length}`;
-  const sectionClass = ["panel", options.fullWidth ? "full-width" : ""].filter(Boolean).join(" ");
+  const isWideTable = Array.isArray(columns) && columns.length >= 8;
+  const sectionClass = ["panel", options.fullWidth ? "full-width" : "", !options.fullWidth && isWideTable ? "auto-wide" : ""].filter(Boolean).join(" ");
   const wrapClass = ["table-wrap", options.tall ? "tall" : ""].filter(Boolean).join(" ");
   return `<section class="${sectionClass}">
     <h2>${escapeHtml(title)} <span class="pill">${escapeHtml(countText)}</span></h2>
@@ -4609,9 +4622,10 @@ function reportPrintPage(body) {
     .summary { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--border); border-bottom: 0; border-right: 0; margin-top: 18px; }
     .metric { min-height: 72px; padding: 10px 12px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
     .metric span { display: block; color: var(--muted); font-size: 12px; }
-    .metric strong { display: block; margin-top: 8px; font-size: 24px; }
+    .metric strong { display: block; margin-top: 8px; font-size: 24px; overflow-wrap: anywhere; }
     table { width: 100%; border-collapse: collapse; page-break-inside: auto; }
     th, td { padding: 8px 9px; border: 1px solid var(--border); text-align: left; vertical-align: top; font-size: 12px; line-height: 1.4; }
+    td { overflow-wrap: anywhere; word-break: break-word; }
     th { background: var(--soft); font-weight: 650; }
     .notes { margin-top: 18px; color: var(--muted); font-size: 12px; line-height: 1.7; }
     .toolbar { margin-bottom: 12px; text-align: right; }
