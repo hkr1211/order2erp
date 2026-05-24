@@ -1810,12 +1810,9 @@ function pmcInterventionHref(row, actionLabel) {
 function pmcInterventionPage(params = {}, saved = null) {
   const relatedNo = params.related_no || "";
   const recentRows = latestPmcInterventions({ related_no: relatedNo, limit: 10 });
-  const saveParams = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== null) saveParams.set(key, String(value));
-  }
-  saveParams.set("note", params.note || defaultInterventionNote(params));
   const template = interventionTemplate(params);
+  const defaultNote = params.note || defaultInterventionNote(params);
+  const actor = params.actor || "内网用户";
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1839,6 +1836,10 @@ function pmcInterventionPage(params = {}, saved = null) {
     .success { margin-top:14px; padding:12px 14px; border:1px solid #b7dfc8; border-radius:8px; background:#e8f3ef; color:var(--green); }
     .tag { display:inline-block; padding:3px 7px; border-radius:999px; background:#e8f3ef; color:var(--green); font-size:12px; white-space:nowrap; }
     .template { white-space:pre-wrap; padding:12px; border:1px solid var(--border); border-radius:8px; background:#f8fafc; }
+    label { display:block; margin-bottom:10px; color:var(--muted); font-size:13px; }
+    input, textarea { width:100%; margin-top:6px; padding:9px 10px; border:1px solid var(--border); border-radius:6px; background:#fff; color:var(--text); font:inherit; }
+    textarea { min-height:112px; resize:vertical; line-height:1.6; }
+    form .button { cursor:pointer; }
     table { width:100%; border-collapse:collapse; }
     th, td { padding:9px 10px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; font-size:13px; }
     th { background:#f0f3f6; color:#344054; }
@@ -1856,7 +1857,6 @@ function pmcInterventionPage(params = {}, saved = null) {
       </div>
       <div class="actions">
         <a class="button" href="/pmc?rebuild=1">返回作战台</a>
-        <a class="button primary" href="/pmc/intervention/save?${escapeHtml(saveParams.toString())}">记录为已处理</a>
       </div>
     </header>
     ${saved ? `<div class="success">已保存本地干预记录：#${escapeHtml(saved.id)}，${escapeHtml(formatDateTime(saved.created_at))}</div>` : ""}
@@ -1869,7 +1869,15 @@ function pmcInterventionPage(params = {}, saved = null) {
         <div><strong>选择动作：</strong>${escapeHtml(params.action_label || "")}</div>
         <div><strong>建议动作：</strong>${escapeHtml(params.primary_action || "")}</div>
       </div></section>
-      <section class="panel"><h2>标准处理文本</h2><div class="body"><div class="template">${escapeHtml(template)}</div></div></section>
+      <section class="panel"><h2>处理留痕</h2><div class="body">
+        <div class="template">${escapeHtml(template)}</div>
+        <form action="/pmc/intervention/save" method="get" style="margin-top:12px;">
+          ${interventionHiddenInputs(params)}
+          <label>处理人<input name="actor" value="${escapeHtml(actor)}"></label>
+          <label>处理备注<textarea name="note">${escapeHtml(defaultNote)}</textarea></label>
+          <button class="button primary" type="submit">记录为已响应</button>
+        </form>
+      </div></section>
     </section>
     <section class="panel" style="margin-top:12px;"><h2>最近处理记录 <span class="tag">${recentRows.length}</span></h2>
       ${
@@ -1881,6 +1889,13 @@ function pmcInterventionPage(params = {}, saved = null) {
   </main>
 </body>
 </html>`;
+}
+
+function interventionHiddenInputs(params = {}) {
+  const keys = ["risk_level", "risk_type", "related_no", "action_label", "problem", "primary_action"];
+  return keys
+    .map((key) => `<input type="hidden" name="${escapeHtml(key)}" value="${escapeHtml(params[key] || "")}">`)
+    .join("");
 }
 
 function defaultInterventionNote(params = {}) {
