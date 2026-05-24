@@ -1282,6 +1282,8 @@ function labelFor(key) {
     latest_actor: "最近处理人",
     latest_at: "最近处理时间",
     intervention_state: "闭环状态",
+    response_sla: "响应时限",
+    escalation_state: "升级状态",
     days_from_today: "距今天数",
     delivery_date: "交期",
     signed_date: "签订日期",
@@ -1465,11 +1467,13 @@ function pmcConsolePage(body) {
   const command = body.command_center || {};
   const interventions = pmcInterventionSummary({ today: new Date(), limit: 8 });
   const ownerFilter = body.owner_filter || "";
+  const closure = pmcClosureSummary(body.sections);
   const cards = [
-    ["今日待办", command.today_todos ?? 0, "红黄牌需要处理", command.red_count > 0 ? "danger" : command.yellow_count > 0 ? "warning" : "neutral"],
+    ["待响应风险", closure.open_total, "红黄牌尚未留痕", closure.open_red > 0 ? "danger" : closure.open_yellow > 0 ? "warning" : "neutral"],
     ["今日已处理", interventions.today_actions ?? 0, "本地干预留痕", "neutral"],
-    ["红牌问题", command.red_count ?? 0, "必须今天处理", "danger"],
-    ["黄牌预警", command.yellow_count ?? 0, "3天内可能恶化", "warning"],
+    ["红牌待响应", closure.open_red, `红牌总数 ${command.red_count ?? 0}`, closure.open_red > 0 ? "danger" : "neutral"],
+    ["黄牌待响应", closure.open_yellow, `黄牌总数 ${command.yellow_count ?? 0}`, closure.open_yellow > 0 ? "warning" : "neutral"],
+    ["已响应风险", closure.responded_total, "按关联单号统计", "neutral"],
     ["风险占比", `${command.risk_order_ratio ?? 0}%`, "红黄牌订单/总在制订单", command.risk_order_ratio > 20 ? "danger" : command.risk_order_ratio >= 10 ? "warning" : "neutral"],
     ["延期工序", body.summary.delayed_procedures ?? 0, "派工进度追踪表", "danger"],
     ["订单工序匹配率", `${body.summary.procedure_order_match_rate ?? 0}%`, "销售订单与派工关联程度", (body.summary.procedure_order_match_rate ?? 0) < 50 ? "warning" : "neutral"],
@@ -1529,7 +1533,7 @@ function pmcConsolePage(body) {
     .table-scroll { width: 100%; max-width: 100%; overflow: auto; }
     .command-panel .table-scroll { max-height: 430px; }
     .command-panel thead th { position: sticky; top: 0; z-index: 1; }
-    .command-panel table { min-width: 1180px; }
+    .command-panel table { min-width: 1480px; }
     .command-panel td:nth-child(3), .command-panel td:nth-child(4) { min-width: 230px; }
     .command-panel td:last-child { min-width: 190px; }
     table { width: 100%; border-collapse: collapse; }
@@ -1590,8 +1594,8 @@ function pmcConsolePage(body) {
     </section>
     <div class="zone-title">红黄牌风险区</div>
     <section class="risk-board risk-board-command">
-      ${pmcTablePanel("红牌：今天必须处理", body.sections.red_risks, ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "latest_intervention", "owner_role", "buttons"], "danger", "command-panel")}
-      ${pmcTablePanel("黄牌：3天内可能恶化", body.sections.yellow_risks, ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "latest_intervention", "owner_role", "buttons"], "warning", "command-panel")}
+      ${pmcTablePanel("红牌：今天必须处理", body.sections.red_risks, ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "owner_role", "buttons"], "danger", "command-panel")}
+      ${pmcTablePanel("黄牌：3天内可能恶化", body.sections.yellow_risks, ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "owner_role", "buttons"], "warning", "command-panel")}
     </section>
     <div class="zone-title">跟单员视图</div>
     <section class="intervention-list">
@@ -1599,7 +1603,7 @@ function pmcConsolePage(body) {
     </section>
     <div class="zone-title">我的干预清单</div>
     <section class="intervention-list">
-      ${pmcTablePanel("待干预动作", body.sections.intervention_tasks, ["task_no", "risk_level", "risk_type", "related_no", "problem", "intervention_state", "latest_intervention", "primary_action", "buttons"], "danger")}
+      ${pmcTablePanel("待干预动作", body.sections.intervention_tasks, ["task_no", "risk_level", "risk_type", "related_no", "problem", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "primary_action", "buttons"], "danger")}
     </section>
     <div class="zone-title">干预复盘</div>
     <section class="risk-board">
@@ -1652,26 +1656,62 @@ function enrichPmcInterventionStatus(body) {
     .map((row) => row.related_no)
     .filter(Boolean);
   const latestByNo = latestPmcInterventionsByRelatedNos(relatedNos);
-  if (!latestByNo.size) {
-    return body;
-  }
   const nextSections = { ...sections };
   for (const name of targetSections) {
     nextSections[name] = (Array.isArray(sections[name]) ? sections[name] : []).map((row) => {
       const latest = latestByNo.get(row.related_no);
-      if (!latest) {
-        return row;
-      }
+      const closure = pmcRiskClosure(row, latest);
       return {
         ...row,
-        intervention_state: "已干预",
-        latest_intervention: latest.action_label,
-        latest_actor: latest.actor,
-        latest_at: latest.created_at
+        intervention_state: closure.intervention_state,
+        response_sla: closure.response_sla,
+        escalation_state: closure.escalation_state,
+        latest_intervention: latest?.action_label || row.latest_intervention || "",
+        latest_actor: latest?.actor || row.latest_actor || "",
+        latest_at: latest?.created_at || row.latest_at || ""
       };
     });
   }
   return { ...body, sections: nextSections };
+}
+
+function pmcRiskClosure(row = {}, latest = null) {
+  const riskLevel = String(row.risk_level || row.priority || "").trim();
+  const riskType = String(row.risk_type || row.exception_type || "").trim();
+  const isRed = riskLevel.includes("红") || /超期|断供|瓶颈/.test(riskType);
+  const responseHours = isRed ? 4 : 24;
+  if (latest?.created_at) {
+    const hours = hoursSince(latest.created_at);
+    return {
+      intervention_state: "已响应",
+      response_sla: `已响应${hours === null ? "" : ` · ${hours}小时前`}`,
+      escalation_state: "继续跟踪结果"
+    };
+  }
+  return {
+    intervention_state: "待响应",
+    response_sla: `${responseHours}小时内响应`,
+    escalation_state: isRed ? "超时需升级老板/管理层" : "24小时未处理转红牌"
+  };
+}
+
+function hoursSince(value, now = new Date()) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return Math.max(0, Math.floor((now.getTime() - date.getTime()) / 36e5));
+}
+
+function pmcClosureSummary(sections = {}) {
+  const rows = [...(sections.red_risks || []), ...(sections.yellow_risks || [])];
+  const openRows = rows.filter((row) => row.intervention_state !== "已响应");
+  return {
+    open_total: openRows.length,
+    open_red: (sections.red_risks || []).filter((row) => row.intervention_state !== "已响应").length,
+    open_yellow: (sections.yellow_risks || []).filter((row) => row.intervention_state !== "已响应").length,
+    responded_total: rows.length - openRows.length
+  };
 }
 
 function pmcTablePanel(title, rows, columns, tone = "", extraClass = "") {
