@@ -147,6 +147,16 @@ const server = http.createServer(async (req, res) => {
       return sendHtml(res, 200, exceptionCenterPage(result.body));
     }
 
+    if (req.method === "GET" && url.pathname === "/interventions") {
+      const params = Object.fromEntries(url.searchParams);
+      return sendHtml(res, 200, interventionLogPage(queryInterventionLogCenter(params).body));
+    }
+
+    if (req.method === "GET" && url.pathname === "/interventions/export.csv") {
+      const params = Object.fromEntries(url.searchParams);
+      return sendCsv(res, "pmc-interventions.csv", interventionLogCsv(queryInterventionLogCenter(params).body));
+    }
+
     if (req.method === "GET" && url.pathname === "/reports") {
       const params = Object.fromEntries(url.searchParams);
       const result = await queryReportCenter(params);
@@ -631,6 +641,7 @@ function modulePathForTitle(title) {
   if (text.includes("生产")) return "/production";
   if (text.includes("派工")) return "/dispatch";
   if (text.includes("异常")) return "/exceptions";
+  if (text.includes("干预")) return "/system";
   if (text.includes("报表")) return "/reports";
   if (text.includes("数据源")) return "/system";
   if (text.includes("SQLite")) return "/system";
@@ -4854,6 +4865,68 @@ function exceptionCenterPage(body) {
   });
 }
 
+function queryInterventionLogCenter(params = {}) {
+  const limit = clampInt(params.limit || 100, 1, 200);
+  const relatedNo = String(params.related_no || "").trim();
+  const rows = latestPmcInterventions({ limit, related_no: relatedNo });
+  const summary = pmcInterventionSummary({ today: new Date(), limit: 20 });
+  return {
+    header: { status: 0, message: "ok" },
+    body: {
+      model: "intervention_log_center",
+      generated_at: new Date().toISOString(),
+      filters: {
+        related_no: relatedNo,
+        limit
+      },
+      summary: {
+        shown_actions: rows.length,
+        today_actions: summary.today_actions,
+        total_actions: summary.total_actions,
+        risk_types: summary.by_risk_type.length
+      },
+      sections: {
+        rows,
+        by_risk_type: summary.by_risk_type
+      },
+      notes: [
+        "本页只读取本地 SQLite 干预记录，不访问 ERP。",
+        "这些记录用于 PMC 首页、异常中心和报表中心的闭环状态判断。",
+        "如果要查某个订单或项目，可在地址后加 related_no，例如 /interventions?related_no=PO51969。"
+      ]
+    }
+  };
+}
+
+function interventionLogPage(body) {
+  const exportHref = body.filters.related_no
+    ? `/interventions/export.csv?related_no=${encodeURIComponent(body.filters.related_no)}&limit=${encodeURIComponent(body.filters.limit)}`
+    : `/interventions/export.csv?limit=${encodeURIComponent(body.filters.limit)}`;
+  return modulePage({
+    title: "干预记录台账",
+    subtitle: body.filters.related_no ? `当前筛选关联单号：${body.filters.related_no}` : "查看 PMC 风险处理留痕、处理人和备注。",
+    summary: [
+      ["显示记录", body.summary.shown_actions],
+      ["今日处理", body.summary.today_actions],
+      ["累计处理", body.summary.total_actions],
+      ["风险类型", body.summary.risk_types]
+    ],
+    panels: [
+      modulePanel("干预记录", body.sections.rows, ["created_at", "risk_level", "risk_type", "related_no", "action_label", "problem", "note", "actor"], { fullWidth: true, limit: "all", tall: true }),
+      modulePanel("风险类型汇总", body.sections.by_risk_type, ["risk_type", "actions"])
+    ],
+    notes: body.notes,
+    actions: [["导出CSV", exportHref], ["PMC作战台", "/pmc?rebuild=1"], ["异常中心", "/exceptions"], ["系统状态", "/system"]]
+  });
+}
+
+function interventionLogCsv(body) {
+  const lines = [];
+  appendCsvSection(lines, "干预记录", tableRowsForCsv(body.sections.rows, ["created_at", "risk_level", "risk_type", "related_no", "action_label", "problem", "note", "actor"]));
+  appendCsvSection(lines, "风险类型汇总", tableRowsForCsv(body.sections.by_risk_type, ["risk_type", "actions"]));
+  return lines.map((row) => row.map(csvCell).join(",")).join("\r\n");
+}
+
 function reportCenterPage(body) {
   return modulePage({
     title: "报表中心",
@@ -5690,6 +5763,11 @@ function systemToolRows() {
       tool_name: "ERP 请求日志",
       tool_path: "/erp-logs",
       tool_desc: "查看本地记录的 ERP 请求成败、耗时、错误信息，并支持导出。"
+    },
+    {
+      tool_name: "干预记录台账",
+      tool_path: "/interventions",
+      tool_desc: "查看 PMC 风险处理留痕、处理人、处理备注，并支持导出。"
     }
   ];
 }

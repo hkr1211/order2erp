@@ -1,5 +1,6 @@
 export const SQLITE_TABLES = [
   { table_name: "pmc_dashboard_snapshots", label: "PMC驾驶舱快照", timestamp_column: "created_at", sync_source: "pmc_snapshot", incremental: "否", suggested_range: "保留最近30-90天快照" },
+  { table_name: "pmc_intervention_logs", label: "PMC干预记录", timestamp_column: "created_at", sync_source: "pmc_interventions", incremental: "人工维护", suggested_range: "保留全部处理留痕，必要时按年度归档" },
   { table_name: "erp_sales_orders", label: "销售订单", timestamp_column: "synced_at", coverage_date_column: "signed_date", history_target_days: 90, sync_source: "sales_orders", incremental: "部分支持", suggested_range: "未交付订单 + 近90天订单，夜间补近1年" },
   { table_name: "erp_material_alerts", label: "物料/库存告警", timestamp_column: "synced_at", sync_source: "material_alerts", incremental: "否", suggested_range: "当前缺料和低库存，每15-30分钟小批量刷新" },
   { table_name: "erp_procedure_plans", label: "派工/工序计划", timestamp_column: "synced_at", coverage_date_column: "planned_start_date", history_target_days: 90, sync_source: "procedure_plans", incremental: "部分支持", suggested_range: "未完工派工 + 近90天工序" },
@@ -11,7 +12,7 @@ export const SQLITE_TABLES = [
 ];
 
 export const SQLITE_PAGE_DEPENDENCIES = [
-  { page_name: "PMC驾驶舱", page_path: "/pmc", tables: ["pmc_dashboard_snapshots", "erp_sales_orders", "erp_material_alerts", "erp_procedure_plans", "order_procedure_links", "erp_quote_followups"], missing_sources: ["合同明细全量", "采购在途"] },
+  { page_name: "PMC驾驶舱", page_path: "/pmc", tables: ["pmc_dashboard_snapshots", "pmc_intervention_logs", "erp_sales_orders", "erp_material_alerts", "erp_procedure_plans", "order_procedure_links", "erp_quote_followups"], missing_sources: ["合同明细全量", "采购在途"] },
   { page_name: "订单管理中心", page_path: "/orders", tables: ["erp_sales_orders", "erp_material_alerts"], missing_sources: ["合同明细历史", "订单交期风险明细"] },
   { page_name: "订单详情", page_path: "/order", tables: ["erp_sales_orders", "erp_material_alerts"], missing_sources: ["合同明细本地表", "质检/物流记录"] },
   { page_name: "物料控制中心", page_path: "/materials", tables: ["erp_material_alerts"], missing_sources: ["库存余额全量", "BOM展开", "采购在途"] },
@@ -22,9 +23,10 @@ export const SQLITE_PAGE_DEPENDENCIES = [
   { page_name: "采购跟催中心", page_path: "/procurement", tables: [], missing_sources: ["采购订单本地表", "供应商档案", "入库流水本地表"] },
   { page_name: "待报价中心", page_path: "/quotes", tables: ["erp_quote_followups"], missing_sources: ["报价单历史", "跟进记录"] },
   { page_name: "应收应付中心", page_path: "/finance", tables: ["erp_finance_records"], missing_sources: ["收付款明细历史", "账期配置"] },
-  { page_name: "异常管理中心", page_path: "/exceptions", tables: ["erp_sales_orders", "erp_material_alerts", "erp_quote_followups"], missing_sources: ["异常处理记录", "责任人配置"] },
-  { page_name: "报表中心", page_path: "/reports", tables: ["pmc_dashboard_snapshots", "erp_sales_orders", "erp_material_alerts", "erp_quote_followups"], missing_sources: ["历史月报宽表", "供应商绩效"] },
+  { page_name: "异常管理中心", page_path: "/exceptions", tables: ["pmc_intervention_logs", "erp_sales_orders", "erp_material_alerts", "erp_quote_followups"], missing_sources: ["责任人配置"] },
+  { page_name: "报表中心", page_path: "/reports", tables: ["pmc_dashboard_snapshots", "pmc_intervention_logs", "erp_sales_orders", "erp_material_alerts", "erp_quote_followups"], missing_sources: ["历史月报宽表", "供应商绩效"] },
   { page_name: "系统状态中心", page_path: "/system", tables: ["sync_runs", "erp_request_logs"], missing_sources: [] },
+  { page_name: "干预记录台账", page_path: "/interventions", tables: ["pmc_intervention_logs"], missing_sources: [] },
   { page_name: "ERP请求日志", page_path: "/erp-logs", tables: ["erp_request_logs"], missing_sources: [] }
 ];
 
