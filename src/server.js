@@ -8,6 +8,7 @@ import { finishHistorySyncRun, initLocalDb, latestErpRequestLogs, latestHistoryS
 import { syncCoreData } from "./syncService.js";
 import { buildSyncPolicyRows } from "./syncPolicy.js";
 import { buildErpHealthSummary, shouldBlockErpBusinessQuery } from "./erpHealth.js";
+import { setSyncPaused, syncPauseGuard, syncPauseStatus } from "./syncPause.js";
 import { SQLITE_TABLES, buildSqliteCoverage } from "./sqliteCoverage.js";
 import { HISTORY_SYNC_SOURCES, buildHistorySyncProgress, defaultHistoryRange, historySyncDryRun, historySyncParams, historySyncWindowParams, runHistorySyncBatch, runHistorySyncWindow } from "./historySync.js";
 import { buildLocalExceptionCenter, buildLocalFinanceCenter, buildLocalPmcDashboard, quoteOwnerSummaryForLocal } from "./localAnalytics.js";
@@ -176,6 +177,10 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/history-sync/window/run") {
       const params = Object.fromEntries(url.searchParams);
+      const pauseGuard = syncPauseGuard();
+      if (pauseGuard.blocked) {
+        return sendHtml(res, 423, syncPausedPage(pauseGuard.status));
+      }
       const guard = shouldBlockErpBusinessQuery({
         protectionMode: ERP_PROTECTION_MODE,
         health: queryErpHealth().health,
@@ -194,6 +199,10 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/history-sync/run") {
       const params = Object.fromEntries(url.searchParams);
+      const pauseGuard = syncPauseGuard();
+      if (pauseGuard.blocked) {
+        return sendHtml(res, 423, syncPausedPage(pauseGuard.status));
+      }
       const guard = shouldBlockErpBusinessQuery({
         protectionMode: ERP_PROTECTION_MODE,
         health: queryErpHealth().health,
@@ -212,6 +221,10 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/api/history_sync/run") {
       const params = Object.fromEntries(url.searchParams);
+      const pauseGuard = syncPauseGuard();
+      if (pauseGuard.blocked) {
+        return sendJson(res, 423, { error: pauseGuard.reason, sync_pause: pauseGuard.status });
+      }
       const guard = shouldBlockErpBusinessQuery({
         protectionMode: ERP_PROTECTION_MODE,
         health: queryErpHealth().health,
@@ -235,6 +248,10 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/api/history_sync/window/run") {
       const params = Object.fromEntries(url.searchParams);
+      const pauseGuard = syncPauseGuard();
+      if (pauseGuard.blocked) {
+        return sendJson(res, 423, { error: pauseGuard.reason, sync_pause: pauseGuard.status });
+      }
       const guard = shouldBlockErpBusinessQuery({
         protectionMode: ERP_PROTECTION_MODE,
         health: queryErpHealth().health,
@@ -260,14 +277,32 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/sync") {
       const params = { pagesize: DEFAULT_SYNC_PAGE_SIZE, ...Object.fromEntries(url.searchParams) };
+      const pauseGuard = syncPauseGuard();
+      if (pauseGuard.blocked) {
+        return sendHtml(res, 423, syncPausedPage(pauseGuard.status));
+      }
       const result = await syncCoreData(client, params);
       return sendHtml(res, 200, syncStatusPage(result));
     }
 
     if (req.method === "GET" && url.pathname === "/api/sync") {
       const params = { pagesize: DEFAULT_SYNC_PAGE_SIZE, ...Object.fromEntries(url.searchParams) };
+      const pauseGuard = syncPauseGuard();
+      if (pauseGuard.blocked) {
+        return sendJson(res, 423, { error: pauseGuard.reason, sync_pause: pauseGuard.status });
+      }
       const result = await syncCoreData(client, params);
       return sendJson(res, 200, result);
+    }
+
+    if (req.method === "GET" && url.pathname === "/sync-pause") {
+      const state = url.searchParams.get("state");
+      const status = state === "off" || state === "0"
+        ? setSyncPaused(false)
+        : state === "on" || state === "1"
+          ? setSyncPaused(true)
+          : syncPauseStatus();
+      return sendHtml(res, 200, syncPausePage(status));
     }
 
     if (req.method === "GET" && url.pathname === "/health") {
@@ -4902,6 +4937,7 @@ async function querySystemStatus(params = {}) {
       summary: {
         erp_online: erpStatus.ok === null ? null : erpStatus.ok ? 1 : 0,
         erp_protection_mode: ERP_PROTECTION_MODE ? "开启" : "关闭",
+        sync_paused: syncPauseStatus().paused ? "已暂停" : "未暂停",
         erp_latency_ms: erpStatus.latency_ms,
         erp_request_min_interval_ms: ERP_REQUEST_MIN_INTERVAL_MS,
         erp_queue_queued: erpQueue.queued,
@@ -4916,6 +4952,7 @@ async function querySystemStatus(params = {}) {
       },
       sections: {
         erp_status: [erpStatus],
+        sync_pause: [syncPauseStatus()],
         erp_queue: [erpQueue],
         erp_request_logs: erpRequestLogs,
         snapshot: snapshot
@@ -4934,6 +4971,7 @@ async function querySystemStatus(params = {}) {
       },
       notes: [
         erpStatus.ok === null ? erpStatus.message : erpStatus.ok ? "ERP 实时接口当前可用。" : `ERP 实时接口当前不可用：${erpStatus.message}`,
+        syncPauseStatus().paused ? "同步暂停模式已开启，手动同步和历史同步执行入口不会访问 ERP。" : "同步暂停模式未开启。",
         snapshot ? `最近本地快照时间：${formatDateTime(snapshot.created_at)}。` : "当前没有本地驾驶舱快照。",
         syncRuns.length ? "最近同步状态来自本地 SQLite sync_runs 表。" : "当前还没有业务数据同步记录。",
         "此页面默认只读本地状态；点击“检测ERP登录”才会访问 ERP 登录接口。"
@@ -4950,6 +4988,7 @@ function systemStatusPage(body) {
     summary: [
       ["ERP在线", erpOnlineText],
       ["保护模式", body.summary.erp_protection_mode],
+      ["同步暂停", body.summary.sync_paused],
       ["ERP耗时ms", body.summary.erp_latency_ms],
       ["请求间隔ms", body.summary.erp_request_min_interval_ms],
       ["ERP排队", body.summary.erp_queue_queued],
@@ -4965,6 +5004,7 @@ function systemStatusPage(body) {
     ],
     panels: [
       modulePanel("ERP 登录状态", body.sections.erp_status, ["ok", "message", "latency_ms", "session_tail"]),
+      modulePanel("同步暂停状态", body.sections.sync_pause, ["paused", "message", "flag_path"]),
       modulePanel("ERP 请求队列", body.sections.erp_queue, ["queued", "running", "completed", "failed", "consecutive_failures", "circuit_state", "circuit_failure_threshold", "circuit_cooldown_ms", "circuit_open_until", "min_interval_ms", "last_started_at", "last_finished_at", "last_error"]),
       modulePanel("最近 ERP 请求日志", body.sections.erp_request_logs, ["requested_at", "method", "path", "status", "duration_ms", "error_message"]),
       modulePanel("最近驾驶舱快照", body.sections.snapshot, ["created_at", "today_orders", "month_orders", "overdue_orders", "shortage_orders", "low_stock"]),
@@ -4974,12 +5014,57 @@ function systemStatusPage(body) {
     ],
     notes: body.notes,
     actions: [
+      ...(body.summary.sync_paused === "已暂停" ? [["恢复同步", "/sync-pause?state=off"]] : [["暂停同步", "/sync-pause?state=on"]]),
       ["谨慎同步订单20条", "/sync?sources=sales_orders&pagesize=20"],
       ["检测ERP登录", "/system?check_erp=1"],
       ["ERP请求日志", "/erp-logs"],
       ["刷新状态", "/system"],
       ["PMC驾驶舱", "/pmc"]
     ]
+  });
+}
+
+function syncPausePage(status) {
+  return modulePage({
+    title: "同步暂停开关",
+    subtitle: status.paused ? "同步暂停模式已开启。" : "同步暂停模式未开启。",
+    summary: [
+      ["状态", status.paused ? "已暂停" : "未暂停"],
+      ["保护范围", "手动同步 / 历史同步执行"]
+    ],
+    panels: [
+      modulePanel("暂停状态", [status], ["paused", "message", "flag_path"])
+    ],
+    notes: [
+      status.paused
+        ? "当前所有 /sync、/api/sync、历史同步执行入口都会被阻止，不会访问 ERP。"
+        : "恢复后，同步入口仍会经过 ERP 健康检查、队列、请求间隔和熔断保护。"
+    ],
+    actions: [
+      ...(status.paused ? [["恢复同步", "/sync-pause?state=off"]] : [["暂停同步", "/sync-pause?state=on"]]),
+      ["系统状态", "/system"],
+      ["SQLite覆盖率", "/sqlite-coverage"],
+      ["历史同步", "/history-sync"]
+    ]
+  });
+}
+
+function syncPausedPage(status) {
+  return modulePage({
+    title: "同步已暂停",
+    subtitle: "本次请求已被本地暂停开关阻止，没有访问 ERP。",
+    summary: [
+      ["状态", "已阻止"],
+      ["同步暂停", status.paused ? "已暂停" : "未暂停"]
+    ],
+    panels: [
+      modulePanel("暂停状态", [status], ["paused", "message", "flag_path"])
+    ],
+    notes: [
+      "这是本地保护，不是 ERP 错误。",
+      "需要继续同步时，可以先到本页恢复同步。"
+    ],
+    actions: [["恢复同步", "/sync-pause?state=off"], ["系统状态", "/system"], ["SQLite覆盖率", "/sqlite-coverage"]]
   });
 }
 
