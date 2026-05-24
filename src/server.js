@@ -1672,7 +1672,7 @@ function pmcConsolePage(body) {
 
 function enrichPmcInterventionStatus(body) {
   const sections = body?.sections || {};
-  const targetSections = ["red_risks", "yellow_risks", "intervention_tasks"];
+  const targetSections = ["red_risks", "yellow_risks", "morning_brief", "intervention_tasks"];
   const relatedNos = targetSections
     .flatMap((name) => (Array.isArray(sections[name]) ? sections[name] : []))
     .map((row) => row.related_no)
@@ -4016,13 +4016,14 @@ async function queryReportCenter(params = {}) {
   if (params.refresh !== "1") {
     const consoleBody = queryLocalPmcDashboard(params);
     if (consoleBody) {
+      const enrichedConsoleBody = enrichPmcInterventionStatus(consoleBody);
       const orderCenter = await queryOrderCenter({
         pageindex: params.pageindex || 1,
         pagesize: params.pagesize || 20,
         contract_limit: params.contract_limit || 5,
         due_soon_days: params.due_soon_days || 7
       });
-      const exceptions = enrichExceptionCenterStatus(buildLocalExceptionCenter(consoleBody));
+      const exceptions = enrichExceptionCenterStatus(buildLocalExceptionCenter(enrichedConsoleBody));
       const interventionSummary = pmcInterventionSummary({ today: new Date(), limit: 8 });
       return {
         header: { status: 0, message: "ok" },
@@ -4031,25 +4032,25 @@ async function queryReportCenter(params = {}) {
           generated_at: new Date().toISOString(),
           cached: true,
           summary: {
-            today_orders: consoleBody.summary.today_orders,
-            month_orders: consoleBody.summary.month_orders,
+            today_orders: enrichedConsoleBody.summary.today_orders,
+            month_orders: enrichedConsoleBody.summary.month_orders,
             red_orders: orderCenter.body.summary.red_orders,
             yellow_orders: orderCenter.body.summary.yellow_orders,
             green_orders: orderCenter.body.summary.green_orders,
             shortage_orders: orderCenter.body.summary.shortage_orders,
-            due_soon_orders: consoleBody.summary.due_soon_orders,
-            pending_quote_projects: consoleBody.summary.pending_quote_projects,
-            low_stock: consoleBody.summary.low_stock,
+            due_soon_orders: enrichedConsoleBody.summary.due_soon_orders,
+            pending_quote_projects: enrichedConsoleBody.summary.pending_quote_projects,
+            low_stock: enrichedConsoleBody.summary.low_stock,
             pending_response_tasks: exceptions.summary.pending_response_tasks || 0,
             responded_tasks: exceptions.summary.responded_tasks || 0,
             today_interventions: interventionSummary.today_actions || 0,
-            morning_brief_items: (consoleBody.sections.morning_brief || []).length
+            morning_brief_items: (enrichedConsoleBody.sections.morning_brief || []).length
           },
           sections: {
-            morning_brief: consoleBody.sections.morning_brief || [],
+            morning_brief: enrichedConsoleBody.sections.morning_brief || [],
             order_rows: orderCenter.body.rows,
-            pending_quotes: consoleBody.sections.pending_quotes,
-            low_stock: consoleBody.sections.low_stock,
+            pending_quotes: enrichedConsoleBody.sections.pending_quotes,
+            low_stock: enrichedConsoleBody.sections.low_stock,
             exception_tasks: exceptions.sections.tasks,
             intervention_actions: interventionSummary.recent_actions
           },
@@ -4072,7 +4073,8 @@ async function queryReportCenter(params = {}) {
     }),
     queryQuoteCenter({ pageindex: 1, pagesize: 20, limit: 20 })
   ]);
-  const exceptions = enrichExceptionCenterStatus(buildLocalExceptionCenter(consoleData.body));
+  const enrichedConsoleBody = enrichPmcInterventionStatus(consoleData.body);
+  const exceptions = enrichExceptionCenterStatus(buildLocalExceptionCenter(enrichedConsoleBody));
   const interventionSummary = pmcInterventionSummary({ today: new Date(), limit: 8 });
   const sourceNotes = [
     ...(consoleData.body.offline ? ["驾驶舱实时数据源暂不可用，报表使用本地快照或空数据。"] : []),
@@ -4085,25 +4087,25 @@ async function queryReportCenter(params = {}) {
       model: "report_center",
       generated_at: new Date().toISOString(),
       summary: {
-        today_orders: consoleData.body.summary.today_orders,
-        month_orders: consoleData.body.summary.month_orders,
+        today_orders: enrichedConsoleBody.summary.today_orders,
+        month_orders: enrichedConsoleBody.summary.month_orders,
         red_orders: orderCenter.body.summary.red_orders,
         yellow_orders: orderCenter.body.summary.yellow_orders,
         green_orders: orderCenter.body.summary.green_orders,
         shortage_orders: orderCenter.body.summary.shortage_orders,
-        due_soon_orders: consoleData.body.summary.due_soon_orders,
+        due_soon_orders: enrichedConsoleBody.summary.due_soon_orders,
         pending_quote_projects: quotes.body.summary.pending_quote_projects,
-        low_stock: consoleData.body.summary.low_stock,
+        low_stock: enrichedConsoleBody.summary.low_stock,
         pending_response_tasks: exceptions.summary.pending_response_tasks || 0,
         responded_tasks: exceptions.summary.responded_tasks || 0,
         today_interventions: interventionSummary.today_actions || 0,
-        morning_brief_items: (consoleData.body.sections.morning_brief || []).length
+        morning_brief_items: (enrichedConsoleBody.sections.morning_brief || []).length
       },
       sections: {
-        morning_brief: consoleData.body.sections.morning_brief || [],
+        morning_brief: enrichedConsoleBody.sections.morning_brief || [],
         order_rows: orderCenter.body.rows,
         pending_quotes: quotes.body.rows,
-        low_stock: consoleData.body.sections.low_stock,
+        low_stock: enrichedConsoleBody.sections.low_stock,
         exception_tasks: exceptions.sections.tasks,
         intervention_actions: interventionSummary.recent_actions
       },
@@ -5017,7 +5019,7 @@ function reportCenterPage(body) {
       ["早会重点", body.summary.morning_brief_items || 0]
     ],
     panels: [
-      modulePanel("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "next_action", "meeting_focus", "morning_action"], { fullWidth: true }),
+      modulePanel("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "next_action", "meeting_focus", "intervention_log", "morning_action"], { fullWidth: true }),
       modulePanel("风险闭环待办", body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention", "responsible_role", "action"], { fullWidth: true }),
       modulePanel("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "note", "actor"], { fullWidth: true }),
       modulePanel("订单状态样本", body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]),
@@ -5102,7 +5104,7 @@ function reportPrintPage(body) {
     <section class="summary">
       ${summaryRows.map(([label, value]) => `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value ?? "")}</strong></div>`).join("")}
     </section>
-    ${printTable("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "next_action", "meeting_focus"])}
+    ${printTable("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "next_action", "meeting_focus"])}
     ${printTable("风险闭环待办", body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"])}
     ${printTable("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "note", "actor"])}
     ${printTable("订单状态样本", body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"])}
@@ -5146,7 +5148,7 @@ function reportCenterCsv(body) {
       早会重点: body.summary.morning_brief_items || 0
     })
   ]);
-  appendCsvSection(lines, "今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "next_action", "meeting_focus"]));
+  appendCsvSection(lines, "今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "next_action", "meeting_focus"]));
   appendCsvSection(lines, "风险闭环待办", tableRowsForCsv(body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"]));
   appendCsvSection(lines, "今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "note", "actor"]));
   appendCsvSection(lines, "订单状态样本", tableRowsForCsv(body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]));
@@ -5194,7 +5196,7 @@ function reportCenterExcel(body) {
   <h1>蕴杰金属 PMC 日报</h1>
   <div class="meta">生成时间：${escapeHtml(generatedAt)}</div>
   ${excelTable("指标汇总", summaryRows)}
-  ${excelTable("今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "next_action", "meeting_focus"]))}
+  ${excelTable("今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "next_action", "meeting_focus"]))}
   ${excelTable("风险闭环待办", tableRowsForCsv(body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"]))}
   ${excelTable("今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "note", "actor"]))}
   ${excelTable("订单状态样本", tableRowsForCsv(body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]))}
