@@ -1006,16 +1006,16 @@ function followupWorkbenchPage(body) {
     title: "跟单员工作台",
     subtitle: owner ? `当前负责人：${owner}。按“先红牌、再黄牌、再正常”的顺序处理。${openOnly ? " 当前只看待响应风险。" : ""}` : "按负责人查看我的订单、缺料、待报价和延期工序。",
     summary: [
-      ["负责人", owner || "--"],
-      ["今日待办", dashboard.command_center?.today_todos ?? 0],
-      ["待响应风险", closure.open_total],
-      ["已响应风险", closure.responded_total],
-      ["红牌", dashboard.command_center?.red_count ?? 0],
-      ["黄牌", dashboard.command_center?.yellow_count ?? 0],
-      ["缺料订单", dashboard.summary?.shortage_orders ?? 0],
-      ["待报价", dashboard.summary?.pending_quote_projects ?? 0],
-      ["延期工序", dashboard.summary?.delayed_procedures ?? 0],
-      ["逾期应收", dashboard.summary?.overdue_receivables ?? 0]
+      ["负责人", owner || "--", owner ? `/pmc?rebuild=1&owner=${encodeURIComponent(owner)}` : "/pmc?rebuild=1"],
+      ["今日待办", dashboard.command_center?.today_todos ?? 0, openOnlyHref],
+      ["待响应风险", closure.open_total, openOnlyHref],
+      ["已响应风险", closure.responded_total, owner ? `/reports?owner=${encodeURIComponent(owner)}` : "/reports"],
+      ["红牌", dashboard.command_center?.red_count ?? 0, openOnlyHref],
+      ["黄牌", dashboard.command_center?.yellow_count ?? 0, openOnlyHref],
+      ["缺料订单", dashboard.summary?.shortage_orders ?? 0, "/materials"],
+      ["待报价", dashboard.summary?.pending_quote_projects ?? 0, "/quotes"],
+      ["延期工序", dashboard.summary?.delayed_procedures ?? 0, "/dispatch"],
+      ["逾期应收", dashboard.summary?.overdue_receivables ?? 0, "/finance"]
     ],
     panels: [
       modulePanel("负责人切换", body.owners || [], ["owner", "active_orders", "shortage_orders", "pending_quotes", "open_procedures", "todos", "owner_link"]),
@@ -4371,6 +4371,8 @@ function modulePage({ title, subtitle, summary = [], panels = [], notes = [], ac
     .button.primary { background: var(--green); border-color: var(--green); color: #ffffff; }
     .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 18px 0; }
     .metric { min-height: 92px; padding: 13px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+    a.metric { color: inherit; text-decoration: none; transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease; }
+    a.metric:hover { transform: translateY(-1px); box-shadow: 0 8px 18px rgba(23, 32, 51, .08); border-color: #98a2b3; }
     .metric span { display: block; color: var(--muted); font-size: 13px; }
     .metric strong { display: block; margin-top: 9px; font-size: 25px; line-height: 1; overflow-wrap: anywhere; }
     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
@@ -4417,12 +4419,17 @@ function modulePage({ title, subtitle, summary = [], panels = [], notes = [], ac
         ${visibleActions.map(([label, href]) => `<a class="button primary" href="${escapeHtml(href)}">${escapeHtml(label)}</a>`).join("")}
       </div>
     </header>
-    <section class="summary">${summary.map(([label, value]) => `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value ?? "")}</strong></div>`).join("")}</section>
+    <section class="summary">${summary.map(([label, value, href]) => renderModuleMetric(label, value, href)).join("")}</section>
     <section class="grid">${panels.join("")}</section>
     <section class="notes">${notes.map((note) => `<div>${escapeHtml(note)}</div>`).join("")}</section>
   </main>
 </body>
 </html>`;
+}
+
+function renderModuleMetric(label, value, href = "") {
+  const content = `<span>${escapeHtml(label)}</span><strong>${escapeHtml(value ?? "")}</strong>`;
+  return href ? `<a class="metric" href="${escapeHtml(href)}">${content}</a>` : `<div class="metric">${content}</div>`;
 }
 
 function modulePanel(title, rows, columns, options = {}) {
