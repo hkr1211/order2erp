@@ -3985,6 +3985,8 @@ async function queryReportCenter(params = {}) {
         contract_limit: params.contract_limit || 5,
         due_soon_days: params.due_soon_days || 7
       });
+      const exceptions = enrichExceptionCenterStatus(buildLocalExceptionCenter(consoleBody));
+      const interventionSummary = pmcInterventionSummary({ today: new Date(), limit: 8 });
       return {
         header: { status: 0, message: "ok" },
         body: {
@@ -4000,12 +4002,17 @@ async function queryReportCenter(params = {}) {
             shortage_orders: orderCenter.body.summary.shortage_orders,
             due_soon_orders: consoleBody.summary.due_soon_orders,
             pending_quote_projects: consoleBody.summary.pending_quote_projects,
-            low_stock: consoleBody.summary.low_stock
+            low_stock: consoleBody.summary.low_stock,
+            pending_response_tasks: exceptions.summary.pending_response_tasks || 0,
+            responded_tasks: exceptions.summary.responded_tasks || 0,
+            today_interventions: interventionSummary.today_actions || 0
           },
           sections: {
             order_rows: orderCenter.body.rows,
             pending_quotes: consoleBody.sections.pending_quotes,
-            low_stock: consoleBody.sections.low_stock
+            low_stock: consoleBody.sections.low_stock,
+            exception_tasks: exceptions.sections.tasks,
+            intervention_actions: interventionSummary.recent_actions
           },
           notes: [
             "当前报表读取本地 SQLite 汇总。",
@@ -4026,6 +4033,8 @@ async function queryReportCenter(params = {}) {
     }),
     queryQuoteCenter({ pageindex: 1, pagesize: 20, limit: 20 })
   ]);
+  const exceptions = enrichExceptionCenterStatus(buildLocalExceptionCenter(consoleData.body));
+  const interventionSummary = pmcInterventionSummary({ today: new Date(), limit: 8 });
   const sourceNotes = [
     ...(consoleData.body.offline ? ["驾驶舱实时数据源暂不可用，报表使用本地快照或空数据。"] : []),
     ...(orderCenter.body.offline ? ["订单中心实时数据源暂不可用，订单状态样本为空。"] : []),
@@ -4045,12 +4054,17 @@ async function queryReportCenter(params = {}) {
         shortage_orders: orderCenter.body.summary.shortage_orders,
         due_soon_orders: consoleData.body.summary.due_soon_orders,
         pending_quote_projects: quotes.body.summary.pending_quote_projects,
-        low_stock: consoleData.body.summary.low_stock
+        low_stock: consoleData.body.summary.low_stock,
+        pending_response_tasks: exceptions.summary.pending_response_tasks || 0,
+        responded_tasks: exceptions.summary.responded_tasks || 0,
+        today_interventions: interventionSummary.today_actions || 0
       },
       sections: {
         order_rows: orderCenter.body.rows,
         pending_quotes: quotes.body.rows,
-        low_stock: consoleData.body.sections.low_stock
+        low_stock: consoleData.body.sections.low_stock,
+        exception_tasks: exceptions.sections.tasks,
+        intervention_actions: interventionSummary.recent_actions
       },
       notes: [
         ...sourceNotes,
@@ -4853,9 +4867,14 @@ function reportCenterPage(body) {
       ["缺料订单", body.summary.shortage_orders],
       ["临期订单", body.summary.due_soon_orders],
       ["待报价", body.summary.pending_quote_projects],
-      ["低库存", body.summary.low_stock]
+      ["低库存", body.summary.low_stock],
+      ["待响应风险", body.summary.pending_response_tasks || 0],
+      ["已响应风险", body.summary.responded_tasks || 0],
+      ["今日处理", body.summary.today_interventions || 0]
     ],
     panels: [
+      modulePanel("风险闭环待办", body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention", "responsible_role", "action"], { fullWidth: true }),
+      modulePanel("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "note", "actor"], { fullWidth: true }),
       modulePanel("订单状态样本", body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]),
       modulePanel("待报价项目", body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"]),
       modulePanel("低库存预警", body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"])
@@ -4880,7 +4899,10 @@ function reportPrintPage(body) {
     ["缺料订单", body.summary.shortage_orders],
     ["临期订单", body.summary.due_soon_orders],
     ["待报价", body.summary.pending_quote_projects],
-    ["低库存", body.summary.low_stock]
+    ["低库存", body.summary.low_stock],
+    ["待响应风险", body.summary.pending_response_tasks || 0],
+    ["已响应风险", body.summary.responded_tasks || 0],
+    ["今日处理", body.summary.today_interventions || 0]
   ];
   return `<!doctype html>
 <html lang="zh-CN">
@@ -4934,6 +4956,8 @@ function reportPrintPage(body) {
     <section class="summary">
       ${summaryRows.map(([label, value]) => `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value ?? "")}</strong></div>`).join("")}
     </section>
+    ${printTable("风险闭环待办", body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"])}
+    ${printTable("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "note", "actor"])}
     ${printTable("订单状态样本", body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"])}
     ${printTable("待报价项目", body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"])}
     ${printTable("低库存预警", body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"])}
@@ -4968,9 +4992,14 @@ function reportCenterCsv(body) {
       缺料订单: body.summary.shortage_orders,
       临期订单: body.summary.due_soon_orders,
       待报价: body.summary.pending_quote_projects,
-      低库存: body.summary.low_stock
+      低库存: body.summary.low_stock,
+      待响应风险: body.summary.pending_response_tasks || 0,
+      已响应风险: body.summary.responded_tasks || 0,
+      今日处理: body.summary.today_interventions || 0
     })
   ]);
+  appendCsvSection(lines, "风险闭环待办", tableRowsForCsv(body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"]));
+  appendCsvSection(lines, "今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "note", "actor"]));
   appendCsvSection(lines, "订单状态样本", tableRowsForCsv(body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]));
   appendCsvSection(lines, "待报价项目", tableRowsForCsv(body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"]));
   appendCsvSection(lines, "低库存预警", tableRowsForCsv(body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"]));
@@ -4989,7 +5018,10 @@ function reportCenterExcel(body) {
     ["缺料订单", body.summary.shortage_orders],
     ["临期订单", body.summary.due_soon_orders],
     ["待报价", body.summary.pending_quote_projects],
-    ["低库存", body.summary.low_stock]
+    ["低库存", body.summary.low_stock],
+    ["待响应风险", body.summary.pending_response_tasks || 0],
+    ["已响应风险", body.summary.responded_tasks || 0],
+    ["今日处理", body.summary.today_interventions || 0]
   ];
   const generatedAt = formatDateTime(body.generated_at);
   return `<!doctype html>
@@ -5012,6 +5044,8 @@ function reportCenterExcel(body) {
   <h1>蕴杰金属 PMC 日报</h1>
   <div class="meta">生成时间：${escapeHtml(generatedAt)}</div>
   ${excelTable("指标汇总", summaryRows)}
+  ${excelTable("风险闭环待办", tableRowsForCsv(body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"]))}
+  ${excelTable("今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "note", "actor"]))}
   ${excelTable("订单状态样本", tableRowsForCsv(body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]))}
   ${excelTable("待报价项目", tableRowsForCsv(body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"]))}
   ${excelTable("低库存预警", tableRowsForCsv(body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"]))}
