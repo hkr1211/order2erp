@@ -443,11 +443,20 @@ export function pmcInterventionSummary({ today = new Date(), limit = 8 } = {}) {
        ORDER BY actions DESC, risk_type`
     )
     .all();
+  const byResultType = database
+    .prepare(
+      `SELECT COALESCE(NULLIF(result_type, ''), '未分类') AS result_type, COUNT(*) AS actions
+       FROM pmc_intervention_logs
+       GROUP BY COALESCE(NULLIF(result_type, ''), '未分类')
+       ORDER BY actions DESC, result_type`
+    )
+    .all();
   return {
     today_actions: todayActions,
     total_actions: totalActions,
     recent_actions: recentActions,
-    by_risk_type: byRiskType
+    by_risk_type: byRiskType,
+    by_result_type: byResultType
   };
 }
 

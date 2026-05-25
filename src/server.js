@@ -1767,6 +1767,7 @@ function pmcConsolePage(body, params = {}) {
     <section class="risk-board">
       ${pmcTablePanel("最近处理记录", interventions.recent_actions, ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "note", "actor"], "neutral")}
       ${pmcTablePanel("处理类型汇总", interventions.by_risk_type, ["risk_type", "actions"], "neutral")}
+      ${pmcTablePanel("处理结果汇总", interventions.by_result_type, ["result_type", "actions"], "neutral")}
     </section>
     <div class="zone-title">订单作战地图</div>
     <section class="risk-board">
@@ -4425,6 +4426,7 @@ async function queryReportCenter(params = {}) {
             pending_response_tasks: exceptions.summary.pending_response_tasks || 0,
             responded_tasks: exceptions.summary.responded_tasks || 0,
             today_interventions: interventionSummary.today_actions || 0,
+            result_types: interventionSummary.by_result_type.length,
             morning_brief_items: (enrichedConsoleBody.sections.morning_brief || []).length
           },
           sections: {
@@ -4433,7 +4435,8 @@ async function queryReportCenter(params = {}) {
             pending_quotes: enrichedConsoleBody.sections.pending_quotes,
             low_stock: enrichedConsoleBody.sections.low_stock,
             exception_tasks: exceptions.sections.tasks,
-            intervention_actions: interventionSummary.recent_actions
+            intervention_actions: interventionSummary.recent_actions,
+            intervention_result_types: interventionSummary.by_result_type
           },
           notes: [
             "当前报表读取本地 SQLite 汇总。",
@@ -4480,6 +4483,7 @@ async function queryReportCenter(params = {}) {
         pending_response_tasks: exceptions.summary.pending_response_tasks || 0,
         responded_tasks: exceptions.summary.responded_tasks || 0,
         today_interventions: interventionSummary.today_actions || 0,
+        result_types: interventionSummary.by_result_type.length,
         morning_brief_items: (enrichedConsoleBody.sections.morning_brief || []).length
       },
       sections: {
@@ -4488,7 +4492,8 @@ async function queryReportCenter(params = {}) {
         pending_quotes: quotes.body.rows,
         low_stock: enrichedConsoleBody.sections.low_stock,
         exception_tasks: exceptions.sections.tasks,
-        intervention_actions: interventionSummary.recent_actions
+        intervention_actions: interventionSummary.recent_actions,
+        intervention_result_types: interventionSummary.by_result_type
       },
       notes: [
         ...sourceNotes,
@@ -5326,11 +5331,13 @@ function queryInterventionLogCenter(params = {}) {
         shown_actions: rows.length,
         today_actions: summary.today_actions,
         total_actions: summary.total_actions,
-        risk_types: summary.by_risk_type.length
+        risk_types: summary.by_risk_type.length,
+        result_types: summary.by_result_type.length
       },
       sections: {
         rows,
-        by_risk_type: summary.by_risk_type
+        by_risk_type: summary.by_risk_type,
+        by_result_type: summary.by_result_type
       },
       notes: [
         "本页只读取本地 SQLite 干预记录，不访问 ERP。",
@@ -5357,12 +5364,14 @@ function interventionLogPage(body) {
       ["显示记录", body.summary.shown_actions],
       ["今日处理", body.summary.today_actions],
       ["累计处理", body.summary.total_actions],
-      ["风险类型", body.summary.risk_types]
+      ["风险类型", body.summary.risk_types],
+      ["处理结果", body.summary.result_types]
     ],
     panels: [
       interventionFilterPanel(body.filters),
       modulePanel("干预记录", body.sections.rows, ["created_at", "risk_level", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "problem", "note", "actor"], { fullWidth: true, limit: "all", tall: true }),
-      modulePanel("风险类型汇总", body.sections.by_risk_type, ["risk_type", "actions"])
+      modulePanel("风险类型汇总", body.sections.by_risk_type, ["risk_type", "actions"]),
+      modulePanel("处理结果汇总", body.sections.by_result_type, ["result_type", "actions"])
     ],
     notes: body.notes,
     actions: [["导出CSV", exportHref], ["PMC作战台", "/pmc?rebuild=1"], ["异常中心", "/exceptions"], ["系统状态", "/system"]]
@@ -5404,6 +5413,7 @@ function interventionLogCsv(body) {
   const lines = [];
   appendCsvSection(lines, "干预记录", tableRowsForCsv(body.sections.rows, ["created_at", "risk_level", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "problem", "note", "actor"]));
   appendCsvSection(lines, "风险类型汇总", tableRowsForCsv(body.sections.by_risk_type, ["risk_type", "actions"]));
+  appendCsvSection(lines, "处理结果汇总", tableRowsForCsv(body.sections.by_result_type, ["result_type", "actions"]));
   return lines.map((row) => row.map(csvCell).join(",")).join("\r\n");
 }
 
@@ -5424,12 +5434,14 @@ function reportCenterPage(body) {
       ["待响应风险", body.summary.pending_response_tasks || 0],
       ["已响应风险", body.summary.responded_tasks || 0],
       ["今日处理", body.summary.today_interventions || 0],
+      ["处理结果", body.summary.result_types || 0],
       ["早会重点", body.summary.morning_brief_items || 0]
     ],
     panels: [
       modulePanel("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "latest_actor", "next_action", "meeting_focus", "intervention_log", "morning_action"], { fullWidth: true }),
       modulePanel("风险闭环待办", body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention", "responsible_role", "action"], { fullWidth: true }),
       modulePanel("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "note", "actor"], { fullWidth: true }),
+      modulePanel("处理结果汇总", body.sections.intervention_result_types || [], ["result_type", "actions"]),
       modulePanel("订单状态样本", body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]),
       modulePanel("待报价项目", body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"]),
       modulePanel("低库存预警", body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"])
@@ -5515,6 +5527,7 @@ function reportPrintPage(body) {
     ${printTable("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "latest_actor", "next_action", "meeting_focus"])}
     ${printTable("风险闭环待办", body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"])}
     ${printTable("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "note", "actor"])}
+    ${printTable("处理结果汇总", body.sections.intervention_result_types || [], ["result_type", "actions"])}
     ${printTable("订单状态样本", body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"])}
     ${printTable("待报价项目", body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"])}
     ${printTable("低库存预警", body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"])}
@@ -5553,12 +5566,14 @@ function reportCenterCsv(body) {
       待响应风险: body.summary.pending_response_tasks || 0,
       已响应风险: body.summary.responded_tasks || 0,
       今日处理: body.summary.today_interventions || 0,
+      处理结果: body.summary.result_types || 0,
       早会重点: body.summary.morning_brief_items || 0
     })
   ]);
   appendCsvSection(lines, "今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "latest_actor", "next_action", "meeting_focus"]));
   appendCsvSection(lines, "风险闭环待办", tableRowsForCsv(body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"]));
   appendCsvSection(lines, "今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "note", "actor"]));
+  appendCsvSection(lines, "处理结果汇总", tableRowsForCsv(body.sections.intervention_result_types || [], ["result_type", "actions"]));
   appendCsvSection(lines, "订单状态样本", tableRowsForCsv(body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]));
   appendCsvSection(lines, "待报价项目", tableRowsForCsv(body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"]));
   appendCsvSection(lines, "低库存预警", tableRowsForCsv(body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"]));
@@ -5581,6 +5596,7 @@ function reportCenterExcel(body) {
     ["待响应风险", body.summary.pending_response_tasks || 0],
     ["已响应风险", body.summary.responded_tasks || 0],
     ["今日处理", body.summary.today_interventions || 0],
+    ["处理结果", body.summary.result_types || 0],
     ["早会重点", body.summary.morning_brief_items || 0]
   ];
   const generatedAt = formatDateTime(body.generated_at);
@@ -5607,6 +5623,7 @@ function reportCenterExcel(body) {
   ${excelTable("今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "latest_actor", "next_action", "meeting_focus"]))}
   ${excelTable("风险闭环待办", tableRowsForCsv(body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"]))}
   ${excelTable("今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "note", "actor"]))}
+  ${excelTable("处理结果汇总", tableRowsForCsv(body.sections.intervention_result_types || [], ["result_type", "actions"]))}
   ${excelTable("订单状态样本", tableRowsForCsv(body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]))}
   ${excelTable("待报价项目", tableRowsForCsv(body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"]))}
   ${excelTable("低库存预警", tableRowsForCsv(body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"]))}
