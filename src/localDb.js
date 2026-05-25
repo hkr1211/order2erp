@@ -456,8 +456,46 @@ export function pmcInterventionSummary({ today = new Date(), limit = 8 } = {}) {
     total_actions: totalActions,
     recent_actions: recentActions,
     by_risk_type: byRiskType,
-    by_result_type: byResultType
+    by_result_type: byResultType,
+    improvement_suggestions: interventionImprovementSuggestions(byResultType)
   };
+}
+
+function interventionImprovementSuggestions(byResultType = []) {
+  return byResultType
+    .filter((row) => Number(row.actions || 0) > 0)
+    .slice(0, 6)
+    .map((row) => {
+      const resultType = row.result_type || "未分类";
+      return {
+        result_type: resultType,
+        actions: row.actions,
+        review_focus: improvementReviewFocus(resultType),
+        recommendation: improvementRecommendation(resultType)
+      };
+    });
+}
+
+function improvementReviewFocus(resultType = "") {
+  if (resultType === "供应商跟催") return "采购交付稳定性";
+  if (resultType === "调拨库存") return "库存布局和安全库存";
+  if (resultType === "替代料") return "替代料标准和审批";
+  if (resultType === "加班增产") return "产能负荷和班次";
+  if (resultType === "外协处理") return "外协资源池";
+  if (resultType === "调整排程") return "排程规则和插单影响";
+  if (resultType === "客户沟通") return "客户预警和交期承诺";
+  return "处理闭环质量";
+}
+
+function improvementRecommendation(resultType = "") {
+  if (resultType === "供应商跟催") return "供应商交付问题占比高，建议采购建立到货承诺台账、供应商分级和提前预警。";
+  if (resultType === "调拨库存") return "调拨库存频繁，建议复核安全库存、库位分布和常用规格备货策略。";
+  if (resultType === "替代料") return "替代料使用频繁，建议沉淀可替代料清单、质量确认规则和审批路径。";
+  if (resultType === "加班增产") return "加班增产频繁，建议复盘瓶颈工序产能、班次安排和关键设备负荷。";
+  if (resultType === "外协处理") return "外协处理频繁，建议建立合格外协资源池、价格周期和质量验收标准。";
+  if (resultType === "调整排程") return "调整排程频繁，建议复盘插单规则、冻结周期和订单优先级机制。";
+  if (resultType === "客户沟通") return "客户沟通频繁，建议提前暴露交期风险，统一延期说明和新交期承诺口径。";
+  return "建议复盘处理备注完整性，统一原因分类和责任人填写。";
 }
 
 export function excludeQuoteFollowup({ quote_no, reason = "", actor = "内网用户", excluded_at = "" } = {}) {

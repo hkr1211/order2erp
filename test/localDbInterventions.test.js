@@ -67,6 +67,8 @@ test("PMC intervention summary counts today's actions and recent risk types", as
   assert.equal(summary.by_risk_type.find((row) => row.risk_type === "产能瓶颈").actions, 1);
   assert.equal(summary.by_result_type.find((row) => row.result_type === "供应商跟催").actions, 1);
   assert.equal(summary.by_result_type.find((row) => row.result_type === "加班增产").actions, 1);
+  assert.equal(summary.improvement_suggestions[0].result_type, "供应商跟催");
+  assert.match(summary.improvement_suggestions[0].recommendation, /供应商交付|采购/);
 });
 
 test("latestPmcInterventionsByRelatedNos returns the latest action for each related number", async () => {
