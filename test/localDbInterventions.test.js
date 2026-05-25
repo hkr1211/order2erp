@@ -103,6 +103,35 @@ test("latestPmcInterventionsByRelatedNos returns the latest action for each rela
   assert.equal(rowsByNo.has("PO-3"), false);
 });
 
+test("PMC interventions persist and normalize closure state", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pmc-intervention-state-"));
+  process.env.PMC_DB_PATH = path.join(tempDir, "pmc.db");
+  const modulePath = `../src/localDb.js?state=${Date.now()}`;
+  const { latestPmcInterventionsByRelatedNos, savePmcIntervention } = await import(modulePath);
+
+  const processing = savePmcIntervention({
+    created_at: "2026-05-24T09:00:00.000Z",
+    risk_type: "物料断供",
+    related_no: "PO-STATE",
+    action_label: "标记处理中",
+    actor: "跟单员"
+  });
+  savePmcIntervention({
+    created_at: "2026-05-24T10:00:00.000Z",
+    risk_type: "物料断供",
+    related_no: "PO-STATE",
+    action_label: "关闭问题",
+    intervention_state: "已关闭",
+    actor: "PMC经理"
+  });
+
+  const rowsByNo = latestPmcInterventionsByRelatedNos(["PO-STATE"]);
+
+  assert.equal(processing.intervention_state, "处理中");
+  assert.equal(rowsByNo.get("PO-STATE").intervention_state, "已关闭");
+  assert.match(rowsByNo.get("PO-STATE").payload_json, /"intervention_state":"已关闭"/);
+});
+
 test("latestPmcInterventions filters by risk type actor and date range", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pmc-intervention-filters-"));
   process.env.PMC_DB_PATH = path.join(tempDir, "pmc.db");

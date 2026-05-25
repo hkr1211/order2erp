@@ -61,6 +61,7 @@ export function initLocalDb(dbPath = process.env.PMC_DB_PATH || DEFAULT_DB_PATH)
       risk_type TEXT,
       related_no TEXT,
       action_label TEXT NOT NULL,
+      intervention_state TEXT,
       problem TEXT,
       note TEXT,
       actor TEXT,
@@ -188,8 +189,16 @@ export function initLocalDb(dbPath = process.env.PMC_DB_PATH || DEFAULT_DB_PATH)
       updated_at TEXT NOT NULL
     );
   `);
+  ensureColumn(db, "pmc_intervention_logs", "intervention_state", "TEXT");
   seedDefaultLocalUserRoles(db);
   return db;
+}
+
+function ensureColumn(database, tableName, columnName, columnType) {
+  const columns = database.prepare(`PRAGMA table_info(${tableName})`).all();
+  if (!columns.some((column) => column.name === columnName)) {
+    database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnType}`);
+  }
 }
 
 export function savePmcSnapshot(payload) {
@@ -226,6 +235,7 @@ export function savePmcIntervention(entry) {
     risk_type: entry.risk_type || "",
     related_no: entry.related_no || "",
     action_label: entry.action_label || "",
+    intervention_state: normalizeInterventionState(entry.intervention_state || entry.state || entry.status || entry.action_label),
     problem: entry.problem || "",
     note: entry.note || "",
     actor: entry.actor || "内网用户"
@@ -233,14 +243,22 @@ export function savePmcIntervention(entry) {
   const result = database
     .prepare(
       `INSERT INTO pmc_intervention_logs
-       (created_at, risk_level, risk_type, related_no, action_label, problem, note, actor, payload_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (created_at, risk_level, risk_type, related_no, action_label, intervention_state, problem, note, actor, payload_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(createdAt, payload.risk_level, payload.risk_type, payload.related_no, payload.action_label, payload.problem, payload.note, payload.actor, JSON.stringify({ ...entry, ...payload }));
+    .run(createdAt, payload.risk_level, payload.risk_type, payload.related_no, payload.action_label, payload.intervention_state, payload.problem, payload.note, payload.actor, JSON.stringify({ ...entry, ...payload }));
   return { id: result.lastInsertRowid, created_at: createdAt, ...payload };
 }
 
-export function latestPmcInterventions({ limit = 20, related_no = "", risk_type = "", actor = "", date_from = "", date_to = "" } = {}) {
+function normalizeInterventionState(value = "") {
+  const text = String(value || "").trim();
+  if (/关闭|完成|闭环|已处理/.test(text)) return "已关闭";
+  if (/响应|已响应/.test(text)) return "已响应";
+  if (/处理中|处理|跟踪|催|协调|沟通|调拨|替代|排程|加班|外协|通知/.test(text)) return "处理中";
+  return "处理中";
+}
+
+export function latestPmcInterventions({ limit = 20, related_no = "", risk_type = "", actor = "", intervention_state = "", date_from = "", date_to = "" } = {}) {
   const database = initLocalDb();
   const safeLimit = Math.max(1, Math.min(Number(limit) || 20, 200));
   const filters = [];
@@ -257,6 +275,10 @@ export function latestPmcInterventions({ limit = 20, related_no = "", risk_type 
     filters.push("actor LIKE ?");
     values.push(`%${String(actor).trim()}%`);
   }
+  if (intervention_state) {
+    filters.push("intervention_state = ?");
+    values.push(String(intervention_state).trim());
+  }
   if (date_from) {
     filters.push("created_at >= ?");
     values.push(String(date_from).trim());
@@ -268,7 +290,7 @@ export function latestPmcInterventions({ limit = 20, related_no = "", risk_type 
   const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
   return database
     .prepare(
-      `SELECT id, created_at, risk_level, risk_type, related_no, action_label, problem, note, actor, payload_json
+      `SELECT id, created_at, risk_level, risk_type, related_no, action_label, intervention_state, problem, note, actor, payload_json
        FROM pmc_intervention_logs
        ${whereClause}
        ORDER BY created_at DESC, id DESC
@@ -286,7 +308,7 @@ export function latestPmcInterventionsByRelatedNos(relatedNos = []) {
   const placeholders = keys.map(() => "?").join(", ");
   const rows = database
     .prepare(
-      `SELECT id, created_at, risk_level, risk_type, related_no, action_label, problem, note, actor, payload_json
+      `SELECT id, created_at, risk_level, risk_type, related_no, action_label, intervention_state, problem, note, actor, payload_json
        FROM pmc_intervention_logs
        WHERE related_no IN (${placeholders})
        ORDER BY created_at DESC, id DESC`
@@ -386,7 +408,7 @@ export function pmcInterventionSummary({ today = new Date(), limit = 8 } = {}) {
     .get(dayStart, dayEnd)?.count || 0;
   const recentActions = database
     .prepare(
-      `SELECT id, created_at, risk_level, risk_type, related_no, action_label, problem, note, actor, payload_json
+      `SELECT id, created_at, risk_level, risk_type, related_no, action_label, intervention_state, problem, note, actor, payload_json
        FROM pmc_intervention_logs
        ORDER BY created_at DESC, id DESC
        LIMIT ?`

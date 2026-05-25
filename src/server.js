@@ -1760,7 +1760,7 @@ function pmcConsolePage(body, params = {}) {
     </section>
     <div class="zone-title">干预复盘</div>
     <section class="risk-board">
-      ${pmcTablePanel("最近处理记录", interventions.recent_actions, ["created_at", "risk_type", "related_no", "action_label", "note", "actor"], "neutral")}
+      ${pmcTablePanel("最近处理记录", interventions.recent_actions, ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "note", "actor"], "neutral")}
       ${pmcTablePanel("处理类型汇总", interventions.by_risk_type, ["risk_type", "actions"], "neutral")}
     </section>
     <div class="zone-title">订单作战地图</div>
@@ -1832,8 +1832,8 @@ function enrichPmcInterventionStatus(body) {
 
 function sortMorningBriefByResponse(rows = []) {
   return [...rows].sort((a, b) => {
-    const aOpen = a.intervention_state === "已响应" ? 1 : 0;
-    const bOpen = b.intervention_state === "已响应" ? 1 : 0;
+    const aOpen = isInterventionFinal(a.intervention_state) ? 1 : 0;
+    const bOpen = isInterventionFinal(b.intervention_state) ? 1 : 0;
     return aOpen - bOpen || Number(a.priority_no || 999) - Number(b.priority_no || 999);
   });
 }
@@ -1845,10 +1845,25 @@ function pmcRiskClosure(row = {}, latest = null) {
   const responseHours = isRed ? 4 : 24;
   if (latest?.created_at) {
     const hours = hoursSince(latest.created_at);
+    const state = latest.intervention_state || defaultInterventionState(latest.action_label);
+    if (state === "已关闭") {
+      return {
+        intervention_state: "已关闭",
+        response_sla: `已关闭${hours === null ? "" : ` · ${hours}小时前`}`,
+        escalation_state: "已闭环，进入复盘"
+      };
+    }
+    if (state === "已响应") {
+      return {
+        intervention_state: "已响应",
+        response_sla: `已响应${hours === null ? "" : ` · ${hours}小时前`}`,
+        escalation_state: "继续跟踪结果"
+      };
+    }
     return {
-      intervention_state: "已响应",
-      response_sla: `已响应${hours === null ? "" : ` · ${hours}小时前`}`,
-      escalation_state: "继续跟踪结果"
+      intervention_state: "处理中",
+      response_sla: `处理中${hours === null ? "" : ` · ${hours}小时前`}`,
+      escalation_state: isRed ? "处理中，超时需升级" : "处理中，24小时内复核"
     };
   }
   return {
@@ -1868,18 +1883,18 @@ function hoursSince(value, now = new Date()) {
 
 function pmcClosureSummary(sections = {}) {
   const rows = [...(sections.red_risks || []), ...(sections.yellow_risks || [])];
-  const openRows = rows.filter((row) => row.intervention_state !== "已响应");
+  const openRows = rows.filter((row) => !isInterventionFinal(row.intervention_state));
   return {
     open_total: openRows.length,
-    open_red: (sections.red_risks || []).filter((row) => row.intervention_state !== "已响应").length,
-    open_yellow: (sections.yellow_risks || []).filter((row) => row.intervention_state !== "已响应").length,
+    open_red: (sections.red_risks || []).filter((row) => !isInterventionFinal(row.intervention_state)).length,
+    open_yellow: (sections.yellow_risks || []).filter((row) => !isInterventionFinal(row.intervention_state)).length,
     responded_total: rows.length - openRows.length
   };
 }
 
 function filterPmcOpenRisks(body = {}) {
   const sections = body.sections || {};
-  const openRow = (row) => row?.intervention_state !== "已响应";
+  const openRow = (row) => !isInterventionFinal(row?.intervention_state);
   return {
     ...body,
     sections: {
@@ -1890,6 +1905,10 @@ function filterPmcOpenRisks(body = {}) {
       intervention_tasks: (sections.intervention_tasks || []).filter(openRow)
     }
   };
+}
+
+function isInterventionFinal(state = "") {
+  return state === "已响应" || state === "已关闭";
 }
 
 function pmcMorningBriefText(body = {}, params = {}) {
@@ -2102,6 +2121,7 @@ function formatPmcQuantity(value, unit = "") {
 function pmcInterventionHref(row, actionLabel) {
   const params = new URLSearchParams();
   params.set("action_label", actionLabel || "查看详情");
+  params.set("intervention_state", defaultInterventionState(actionLabel));
   params.set("risk_level", row?.risk_level || row?.priority || "");
   params.set("risk_type", row?.risk_type || row?.exception_type || "");
   params.set("related_no", row?.related_no || "");
@@ -2109,6 +2129,13 @@ function pmcInterventionHref(row, actionLabel) {
   params.set("primary_action", row?.primary_action || row?.action || "");
   params.set("actor", "内网用户");
   return `/pmc/intervention?${params.toString()}`;
+}
+
+function defaultInterventionState(actionLabel = "") {
+  const text = String(actionLabel || "");
+  if (/关闭|完成|闭环|已处理/.test(text)) return "已关闭";
+  if (/响应|已响应/.test(text)) return "已响应";
+  return "处理中";
 }
 
 function interventionLogHref(relatedNo = "") {
@@ -2122,6 +2149,7 @@ function pmcInterventionPage(params = {}, saved = null) {
   const template = interventionTemplate(params);
   const defaultNote = params.note || defaultInterventionNote(params);
   const actor = params.actor || "内网用户";
+  const state = params.intervention_state || defaultInterventionState(params.action_label);
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -2176,6 +2204,7 @@ function pmcInterventionPage(params = {}, saved = null) {
         <div><strong>关联单号：</strong>${escapeHtml(relatedNo || "")}</div>
         <div><strong>问题描述：</strong>${escapeHtml(params.problem || "")}</div>
         <div><strong>选择动作：</strong>${escapeHtml(params.action_label || "")}</div>
+        <div><strong>闭环状态：</strong>${escapeHtml(state)}</div>
         <div><strong>建议动作：</strong>${escapeHtml(params.primary_action || "")}</div>
       </div></section>
       <section class="panel"><h2>处理留痕</h2><div class="body">
@@ -2183,15 +2212,18 @@ function pmcInterventionPage(params = {}, saved = null) {
         <form action="/pmc/intervention/save" method="get" style="margin-top:12px;">
           ${interventionHiddenInputs(params)}
           <label>处理人<input name="actor" value="${escapeHtml(actor)}"></label>
+          <label>闭环状态<select name="intervention_state" style="width:100%;margin-top:6px;padding:9px 10px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text);font:inherit;">
+            ${["处理中", "已响应", "已关闭"].map((item) => `<option value="${escapeHtml(item)}"${item === state ? " selected" : ""}>${escapeHtml(item)}</option>`).join("")}
+          </select></label>
           <label>处理备注<textarea name="note">${escapeHtml(defaultNote)}</textarea></label>
-          <button class="button primary" type="submit">记录为已响应</button>
+          <button class="button primary" type="submit">保存处理记录</button>
         </form>
       </div></section>
     </section>
     <section class="panel" style="margin-top:12px;"><h2>最近处理记录 <span class="tag">${recentRows.length}</span></h2>
       ${
         recentRows.length
-          ? `<table><thead><tr>${["created_at", "risk_type", "related_no", "action_label", "note", "actor"].map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${recentRows.map((row) => `<tr>${["created_at", "risk_type", "related_no", "action_label", "note", "actor"].map((column) => `<td>${formatCell(row[column])}</td>`).join("")}</tr>`).join("")}</tbody></table>`
+          ? `<table><thead><tr>${["created_at", "risk_type", "related_no", "action_label", "intervention_state", "note", "actor"].map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${recentRows.map((row) => `<tr>${["created_at", "risk_type", "related_no", "action_label", "intervention_state", "note", "actor"].map((column) => `<td>${formatCell(row[column])}</td>`).join("")}</tr>`).join("")}</tbody></table>`
           : `<div class="body">当前关联单号还没有本地处理记录。</div>`
       }
     </section>
@@ -5222,6 +5254,7 @@ function queryInterventionLogCenter(params = {}) {
     related_no: String(params.related_no || "").trim(),
     risk_type: String(params.risk_type || "").trim(),
     actor: String(params.actor || "").trim(),
+    intervention_state: String(params.intervention_state || "").trim(),
     date_from: String(params.date_from || "").trim(),
     date_to: String(params.date_to || "").trim(),
     limit
@@ -5273,7 +5306,7 @@ function interventionLogPage(body) {
     ],
     panels: [
       interventionFilterPanel(body.filters),
-      modulePanel("干预记录", body.sections.rows, ["created_at", "risk_level", "risk_type", "related_no", "action_label", "problem", "note", "actor"], { fullWidth: true, limit: "all", tall: true }),
+      modulePanel("干预记录", body.sections.rows, ["created_at", "risk_level", "risk_type", "related_no", "action_label", "intervention_state", "problem", "note", "actor"], { fullWidth: true, limit: "all", tall: true }),
       modulePanel("风险类型汇总", body.sections.by_risk_type, ["risk_type", "actions"])
     ],
     notes: body.notes,
@@ -5283,7 +5316,7 @@ function interventionLogPage(body) {
 
 function interventionFilterParams(filters = {}) {
   const params = new URLSearchParams();
-  for (const key of ["related_no", "risk_type", "actor", "date_from", "date_to", "limit"]) {
+  for (const key of ["related_no", "risk_type", "actor", "intervention_state", "date_from", "date_to", "limit"]) {
     const value = filters[key];
     if (value !== undefined && value !== null && String(value).trim() !== "") {
       params.set(key, String(value));
@@ -5302,6 +5335,7 @@ function interventionFilterPanel(filters = {}) {
       ${field("related_no", "关联单号", filters.related_no || "")}
       ${field("risk_type", "风险类型", filters.risk_type || "")}
       ${field("actor", "处理人", filters.actor || "")}
+      ${field("intervention_state", "闭环状态", filters.intervention_state || "")}
       ${field("date_from", "开始时间", filters.date_from || "")}
       ${field("date_to", "结束时间", filters.date_to || "")}
       ${field("limit", "显示条数", filters.limit || 100)}
@@ -5313,7 +5347,7 @@ function interventionFilterPanel(filters = {}) {
 
 function interventionLogCsv(body) {
   const lines = [];
-  appendCsvSection(lines, "干预记录", tableRowsForCsv(body.sections.rows, ["created_at", "risk_level", "risk_type", "related_no", "action_label", "problem", "note", "actor"]));
+  appendCsvSection(lines, "干预记录", tableRowsForCsv(body.sections.rows, ["created_at", "risk_level", "risk_type", "related_no", "action_label", "intervention_state", "problem", "note", "actor"]));
   appendCsvSection(lines, "风险类型汇总", tableRowsForCsv(body.sections.by_risk_type, ["risk_type", "actions"]));
   return lines.map((row) => row.map(csvCell).join(",")).join("\r\n");
 }
@@ -5340,7 +5374,7 @@ function reportCenterPage(body) {
     panels: [
       modulePanel("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "latest_intervention", "latest_actor", "next_action", "meeting_focus", "intervention_log", "morning_action"], { fullWidth: true }),
       modulePanel("风险闭环待办", body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention", "responsible_role", "action"], { fullWidth: true }),
-      modulePanel("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "note", "actor"], { fullWidth: true }),
+      modulePanel("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "note", "actor"], { fullWidth: true }),
       modulePanel("订单状态样本", body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]),
       modulePanel("待报价项目", body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"]),
       modulePanel("低库存预警", body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"])
@@ -5425,7 +5459,7 @@ function reportPrintPage(body) {
     </section>
     ${printTable("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "latest_intervention", "latest_actor", "next_action", "meeting_focus"])}
     ${printTable("风险闭环待办", body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"])}
-    ${printTable("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "note", "actor"])}
+    ${printTable("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "note", "actor"])}
     ${printTable("订单状态样本", body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"])}
     ${printTable("待报价项目", body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"])}
     ${printTable("低库存预警", body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"])}
@@ -5469,7 +5503,7 @@ function reportCenterCsv(body) {
   ]);
   appendCsvSection(lines, "今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "latest_intervention", "latest_actor", "next_action", "meeting_focus"]));
   appendCsvSection(lines, "风险闭环待办", tableRowsForCsv(body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"]));
-  appendCsvSection(lines, "今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "note", "actor"]));
+  appendCsvSection(lines, "今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "note", "actor"]));
   appendCsvSection(lines, "订单状态样本", tableRowsForCsv(body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]));
   appendCsvSection(lines, "待报价项目", tableRowsForCsv(body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"]));
   appendCsvSection(lines, "低库存预警", tableRowsForCsv(body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"]));
@@ -5517,7 +5551,7 @@ function reportCenterExcel(body) {
   ${excelTable("指标汇总", summaryRows)}
   ${excelTable("今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "latest_intervention", "latest_actor", "next_action", "meeting_focus"]))}
   ${excelTable("风险闭环待办", tableRowsForCsv(body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"]))}
-  ${excelTable("今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "note", "actor"]))}
+  ${excelTable("今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "note", "actor"]))}
   ${excelTable("订单状态样本", tableRowsForCsv(body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]))}
   ${excelTable("待报价项目", tableRowsForCsv(body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"]))}
   ${excelTable("低库存预警", tableRowsForCsv(body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"]))}
