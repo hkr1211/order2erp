@@ -223,13 +223,13 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/user-roles/save") {
       const params = Object.fromEntries(url.searchParams);
       const saved = saveLocalUserRole(params);
-      return sendHtml(res, 200, userRolesPage(queryUserRoles(saved).body));
+      return sendRedirect(res, userRoleResultHref(saved));
     }
 
     if (req.method === "GET" && url.pathname === "/user-roles/delete") {
       const params = Object.fromEntries(url.searchParams);
       const deleted = deleteLocalUserRole(params.name);
-      return sendHtml(res, 200, userRolesPage(queryUserRoles({ ...deleted, deleted_role: true }).body));
+      return sendRedirect(res, userRoleResultHref({ ...deleted, deleted_role: true }));
     }
 
     if (req.method === "GET" && url.pathname === "/sqlite-coverage") {
@@ -595,6 +595,11 @@ function sendJson(res, status, payload) {
 function sendHtml(res, status, html) {
   res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
   res.end(html);
+}
+
+function sendRedirect(res, location) {
+  res.writeHead(303, { Location: location });
+  res.end();
 }
 
 function sendText(res, status, text) {
@@ -6119,6 +6124,7 @@ function queryUserRoles(saved = null, params = {}) {
   const detectedOwners = dashboard?.sections?.owner_workbenches || [];
   const configuredNames = new Set(configuredRoles.map((row) => row.name));
   const editRole = selectedUserRole(configuredRoles, params);
+  const resultNotice = saved || userRoleNoticeFromParams(params);
   const detectedRows = detectedOwners.map((row) => ({
     name: row.owner,
     detected_from: "跟单负责人池",
@@ -6136,7 +6142,7 @@ function queryUserRoles(saved = null, params = {}) {
     body: {
       model: "user_roles",
       generated_at: new Date().toISOString(),
-      saved,
+      saved: resultNotice,
       summary: {
         configured_roles: configuredRoles.length,
         non_followup_roles: configuredRoles.filter((row) => Number(row.is_followup) === 0).length,
@@ -6224,6 +6230,33 @@ function roleSaveHref({ name, role, is_followup, note }) {
     note: note || ""
   });
   return `/user-roles/save?${query.toString()}`;
+}
+
+function userRoleResultHref(result = {}) {
+  const query = new URLSearchParams({
+    result: result.deleted_role ? "deleted" : "saved",
+    name: result.name || "",
+    role: result.role || "",
+    is_followup: String(result.is_followup ?? ""),
+    deleted: result.deleted ? "1" : ""
+  });
+  return `/user-roles?${query.toString()}`;
+}
+
+function userRoleNoticeFromParams(params = {}) {
+  const result = String(params.result || "");
+  const name = String(params.name || "").trim();
+  if (!result || !name) {
+    return null;
+  }
+  if (result === "deleted") {
+    return { name, deleted_role: true, deleted: params.deleted === "1" };
+  }
+  return {
+    name,
+    role: params.role || "",
+    is_followup: params.is_followup === "" ? undefined : Number(params.is_followup)
+  };
 }
 
 function userRoleEditHref(row = {}) {
