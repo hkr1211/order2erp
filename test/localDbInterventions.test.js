@@ -132,6 +132,32 @@ test("PMC interventions persist and normalize closure state", async () => {
   assert.match(rowsByNo.get("PO-STATE").payload_json, /"intervention_state":"已关闭"/);
 });
 
+test("PMC interventions persist structured handling result", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pmc-intervention-result-"));
+  process.env.PMC_DB_PATH = path.join(tempDir, "pmc.db");
+  const modulePath = `../src/localDb.js?result=${Date.now()}`;
+  const { latestPmcInterventionsByRelatedNos, savePmcIntervention } = await import(modulePath);
+
+  savePmcIntervention({
+    created_at: "2026-05-24T11:00:00.000Z",
+    risk_type: "物料断供",
+    related_no: "PO-RESULT",
+    action_label: "申请调拨",
+    intervention_state: "处理中",
+    result_type: "调拨库存",
+    promised_date: "2026-05-26",
+    next_owner: "仓库主管",
+    actor: "PMC"
+  });
+
+  const latest = latestPmcInterventionsByRelatedNos(["PO-RESULT"]).get("PO-RESULT");
+
+  assert.equal(latest.result_type, "调拨库存");
+  assert.equal(latest.promised_date, "2026-05-26");
+  assert.equal(latest.next_owner, "仓库主管");
+  assert.match(latest.payload_json, /"result_type":"调拨库存"/);
+});
+
 test("latestPmcInterventions filters by risk type actor and date range", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pmc-intervention-filters-"));
   process.env.PMC_DB_PATH = path.join(tempDir, "pmc.db");

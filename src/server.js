@@ -1392,6 +1392,9 @@ function labelFor(key) {
     latest_actor: "最近处理人",
     latest_at: "最近处理时间",
     intervention_state: "闭环状态",
+    result_type: "处理结果",
+    promised_date: "承诺日期",
+    next_owner: "下一责任人",
     response_sla: "响应时限",
     escalation_state: "升级状态",
     intervention_action: "处理入口",
@@ -1762,7 +1765,7 @@ function pmcConsolePage(body, params = {}) {
     </section>
     <div class="zone-title">干预复盘</div>
     <section class="risk-board">
-      ${pmcTablePanel("最近处理记录", interventions.recent_actions, ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "note", "actor"], "neutral")}
+      ${pmcTablePanel("最近处理记录", interventions.recent_actions, ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "note", "actor"], "neutral")}
       ${pmcTablePanel("处理类型汇总", interventions.by_risk_type, ["risk_type", "actions"], "neutral")}
     </section>
     <div class="zone-title">订单作战地图</div>
@@ -2168,6 +2171,9 @@ function pmcInterventionPage(params = {}, saved = null) {
   const defaultNote = params.note || defaultInterventionNote(params);
   const actor = params.actor || "内网用户";
   const state = params.intervention_state || defaultInterventionState(params.action_label);
+  const resultType = params.result_type || defaultResultTypeForAction(params.action_label || params.risk_type);
+  const promisedDate = params.promised_date || "";
+  const nextOwner = params.next_owner || defaultNextOwnerForRisk(params.risk_type);
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -2223,6 +2229,7 @@ function pmcInterventionPage(params = {}, saved = null) {
         <div><strong>问题描述：</strong>${escapeHtml(params.problem || "")}</div>
         <div><strong>选择动作：</strong>${escapeHtml(params.action_label || "")}</div>
         <div><strong>闭环状态：</strong>${escapeHtml(state)}</div>
+        <div><strong>处理结果：</strong>${escapeHtml(resultType)}</div>
         <div><strong>建议动作：</strong>${escapeHtml(params.primary_action || "")}</div>
       </div></section>
       <section class="panel"><h2>处理留痕</h2><div class="body">
@@ -2233,6 +2240,11 @@ function pmcInterventionPage(params = {}, saved = null) {
           <label>闭环状态<select name="intervention_state" style="width:100%;margin-top:6px;padding:9px 10px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text);font:inherit;">
             ${["处理中", "已响应", "已关闭"].map((item) => `<option value="${escapeHtml(item)}"${item === state ? " selected" : ""}>${escapeHtml(item)}</option>`).join("")}
           </select></label>
+          <label>处理结果<select name="result_type" style="width:100%;margin-top:6px;padding:9px 10px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text);font:inherit;">
+            ${["供应商跟催", "调拨库存", "替代料", "加班增产", "外协处理", "调整排程", "客户沟通", "其他处理"].map((item) => `<option value="${escapeHtml(item)}"${item === resultType ? " selected" : ""}>${escapeHtml(item)}</option>`).join("")}
+          </select></label>
+          <label>承诺完成/到货日期<input type="date" name="promised_date" value="${escapeHtml(promisedDate)}"></label>
+          <label>下一责任人<input name="next_owner" value="${escapeHtml(nextOwner)}"></label>
           <label>处理备注<textarea name="note">${escapeHtml(defaultNote)}</textarea></label>
           <button class="button primary" type="submit">保存处理记录</button>
         </form>
@@ -2241,7 +2253,7 @@ function pmcInterventionPage(params = {}, saved = null) {
     <section class="panel" style="margin-top:12px;"><h2>最近处理记录 <span class="tag">${recentRows.length}</span></h2>
       ${
         recentRows.length
-          ? `<table><thead><tr>${["created_at", "risk_type", "related_no", "action_label", "intervention_state", "note", "actor"].map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${recentRows.map((row) => `<tr>${["created_at", "risk_type", "related_no", "action_label", "intervention_state", "note", "actor"].map((column) => `<td>${formatCell(row[column])}</td>`).join("")}</tr>`).join("")}</tbody></table>`
+          ? `<table><thead><tr>${["created_at", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "note", "actor"].map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${recentRows.map((row) => `<tr>${["created_at", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "note", "actor"].map((column) => `<td>${formatCell(row[column])}</td>`).join("")}</tr>`).join("")}</tbody></table>`
           : `<div class="body">当前关联单号还没有本地处理记录。</div>`
       }
     </section>
@@ -2255,6 +2267,27 @@ function interventionHiddenInputs(params = {}) {
   return keys
     .map((key) => `<input type="hidden" name="${escapeHtml(key)}" value="${escapeHtml(params[key] || "")}">`)
     .join("");
+}
+
+function defaultResultTypeForAction(value = "") {
+  const text = String(value || "");
+  if (/调拨/.test(text)) return "调拨库存";
+  if (/替代/.test(text)) return "替代料";
+  if (/催|供应商|物流/.test(text)) return "供应商跟催";
+  if (/加班|增班/.test(text)) return "加班增产";
+  if (/外协/.test(text)) return "外协处理";
+  if (/排程|协调|顺序/.test(text)) return "调整排程";
+  if (/客户|沟通|通知/.test(text)) return "客户沟通";
+  return "其他处理";
+}
+
+function defaultNextOwnerForRisk(value = "") {
+  const text = String(value || "");
+  if (/物料|断供/.test(text)) return "采购/仓库";
+  if (/产能|工序|冲压/.test(text)) return "生产/工段长";
+  if (/交期|客户/.test(text)) return "销售/跟单";
+  if (/报价/.test(text)) return "销售/报价";
+  return "责任部门";
 }
 
 function defaultInterventionNote(params = {}) {
@@ -5328,7 +5361,7 @@ function interventionLogPage(body) {
     ],
     panels: [
       interventionFilterPanel(body.filters),
-      modulePanel("干预记录", body.sections.rows, ["created_at", "risk_level", "risk_type", "related_no", "action_label", "intervention_state", "problem", "note", "actor"], { fullWidth: true, limit: "all", tall: true }),
+      modulePanel("干预记录", body.sections.rows, ["created_at", "risk_level", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "problem", "note", "actor"], { fullWidth: true, limit: "all", tall: true }),
       modulePanel("风险类型汇总", body.sections.by_risk_type, ["risk_type", "actions"])
     ],
     notes: body.notes,
@@ -5369,7 +5402,7 @@ function interventionFilterPanel(filters = {}) {
 
 function interventionLogCsv(body) {
   const lines = [];
-  appendCsvSection(lines, "干预记录", tableRowsForCsv(body.sections.rows, ["created_at", "risk_level", "risk_type", "related_no", "action_label", "intervention_state", "problem", "note", "actor"]));
+  appendCsvSection(lines, "干预记录", tableRowsForCsv(body.sections.rows, ["created_at", "risk_level", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "problem", "note", "actor"]));
   appendCsvSection(lines, "风险类型汇总", tableRowsForCsv(body.sections.by_risk_type, ["risk_type", "actions"]));
   return lines.map((row) => row.map(csvCell).join(",")).join("\r\n");
 }
@@ -5396,7 +5429,7 @@ function reportCenterPage(body) {
     panels: [
       modulePanel("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "latest_actor", "next_action", "meeting_focus", "intervention_log", "morning_action"], { fullWidth: true }),
       modulePanel("风险闭环待办", body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention", "responsible_role", "action"], { fullWidth: true }),
-      modulePanel("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "note", "actor"], { fullWidth: true }),
+      modulePanel("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "note", "actor"], { fullWidth: true }),
       modulePanel("订单状态样本", body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]),
       modulePanel("待报价项目", body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"]),
       modulePanel("低库存预警", body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"])
@@ -5481,7 +5514,7 @@ function reportPrintPage(body) {
     </section>
     ${printTable("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "latest_actor", "next_action", "meeting_focus"])}
     ${printTable("风险闭环待办", body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"])}
-    ${printTable("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "note", "actor"])}
+    ${printTable("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "note", "actor"])}
     ${printTable("订单状态样本", body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"])}
     ${printTable("待报价项目", body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"])}
     ${printTable("低库存预警", body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"])}
@@ -5525,7 +5558,7 @@ function reportCenterCsv(body) {
   ]);
   appendCsvSection(lines, "今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "latest_actor", "next_action", "meeting_focus"]));
   appendCsvSection(lines, "风险闭环待办", tableRowsForCsv(body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"]));
-  appendCsvSection(lines, "今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "note", "actor"]));
+  appendCsvSection(lines, "今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "note", "actor"]));
   appendCsvSection(lines, "订单状态样本", tableRowsForCsv(body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]));
   appendCsvSection(lines, "待报价项目", tableRowsForCsv(body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"]));
   appendCsvSection(lines, "低库存预警", tableRowsForCsv(body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"]));
@@ -5573,7 +5606,7 @@ function reportCenterExcel(body) {
   ${excelTable("指标汇总", summaryRows)}
   ${excelTable("今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "latest_actor", "next_action", "meeting_focus"]))}
   ${excelTable("风险闭环待办", tableRowsForCsv(body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"]))}
-  ${excelTable("今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "note", "actor"]))}
+  ${excelTable("今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "note", "actor"]))}
   ${excelTable("订单状态样本", tableRowsForCsv(body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]))}
   ${excelTable("待报价项目", tableRowsForCsv(body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"]))}
   ${excelTable("低库存预警", tableRowsForCsv(body.sections.low_stock, ["product_code", "product_name", "warehouse", "available_qty", "stock_qty"]))}
