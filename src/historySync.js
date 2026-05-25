@@ -1,6 +1,6 @@
 import { normalizeTable, toBusinessView } from "./erpClient.js";
 import { mapFinanceRowForLocal, mapQuoteFollowupForLocal } from "./localAnalytics.js";
-import { upsertFinanceRecords, upsertProcedurePlans, upsertProcessReports, upsertQuoteFollowups, upsertSalesOrders } from "./localDb.js";
+import { upsertFinanceRecords, upsertInventoryDetails, upsertInventorySummary, upsertProcedurePlans, upsertProcessReports, upsertQuoteFollowups, upsertSalesOrders, upsertWarehouses } from "./localDb.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
 import { mapProcedurePlan, mapSalesOrder } from "./syncService.js";
 
@@ -30,6 +30,30 @@ export const HISTORY_SYNC_SOURCES = [
     dateSupport: "日期参数暂不生效，按页翻取历史汇报",
     suggestedRange: "近90天工序汇报明细，按页小批量补齐",
     riskNote: "每次只拉一页5条，通过页码回溯历史，写入 SQLite upsert。"
+  },
+  {
+    source: "warehouses",
+    label: "仓库清单",
+    viewName: "warehouses",
+    dateSupport: "仓库主数据不按日期过滤",
+    suggestedRange: "全量仓库清单，重点确认钽铌库、废料库、原料库、半成品库、成品库",
+    riskNote: "每次只拉一页20条仓库主数据，写入 SQLite upsert。"
+  },
+  {
+    source: "inventory_summary",
+    label: "库存余额汇总",
+    viewName: "inventory",
+    dateSupport: "当前库存快照，不是90天流水",
+    suggestedRange: "按仓库逐个同步当前库存余额，重点覆盖钽铌库、废料库等关键仓库",
+    riskNote: "每次只拉一页20条库存余额，可带 cks 指定仓库，写入 SQLite upsert。"
+  },
+  {
+    source: "inventory_details",
+    label: "库存明细批次",
+    viewName: "inventory_details",
+    dateSupport: "可按入库/添加日期字段抽样，当前先按页和仓库同步",
+    suggestedRange: "按仓库逐个同步库存明细批次，后续结合入库流水判断90天覆盖",
+    riskNote: "每次只拉一页20条库存明细，可带 cks 指定仓库，写入 SQLite upsert。"
   },
   {
     source: "quote_projects",
@@ -71,7 +95,8 @@ export function historySyncParams(options = {}) {
     pageIndex,
     pageSize,
     range,
-    searchKey: options.searchKey || ""
+    searchKey: options.searchKey || "",
+    cks: options.cks || ""
   });
   return {
     ...sourceConfig,
@@ -208,6 +233,27 @@ export async function runHistorySyncBatch(client, options = {}) {
     upsertProcessReports(rows);
     return historyBatchResult(plan, rows.length);
   }
+  if (plan.source === "warehouses") {
+    const response = await client.queryView(plan.viewName, plan.erpParams);
+    const table = normalizeTable(response);
+    const rows = toBusinessView("warehouses", table).rows.map((row, index) => mapWarehouseForLocal(row, index, plan));
+    upsertWarehouses(rows);
+    return historyBatchResult(plan, rows.length);
+  }
+  if (plan.source === "inventory_summary") {
+    const response = await client.queryView(plan.viewName, plan.erpParams);
+    const table = normalizeTable(response);
+    const rows = toBusinessView("inventory", table).rows.map((row, index) => mapInventoryForLocal(row, index, plan, "summary"));
+    upsertInventorySummary(rows);
+    return historyBatchResult(plan, rows.length);
+  }
+  if (plan.source === "inventory_details") {
+    const response = await client.queryView(plan.viewName, plan.erpParams);
+    const table = normalizeTable(response);
+    const rows = toBusinessView("inventory_details", table).rows.map((row, index) => mapInventoryForLocal(row, index, plan, "detail"));
+    upsertInventoryDetails(rows);
+    return historyBatchResult(plan, rows.length);
+  }
   if (plan.source === "quote_projects") {
     const pending = await queryPendingQuotes(client, plan.erpParams);
     const today = options.today ? new Date(options.today) : new Date();
@@ -268,7 +314,7 @@ function historyBatchResult(plan, rowsSynced) {
   };
 }
 
-function historyErpParams(source, { pageIndex, pageSize, range, searchKey }) {
+function historyErpParams(source, { pageIndex, pageSize, range, searchKey, cks }) {
   if (source === "sales_orders") {
     return {
       pageindex: pageIndex,
@@ -290,6 +336,21 @@ function historyErpParams(source, { pageIndex, pageSize, range, searchKey }) {
       page_index: pageIndex,
       page_size: pageSize,
       searchKey
+    };
+  }
+  if (source === "warehouses") {
+    return {
+      page_index: pageIndex,
+      page_size: pageSize,
+      Sort1: searchKey
+    };
+  }
+  if (source === "inventory_summary" || source === "inventory_details") {
+    return {
+      page_index: pageIndex,
+      page_size: pageSize,
+      title: searchKey,
+      cks
     };
   }
   if (source === "quote_projects") {
@@ -344,6 +405,73 @@ function mapProcessReport(row, index, plan) {
     raw: row,
     synced_at: new Date().toISOString()
   };
+}
+
+function mapWarehouseForLocal(row, index, plan) {
+  return {
+    warehouse_id: String(row.warehouse_id || `${plan.pageIndex}-${index}`),
+    name: row.name || "",
+    full_path: row.full_path || "",
+    root_path: row.root_path || "",
+    status: row.status || "",
+    raw: row.raw || row,
+    synced_at: new Date().toISOString()
+  };
+}
+
+function mapInventoryForLocal(row, index, plan, kind) {
+  const inventoryId = stableInventoryId(row, index, plan, kind);
+  return {
+    inventory_id: inventoryId,
+    product_code: row.product_code || "",
+    product_name: row.product_name || "",
+    product_model: row.product_model || "",
+    product_category: row.product_category || "",
+    unit: row.unit || "",
+    warehouse: row.warehouse || plan.erpParams.cks || "",
+    batch_no: row.batch_no || "",
+    serial_no: row.serial_no || "",
+    stock_qty: parseNumber(row.stock_qty),
+    available_qty: parseNumber(row.available_qty),
+    frozen_qty: parseNumber(row.frozen_qty),
+    reserved_qty: parseNumber(row.reserved_qty),
+    in_transit_qty: parseNumber(row.in_transit_qty),
+    production_date: row.production_date || "",
+    expiry_date: row.expiry_date || "",
+    package_text: row.package || "",
+    pieces: parseNumber(row.pieces),
+    spec: row.spec || "",
+    finished_weight: parseNumber(row.finished_weight),
+    process: row.process || "",
+    location: row.location || "",
+    stock_age_days: parseNumber(row.stock_age_days),
+    supplier: row.supplier || "",
+    inbound_order: row.inbound_order || "",
+    initial_inbound_time: row.initial_inbound_time || "",
+    inbound_confirmed_time: row.inbound_confirmed_time || "",
+    remark: row.remark || "",
+    raw: row.raw || row,
+    synced_at: new Date().toISOString()
+  };
+}
+
+function stableInventoryId(row, index, plan, kind) {
+  const raw = row.raw || {};
+  const explicitId = raw.id || raw.ID || raw.Ord || raw.ord || raw["库存ID"] || raw["明细ID"];
+  if (explicitId) {
+    return `${kind}-${explicitId}`;
+  }
+  const parts = [
+    kind,
+    row.product_code,
+    row.product_name,
+    row.product_model,
+    row.warehouse || plan.erpParams.cks,
+    row.batch_no,
+    row.serial_no,
+    row.inbound_order
+  ].map((part) => String(part || "").trim()).filter(Boolean);
+  return parts.length > 1 ? parts.join("|") : `${kind}-${plan.pageIndex}-${index}`;
 }
 
 function parseNumber(value) {

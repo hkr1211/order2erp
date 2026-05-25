@@ -76,6 +76,30 @@ test("historySyncParams omits process report dates so paging can reach older his
   assert.equal(params.erpParams.dateEnd, undefined);
 });
 
+test("historySyncParams supports warehouse scoped inventory tables", () => {
+  const summary = historySyncParams({
+    source: "inventory_summary",
+    pageindex: 2,
+    pagesize: 50,
+    cks: "钽铌库"
+  });
+  const details = historySyncParams({
+    source: "inventory_details",
+    pageindex: 3,
+    pagesize: 50,
+    cks: "废料库"
+  });
+
+  assert.equal(summary.viewName, "inventory");
+  assert.equal(summary.pageSize, 20);
+  assert.equal(summary.erpParams.page_index, 2);
+  assert.equal(summary.erpParams.page_size, 20);
+  assert.equal(summary.erpParams.cks, "钽铌库");
+  assert.equal(details.viewName, "inventory_details");
+  assert.equal(details.erpParams.page_index, 3);
+  assert.equal(details.erpParams.cks, "废料库");
+});
+
 test("historySyncDryRun does not access ERP and shows request parameters", () => {
   const dryRun = historySyncDryRun({
     source: "sales_orders",

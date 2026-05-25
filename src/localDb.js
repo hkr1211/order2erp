@@ -158,6 +158,68 @@ export function initLocalDb(dbPath = process.env.PMC_DB_PATH || DEFAULT_DB_PATH)
       synced_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS erp_warehouses (
+      warehouse_id TEXT PRIMARY KEY,
+      name TEXT,
+      full_path TEXT,
+      root_path TEXT,
+      status TEXT,
+      raw_json TEXT NOT NULL,
+      synced_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS erp_inventory_summary (
+      inventory_id TEXT PRIMARY KEY,
+      product_code TEXT,
+      product_name TEXT,
+      product_model TEXT,
+      product_category TEXT,
+      unit TEXT,
+      warehouse TEXT,
+      batch_no TEXT,
+      serial_no TEXT,
+      stock_qty REAL,
+      available_qty REAL,
+      frozen_qty REAL,
+      reserved_qty REAL,
+      in_transit_qty REAL,
+      raw_json TEXT NOT NULL,
+      synced_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS erp_inventory_details (
+      inventory_id TEXT PRIMARY KEY,
+      product_code TEXT,
+      product_name TEXT,
+      product_model TEXT,
+      product_category TEXT,
+      unit TEXT,
+      warehouse TEXT,
+      batch_no TEXT,
+      serial_no TEXT,
+      stock_qty REAL,
+      available_qty REAL,
+      frozen_qty REAL,
+      reserved_qty REAL,
+      in_transit_qty REAL,
+      production_date TEXT,
+      expiry_date TEXT,
+      package_text TEXT,
+      pieces REAL,
+      spec TEXT,
+      finished_weight REAL,
+      process TEXT,
+      location TEXT,
+      stock_age_days REAL,
+      supplier TEXT,
+      inbound_order TEXT,
+      initial_inbound_time TEXT,
+      inbound_confirmed_time TEXT,
+      remark TEXT,
+      raw_json TEXT NOT NULL,
+      synced_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS erp_quote_followups (
       quote_no TEXT PRIMARY KEY,
       priority TEXT,
@@ -752,6 +814,27 @@ export function replaceMaterialAlerts(rows) {
   });
 }
 
+export function upsertWarehouses(rows) {
+  const database = initLocalDb();
+  runInTransaction(database, () => {
+    insertWarehouses(database, rows);
+  });
+}
+
+export function upsertInventorySummary(rows) {
+  const database = initLocalDb();
+  runInTransaction(database, () => {
+    insertInventorySummary(database, rows);
+  });
+}
+
+export function upsertInventoryDetails(rows) {
+  const database = initLocalDb();
+  runInTransaction(database, () => {
+    insertInventoryDetails(database, rows);
+  });
+}
+
 export function replaceQuoteFollowups(rows) {
   const database = initLocalDb();
   runInTransaction(database, () => {
@@ -868,6 +951,39 @@ function insertProcessReports(database, rows) {
   `);
   for (const row of rows) {
     stmt.run(row.report_id, row.subject, row.product_name, row.procedure_name, row.batch_no, row.serial_no, row.report_qty, row.work_hours, row.operator, row.machine, row.report_result, row.scrap_reason, row.creator, row.added_at, row.audit_status, JSON.stringify(row.raw || row), row.synced_at);
+  }
+}
+
+function insertWarehouses(database, rows) {
+  const stmt = database.prepare(`
+    INSERT OR REPLACE INTO erp_warehouses
+    (warehouse_id, name, full_path, root_path, status, raw_json, synced_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const row of rows) {
+    stmt.run(row.warehouse_id, row.name, row.full_path, row.root_path, row.status, JSON.stringify(row.raw || row), row.synced_at);
+  }
+}
+
+function insertInventorySummary(database, rows) {
+  const stmt = database.prepare(`
+    INSERT OR REPLACE INTO erp_inventory_summary
+    (inventory_id, product_code, product_name, product_model, product_category, unit, warehouse, batch_no, serial_no, stock_qty, available_qty, frozen_qty, reserved_qty, in_transit_qty, raw_json, synced_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const row of rows) {
+    stmt.run(row.inventory_id, row.product_code, row.product_name, row.product_model, row.product_category, row.unit, row.warehouse, row.batch_no, row.serial_no, row.stock_qty, row.available_qty, row.frozen_qty, row.reserved_qty, row.in_transit_qty, JSON.stringify(row.raw || row), row.synced_at);
+  }
+}
+
+function insertInventoryDetails(database, rows) {
+  const stmt = database.prepare(`
+    INSERT OR REPLACE INTO erp_inventory_details
+    (inventory_id, product_code, product_name, product_model, product_category, unit, warehouse, batch_no, serial_no, stock_qty, available_qty, frozen_qty, reserved_qty, in_transit_qty, production_date, expiry_date, package_text, pieces, spec, finished_weight, process, location, stock_age_days, supplier, inbound_order, initial_inbound_time, inbound_confirmed_time, remark, raw_json, synced_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const row of rows) {
+    stmt.run(row.inventory_id, row.product_code, row.product_name, row.product_model, row.product_category, row.unit, row.warehouse, row.batch_no, row.serial_no, row.stock_qty, row.available_qty, row.frozen_qty, row.reserved_qty, row.in_transit_qty, row.production_date, row.expiry_date, row.package_text, row.pieces, row.spec, row.finished_weight, row.process, row.location, row.stock_age_days, row.supplier, row.inbound_order, row.initial_inbound_time, row.inbound_confirmed_time, row.remark, JSON.stringify(row.raw || row), row.synced_at);
   }
 }
 
