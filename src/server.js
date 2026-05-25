@@ -4399,7 +4399,7 @@ async function queryReportCenter(params = {}) {
   };
 }
 
-function modulePage({ title, subtitle, summary = [], panels = [], notes = [], actions = [] }) {
+function modulePage({ title, subtitle, summary = [], panels = [], notes = [], actions = [], afterMain = "" }) {
   const visibleActions = actions.filter(([label]) => !/JSON|Jason/i.test(String(label || "")));
   return `<!doctype html>
 <html lang="zh-CN">
@@ -4473,6 +4473,7 @@ function modulePage({ title, subtitle, summary = [], panels = [], notes = [], ac
     <section class="grid">${panels.join("")}</section>
     <section class="notes">${notes.map((note) => `<div>${escapeHtml(note)}</div>`).join("")}</section>
   </main>
+  ${afterMain}
 </body>
 </html>`;
 }
@@ -4480,6 +4481,10 @@ function modulePage({ title, subtitle, summary = [], panels = [], notes = [], ac
 function renderModuleMetric(label, value, href = "") {
   const content = `<span>${escapeHtml(label)}</span><strong>${escapeHtml(value ?? "")}</strong>`;
   return href ? `<a class="metric" href="${escapeHtml(href)}">${content}</a>` : `<div class="metric">${content}</div>`;
+}
+
+function cleanUrlScript(pathname) {
+  return `<script>if (window.history && window.history.replaceState) window.history.replaceState(null, "", ${JSON.stringify(pathname)});</script>`;
 }
 
 function modulePanel(title, rows, columns, options = {}) {
@@ -6193,7 +6198,8 @@ function userRolesPage(body) {
       ["系统状态", "/system"],
       ["跟单工作台", "/followup"],
       ["角色工作台", "/roles"]
-    ]
+    ],
+    afterMain: body.saved ? cleanUrlScript("/user-roles") : ""
   });
 }
 
