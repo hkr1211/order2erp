@@ -1395,6 +1395,8 @@ function labelFor(key) {
     result_type: "处理结果",
     promised_date: "承诺日期",
     next_owner: "下一责任人",
+    closure_quality: "闭环质量",
+    closure_gap: "缺失项",
     review_focus: "复盘重点",
     recommendation: "改进建议",
     response_sla: "响应时限",
@@ -1767,9 +1769,10 @@ function pmcConsolePage(body, params = {}) {
     </section>
     <div class="zone-title">干预复盘</div>
     <section class="risk-board">
-      ${pmcTablePanel("最近处理记录", interventions.recent_actions, ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "note", "actor"], "neutral")}
+      ${pmcTablePanel("最近处理记录", interventions.recent_actions, ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "closure_quality", "closure_gap", "result_type", "promised_date", "next_owner", "note", "actor"], "neutral")}
       ${pmcTablePanel("处理类型汇总", interventions.by_risk_type, ["risk_type", "actions"], "neutral")}
       ${pmcTablePanel("处理结果汇总", interventions.by_result_type, ["result_type", "actions"], "neutral")}
+      ${pmcTablePanel("闭环质量汇总", interventions.by_closure_quality, ["closure_quality", "actions"], "neutral")}
       ${pmcTablePanel("改进建议", interventions.improvement_suggestions, ["result_type", "actions", "review_focus", "recommendation"], "neutral")}
     </section>
     <div class="zone-title">订单作战地图</div>
@@ -2257,7 +2260,7 @@ function pmcInterventionPage(params = {}, saved = null) {
     <section class="panel" style="margin-top:12px;"><h2>最近处理记录 <span class="tag">${recentRows.length}</span></h2>
       ${
         recentRows.length
-          ? `<table><thead><tr>${["created_at", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "note", "actor"].map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${recentRows.map((row) => `<tr>${["created_at", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "note", "actor"].map((column) => `<td>${formatCell(row[column])}</td>`).join("")}</tr>`).join("")}</tbody></table>`
+          ? `<table><thead><tr>${["created_at", "risk_type", "related_no", "action_label", "intervention_state", "closure_quality", "closure_gap", "result_type", "promised_date", "next_owner", "note", "actor"].map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead><tbody>${recentRows.map((row) => `<tr>${["created_at", "risk_type", "related_no", "action_label", "intervention_state", "closure_quality", "closure_gap", "result_type", "promised_date", "next_owner", "note", "actor"].map((column) => `<td>${formatCell(row[column])}</td>`).join("")}</tr>`).join("")}</tbody></table>`
           : `<div class="body">当前关联单号还没有本地处理记录。</div>`
       }
     </section>
@@ -4430,6 +4433,7 @@ async function queryReportCenter(params = {}) {
             responded_tasks: exceptions.summary.responded_tasks || 0,
             today_interventions: interventionSummary.today_actions || 0,
             result_types: interventionSummary.by_result_type.length,
+            incomplete_closures: interventionSummary.incomplete_closures,
             suggestions: interventionSummary.improvement_suggestions.length,
             morning_brief_items: (enrichedConsoleBody.sections.morning_brief || []).length
           },
@@ -4441,6 +4445,7 @@ async function queryReportCenter(params = {}) {
             exception_tasks: exceptions.sections.tasks,
             intervention_actions: interventionSummary.recent_actions,
             intervention_result_types: interventionSummary.by_result_type,
+            intervention_closure_quality: interventionSummary.by_closure_quality,
             improvement_suggestions: interventionSummary.improvement_suggestions
           },
           notes: [
@@ -4489,6 +4494,7 @@ async function queryReportCenter(params = {}) {
         responded_tasks: exceptions.summary.responded_tasks || 0,
         today_interventions: interventionSummary.today_actions || 0,
         result_types: interventionSummary.by_result_type.length,
+        incomplete_closures: interventionSummary.incomplete_closures,
         suggestions: interventionSummary.improvement_suggestions.length,
         morning_brief_items: (enrichedConsoleBody.sections.morning_brief || []).length
       },
@@ -4500,6 +4506,7 @@ async function queryReportCenter(params = {}) {
         exception_tasks: exceptions.sections.tasks,
         intervention_actions: interventionSummary.recent_actions,
         intervention_result_types: interventionSummary.by_result_type,
+        intervention_closure_quality: interventionSummary.by_closure_quality,
         improvement_suggestions: interventionSummary.improvement_suggestions
       },
       notes: [
@@ -5340,12 +5347,14 @@ function queryInterventionLogCenter(params = {}) {
         total_actions: summary.total_actions,
         risk_types: summary.by_risk_type.length,
         result_types: summary.by_result_type.length,
+        incomplete_closures: summary.incomplete_closures,
         suggestions: summary.improvement_suggestions.length
       },
       sections: {
         rows,
         by_risk_type: summary.by_risk_type,
         by_result_type: summary.by_result_type,
+        by_closure_quality: summary.by_closure_quality,
         improvement_suggestions: summary.improvement_suggestions
       },
       notes: [
@@ -5375,13 +5384,15 @@ function interventionLogPage(body) {
       ["累计处理", body.summary.total_actions],
       ["风险类型", body.summary.risk_types],
       ["处理结果", body.summary.result_types],
+      ["闭环不完整", body.summary.incomplete_closures],
       ["改进建议", body.summary.suggestions]
     ],
     panels: [
       interventionFilterPanel(body.filters),
-      modulePanel("干预记录", body.sections.rows, ["created_at", "risk_level", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "problem", "note", "actor"], { fullWidth: true, limit: "all", tall: true }),
+      modulePanel("干预记录", body.sections.rows, ["created_at", "risk_level", "risk_type", "related_no", "action_label", "intervention_state", "closure_quality", "closure_gap", "result_type", "promised_date", "next_owner", "problem", "note", "actor"], { fullWidth: true, limit: "all", tall: true }),
       modulePanel("风险类型汇总", body.sections.by_risk_type, ["risk_type", "actions"]),
       modulePanel("处理结果汇总", body.sections.by_result_type, ["result_type", "actions"]),
+      modulePanel("闭环质量汇总", body.sections.by_closure_quality, ["closure_quality", "actions"]),
       modulePanel("改进建议", body.sections.improvement_suggestions, ["result_type", "actions", "review_focus", "recommendation"], { fullWidth: true })
     ],
     notes: body.notes,
@@ -5422,9 +5433,10 @@ function interventionFilterPanel(filters = {}) {
 
 function interventionLogCsv(body) {
   const lines = [];
-  appendCsvSection(lines, "干预记录", tableRowsForCsv(body.sections.rows, ["created_at", "risk_level", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "problem", "note", "actor"]));
+  appendCsvSection(lines, "干预记录", tableRowsForCsv(body.sections.rows, ["created_at", "risk_level", "risk_type", "related_no", "action_label", "intervention_state", "closure_quality", "closure_gap", "result_type", "promised_date", "next_owner", "problem", "note", "actor"]));
   appendCsvSection(lines, "风险类型汇总", tableRowsForCsv(body.sections.by_risk_type, ["risk_type", "actions"]));
   appendCsvSection(lines, "处理结果汇总", tableRowsForCsv(body.sections.by_result_type, ["result_type", "actions"]));
+  appendCsvSection(lines, "闭环质量汇总", tableRowsForCsv(body.sections.by_closure_quality, ["closure_quality", "actions"]));
   appendCsvSection(lines, "改进建议", tableRowsForCsv(body.sections.improvement_suggestions, ["result_type", "actions", "review_focus", "recommendation"]));
   return lines.map((row) => row.map(csvCell).join(",")).join("\r\n");
 }
@@ -5447,14 +5459,16 @@ function reportCenterPage(body) {
       ["已响应风险", body.summary.responded_tasks || 0],
       ["今日处理", body.summary.today_interventions || 0],
       ["处理结果", body.summary.result_types || 0],
+      ["闭环不完整", body.summary.incomplete_closures || 0],
       ["改进建议", body.summary.suggestions || 0],
       ["早会重点", body.summary.morning_brief_items || 0]
     ],
     panels: [
       modulePanel("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "latest_actor", "next_action", "meeting_focus", "intervention_log", "morning_action"], { fullWidth: true }),
       modulePanel("风险闭环待办", body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention", "responsible_role", "action"], { fullWidth: true }),
-      modulePanel("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "note", "actor"], { fullWidth: true }),
+      modulePanel("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "closure_quality", "closure_gap", "result_type", "promised_date", "next_owner", "note", "actor"], { fullWidth: true }),
       modulePanel("处理结果汇总", body.sections.intervention_result_types || [], ["result_type", "actions"]),
+      modulePanel("闭环质量汇总", body.sections.intervention_closure_quality || [], ["closure_quality", "actions"]),
       modulePanel("改进建议", body.sections.improvement_suggestions || [], ["result_type", "actions", "review_focus", "recommendation"], { fullWidth: true }),
       modulePanel("订单状态样本", body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]),
       modulePanel("待报价项目", body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"]),
@@ -5540,8 +5554,9 @@ function reportPrintPage(body) {
     </section>
     ${printTable("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "latest_actor", "next_action", "meeting_focus"])}
     ${printTable("风险闭环待办", body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"])}
-    ${printTable("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "note", "actor"])}
+    ${printTable("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "closure_quality", "closure_gap", "result_type", "promised_date", "next_owner", "note", "actor"])}
     ${printTable("处理结果汇总", body.sections.intervention_result_types || [], ["result_type", "actions"])}
+    ${printTable("闭环质量汇总", body.sections.intervention_closure_quality || [], ["closure_quality", "actions"])}
     ${printTable("改进建议", body.sections.improvement_suggestions || [], ["result_type", "actions", "review_focus", "recommendation"])}
     ${printTable("订单状态样本", body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"])}
     ${printTable("待报价项目", body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"])}
@@ -5582,14 +5597,16 @@ function reportCenterCsv(body) {
       已响应风险: body.summary.responded_tasks || 0,
       今日处理: body.summary.today_interventions || 0,
       处理结果: body.summary.result_types || 0,
+      闭环不完整: body.summary.incomplete_closures || 0,
       改进建议: body.summary.suggestions || 0,
       早会重点: body.summary.morning_brief_items || 0
     })
   ]);
   appendCsvSection(lines, "今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "latest_actor", "next_action", "meeting_focus"]));
   appendCsvSection(lines, "风险闭环待办", tableRowsForCsv(body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"]));
-  appendCsvSection(lines, "今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "note", "actor"]));
+  appendCsvSection(lines, "今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "closure_quality", "closure_gap", "result_type", "promised_date", "next_owner", "note", "actor"]));
   appendCsvSection(lines, "处理结果汇总", tableRowsForCsv(body.sections.intervention_result_types || [], ["result_type", "actions"]));
+  appendCsvSection(lines, "闭环质量汇总", tableRowsForCsv(body.sections.intervention_closure_quality || [], ["closure_quality", "actions"]));
   appendCsvSection(lines, "改进建议", tableRowsForCsv(body.sections.improvement_suggestions || [], ["result_type", "actions", "review_focus", "recommendation"]));
   appendCsvSection(lines, "订单状态样本", tableRowsForCsv(body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]));
   appendCsvSection(lines, "待报价项目", tableRowsForCsv(body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"]));
@@ -5614,6 +5631,7 @@ function reportCenterExcel(body) {
     ["已响应风险", body.summary.responded_tasks || 0],
     ["今日处理", body.summary.today_interventions || 0],
     ["处理结果", body.summary.result_types || 0],
+    ["闭环不完整", body.summary.incomplete_closures || 0],
     ["改进建议", body.summary.suggestions || 0],
     ["早会重点", body.summary.morning_brief_items || 0]
   ];
@@ -5640,8 +5658,9 @@ function reportCenterExcel(body) {
   ${excelTable("指标汇总", summaryRows)}
   ${excelTable("今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "latest_actor", "next_action", "meeting_focus"]))}
   ${excelTable("风险闭环待办", tableRowsForCsv(body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"]))}
-  ${excelTable("今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "result_type", "promised_date", "next_owner", "note", "actor"]))}
+  ${excelTable("今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "closure_quality", "closure_gap", "result_type", "promised_date", "next_owner", "note", "actor"]))}
   ${excelTable("处理结果汇总", tableRowsForCsv(body.sections.intervention_result_types || [], ["result_type", "actions"]))}
+  ${excelTable("闭环质量汇总", tableRowsForCsv(body.sections.intervention_closure_quality || [], ["closure_quality", "actions"]))}
   ${excelTable("改进建议", tableRowsForCsv(body.sections.improvement_suggestions || [], ["result_type", "actions", "review_focus", "recommendation"]))}
   ${excelTable("订单状态样本", tableRowsForCsv(body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]))}
   ${excelTable("待报价项目", tableRowsForCsv(body.sections.pending_quotes, ["project_no", "title", "customer", "project_stage", "estimated_amount"]))}

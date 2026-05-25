@@ -317,7 +317,8 @@ export function latestPmcInterventions({ limit = 20, related_no = "", risk_type 
        ORDER BY created_at DESC, id DESC
        LIMIT ?`
     )
-    .all(...values, safeLimit);
+    .all(...values, safeLimit)
+    .map(withClosureQuality);
 }
 
 export function latestPmcInterventionsByRelatedNos(relatedNos = []) {
@@ -334,7 +335,8 @@ export function latestPmcInterventionsByRelatedNos(relatedNos = []) {
        WHERE related_no IN (${placeholders})
        ORDER BY created_at DESC, id DESC`
     )
-    .all(...keys);
+    .all(...keys)
+    .map(withClosureQuality);
   const latestByNo = new Map();
   for (const row of rows) {
     if (!latestByNo.has(row.related_no)) {
@@ -434,7 +436,8 @@ export function pmcInterventionSummary({ today = new Date(), limit = 8 } = {}) {
        ORDER BY created_at DESC, id DESC
        LIMIT ?`
     )
-    .all(safeLimit);
+    .all(safeLimit)
+    .map(withClosureQuality);
   const byRiskType = database
     .prepare(
       `SELECT COALESCE(NULLIF(risk_type, ''), '未分类') AS risk_type, COUNT(*) AS actions
@@ -451,14 +454,66 @@ export function pmcInterventionSummary({ today = new Date(), limit = 8 } = {}) {
        ORDER BY actions DESC, result_type`
     )
     .all();
+  const qualityRows = database
+    .prepare(
+      `SELECT intervention_state, result_type, promised_date, next_owner, note
+       FROM pmc_intervention_logs`
+    )
+    .all()
+    .map(withClosureQuality);
+  const byClosureQuality = interventionQualitySummary(qualityRows);
   return {
     today_actions: todayActions,
     total_actions: totalActions,
     recent_actions: recentActions,
     by_risk_type: byRiskType,
     by_result_type: byResultType,
+    by_closure_quality: byClosureQuality,
+    incomplete_closures: byClosureQuality.find((row) => row.closure_quality === "闭环不完整")?.actions || 0,
     improvement_suggestions: interventionImprovementSuggestions(byResultType)
   };
+}
+
+function withClosureQuality(row = {}) {
+  const quality = interventionClosureQuality(row);
+  return {
+    ...row,
+    closure_quality: quality.closure_quality,
+    closure_gap: quality.closure_gap
+  };
+}
+
+function interventionClosureQuality(row = {}) {
+  const state = row.intervention_state || "";
+  const gaps = [];
+  if (!row.result_type) gaps.push("处理结果");
+  if (!row.promised_date) gaps.push("承诺日期");
+  if (!row.next_owner) gaps.push("下一责任人");
+  if (!row.note) gaps.push("处理备注");
+  if (state === "已关闭") {
+    return gaps.length
+      ? { closure_quality: "闭环不完整", closure_gap: gaps.join("、") }
+      : { closure_quality: "闭环完整", closure_gap: "" };
+  }
+  if (state === "已响应") {
+    return gaps.length
+      ? { closure_quality: "已响应待补充", closure_gap: gaps.join("、") }
+      : { closure_quality: "已响应待闭环", closure_gap: "" };
+  }
+  return gaps.length
+    ? { closure_quality: "处理中待明确", closure_gap: gaps.join("、") }
+    : { closure_quality: "处理中已明确", closure_gap: "" };
+}
+
+function interventionQualitySummary(rows = []) {
+  const counts = new Map();
+  for (const row of rows) {
+    const key = row.closure_quality || "未分类";
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([closure_quality, actions]) => ({ closure_quality, actions }))
+    .sort((a, b) => b.actions - a.actions || a.closure_quality.localeCompare(b.closure_quality, "zh-CN"));
 }
 
 function interventionImprovementSuggestions(byResultType = []) {

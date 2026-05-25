@@ -162,6 +162,46 @@ test("PMC interventions persist structured handling result", async () => {
   assert.match(latest.payload_json, /"result_type":"调拨库存"/);
 });
 
+test("PMC interventions expose closure quality for management review", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pmc-intervention-quality-"));
+  process.env.PMC_DB_PATH = path.join(tempDir, "pmc.db");
+  const modulePath = `../src/localDb.js?quality=${Date.now()}`;
+  const { latestPmcInterventions, pmcInterventionSummary, savePmcIntervention } = await import(modulePath);
+
+  savePmcIntervention({
+    created_at: "2026-05-24T09:00:00.000Z",
+    risk_type: "物料断供",
+    related_no: "PO-INCOMPLETE",
+    action_label: "关闭问题",
+    intervention_state: "已关闭",
+    result_type: "供应商跟催",
+    actor: "PMC"
+  });
+  savePmcIntervention({
+    created_at: "2026-05-24T10:00:00.000Z",
+    risk_type: "交期风险",
+    related_no: "PO-COMPLETE",
+    action_label: "客户通知",
+    intervention_state: "已关闭",
+    result_type: "客户沟通",
+    promised_date: "2026-05-27",
+    next_owner: "销售经理",
+    note: "已确认客户接受新交期",
+    actor: "销售"
+  });
+
+  const rows = latestPmcInterventions({ limit: 10 });
+  const incomplete = rows.find((row) => row.related_no === "PO-INCOMPLETE");
+  const complete = rows.find((row) => row.related_no === "PO-COMPLETE");
+  const summary = pmcInterventionSummary({ today: new Date("2026-05-24T12:00:00+08:00") });
+
+  assert.equal(incomplete.closure_quality, "闭环不完整");
+  assert.match(incomplete.closure_gap, /承诺日期|下一责任人|处理备注/);
+  assert.equal(complete.closure_quality, "闭环完整");
+  assert.equal(summary.by_closure_quality.find((row) => row.closure_quality === "闭环不完整").actions, 1);
+  assert.equal(summary.incomplete_closures, 1);
+});
+
 test("latestPmcInterventions filters by risk type actor and date range", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pmc-intervention-filters-"));
   process.env.PMC_DB_PATH = path.join(tempDir, "pmc.db");
