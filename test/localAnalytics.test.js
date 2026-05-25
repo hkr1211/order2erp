@@ -89,6 +89,18 @@ test("buildUserRoleCandidates summarizes owners across ERP sources", () => {
   assert.equal(byName.get("葛梓").suggested_role, "财务");
 });
 
+test("buildUserRoleCandidates keeps numeric ERP owner ids as mapping candidates", () => {
+  const rows = buildUserRoleCandidates({
+    procedurePlans: [
+      { work_assignment_id: "W-151", owner: "151", product_name: "固定座" }
+    ]
+  });
+
+  assert.equal(rows[0].name, "151");
+  assert.equal(rows[0].suggested_role, "ERP编号待映射");
+  assert.equal(rows[0].procedure_plans, 1);
+});
+
 test("buildLocalPmcDashboard promotes stamping delays into first-screen risks", () => {
   const body = buildLocalPmcDashboard({
     today: new Date("2026-05-24T08:00:00+08:00"),
@@ -224,6 +236,21 @@ test("buildLocalPmcDashboard uses local role config to exclude non-followup owne
 
   assert.equal(owners.includes("王财务"), false);
   assert.equal(owners.includes("赵跟单"), true);
+});
+
+test("buildLocalPmcDashboard excludes numeric ERP owner ids from followup workbench", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-24T08:00:00+08:00"),
+    procedurePlans: [
+      { work_assignment_id: "W-151", owner: "151", product_name: "固定座", procedure_name: "无心磨", remaining_qty: 10, planned_finish_date: "2026-05-28" },
+      { work_assignment_id: "W-ZS", owner: "张三", product_name: "钼板", procedure_name: "冲压", remaining_qty: 10, planned_finish_date: "2026-05-28" }
+    ]
+  });
+
+  const owners = body.sections.owner_workbenches.map((row) => row.owner);
+
+  assert.equal(owners.includes("151"), false);
+  assert.equal(owners.includes("张三"), true);
 });
 
 test("buildLocalPmcDashboard builds an order battle map from procedure stages", () => {

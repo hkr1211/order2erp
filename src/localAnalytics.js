@@ -382,6 +382,7 @@ function userRoleMap(userRoles = []) {
 function isFollowupOwner(owner, roleByOwner = new Map()) {
   const name = String(owner || "").trim();
   if (!name || name === "未分配") return false;
+  if (isNumericOwnerId(name)) return false;
   const role = roleByOwner.get(name);
   if (role && Number(role.is_followup) === 0) return false;
   return true;
@@ -393,6 +394,7 @@ function isCompletedForFollowup(row) {
 }
 
 function suggestedUserRole(row) {
+  if (isNumericOwnerId(row.name)) return "ERP编号待映射";
   if (row.finance_records > 0 && row.active_orders === 0 && row.procedure_plans === 0 && row.quote_followups === 0) return "财务";
   if (row.quote_followups > 0 && row.active_orders === 0 && row.procedure_plans === 0) return "销售/报价";
   if (row.active_orders > 0 || row.procedure_plans > 0) return "跟单员";
@@ -402,6 +404,10 @@ function suggestedUserRole(row) {
 
 function userRoleCandidateWeight(row) {
   return row.active_orders * 5 + row.procedure_plans * 4 + row.quote_followups * 3 + row.finance_records * 2 + row.completed_orders;
+}
+
+function isNumericOwnerId(value) {
+  return /^\d+$/.test(String(value || "").trim());
 }
 
 export function mapFinanceRowForLocal(row, direction, today = new Date()) {
