@@ -11,7 +11,7 @@ import { buildErpHealthSummary, shouldBlockErpBusinessQuery } from "./erpHealth.
 import { setSyncPaused, syncPauseGuard, syncPauseStatus } from "./syncPause.js";
 import { SQLITE_TABLES, buildSqliteCoverage } from "./sqliteCoverage.js";
 import { HISTORY_SYNC_SOURCES, buildHistorySyncProgress, defaultHistoryRange, historySyncDryRun, historySyncParams, historySyncWindowParams, runHistorySyncBatch, runHistorySyncWindow } from "./historySync.js";
-import { buildLocalExceptionCenter, buildLocalFinanceCenter, buildLocalPmcDashboard, quoteOwnerSummaryForLocal } from "./localAnalytics.js";
+import { buildLocalExceptionCenter, buildLocalFinanceCenter, buildLocalPmcDashboard, buildUserRoleCandidates, quoteOwnerSummaryForLocal } from "./localAnalytics.js";
 
 loadEnvFile();
 initLocalDb();
@@ -1399,6 +1399,15 @@ function labelFor(key) {
     edit_action: "编辑",
     delete_action: "删除配置",
     toggle_action: "切换跟单",
+    suggested_role: "建议角色",
+    configured_role: "已配置角色",
+    configured_followup: "已配置跟单",
+    sales_orders: "销售订单",
+    active_orders: "在制订单",
+    completed_orders: "完成订单",
+    procedure_plans: "派工记录",
+    quote_followups: "报价跟进",
+    finance_records: "财务记录",
     days_from_today: "距今天数",
     delivery_date: "交期",
     signed_date: "签订日期",
@@ -6125,11 +6134,21 @@ function systemStatusPage(body) {
 
 function queryUserRoles(saved = null, params = {}) {
   const dashboard = queryLocalPmcDashboard({ local_limit: 5000 });
+  const limit = 5000;
+  const salesOrders = listSalesOrders({ limit });
+  const procedurePlans = listProcedurePlans({ limit });
+  const quoteFollowups = listQuoteFollowups({ limit });
+  const financeRows = listFinanceRecords({ limit });
   const configuredRoles = listLocalUserRoles({ limit: 500 });
   const detectedOwners = dashboard?.sections?.owner_workbenches || [];
   const configuredNames = new Set(configuredRoles.map((row) => row.name));
   const editRole = selectedUserRole(configuredRoles, params);
   const resultNotice = saved || userRoleNoticeFromParams(params);
+  const candidates = buildUserRoleCandidates({ salesOrders, procedurePlans, quoteFollowups, financeRows, userRoles: configuredRoles }).map((row) => ({
+    ...row,
+    role_action: roleSaveHref({ name: row.name, role: row.suggested_role === "财务" ? "财务" : row.suggested_role === "销售/报价" ? "销售/报价" : "跟单员", is_followup: row.suggested_role === "财务" ? 0 : 1, note: `按候选池建议标记：${row.suggested_role}` }),
+    exclude_action: roleSaveHref({ name: row.name, role: row.suggested_role || "非跟单", is_followup: 0, note: "人工标记为非跟单" })
+  }));
   const detectedRows = detectedOwners.map((row) => ({
     name: row.owner,
     detected_from: "跟单负责人池",
@@ -6151,7 +6170,8 @@ function queryUserRoles(saved = null, params = {}) {
       summary: {
         configured_roles: configuredRoles.length,
         non_followup_roles: configuredRoles.filter((row) => Number(row.is_followup) === 0).length,
-        detected_followup_owners: detectedRows.length
+        detected_followup_owners: detectedRows.length,
+        candidate_owners: candidates.length
       },
       sections: {
         configured_roles: configuredRoles.map((row) => ({
@@ -6166,7 +6186,8 @@ function queryUserRoles(saved = null, params = {}) {
           }),
           delete_action: `/user-roles/delete?name=${encodeURIComponent(row.name)}`
         })),
-        detected_followup_owners: detectedRows
+        detected_followup_owners: detectedRows,
+        role_candidates: candidates
       },
       edit_role: editRole,
       notes: [
@@ -6185,12 +6206,14 @@ function userRolesPage(body) {
     summary: [
       ["已配置人员", body.summary.configured_roles],
       ["非跟单人员", body.summary.non_followup_roles],
-      ["识别到跟单负责人", body.summary.detected_followup_owners]
+      ["识别到跟单负责人", body.summary.detected_followup_owners],
+      ["ERP负责人候选", body.summary.candidate_owners]
     ],
     panels: [
       body.saved ? userRoleSavedPanel(body.saved) : "",
       userRoleFormPanel(body.edit_role || body.saved || {}),
       modulePanel("本地角色配置", body.sections.configured_roles, ["name", "role", "followup_text", "note", "updated_at", "edit_action", "toggle_action", "delete_action"], { fullWidth: true }),
+      modulePanel("ERP负责人候选池", body.sections.role_candidates, ["name", "suggested_role", "configured_role", "configured_followup", "sales_orders", "active_orders", "completed_orders", "procedure_plans", "quote_followups", "finance_records", "role_action", "exclude_action"], { fullWidth: true, limit: 80 }),
       modulePanel("当前跟单负责人池", body.sections.detected_followup_owners, ["name", "configured", "active_orders", "shortage_orders", "pending_quotes", "open_procedures", "todos", "role_action", "exclude_action"], { fullWidth: true })
     ].filter(Boolean),
     notes: body.notes,

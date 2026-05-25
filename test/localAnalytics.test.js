@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildLocalFinanceCenter, buildLocalPmcDashboard, mapFinanceRowForLocal, mapQuoteFollowupForLocal } from "../src/localAnalytics.js";
+import { buildLocalFinanceCenter, buildLocalPmcDashboard, buildUserRoleCandidates, mapFinanceRowForLocal, mapQuoteFollowupForLocal } from "../src/localAnalytics.js";
 
 test("buildLocalPmcDashboard summarizes SQLite orders and material alerts", () => {
   const body = buildLocalPmcDashboard({
@@ -56,6 +56,37 @@ test("buildLocalPmcDashboard includes synced quote, procedure, and finance data"
   assert.equal(body.sections.delayed_procedures[0].work_center_name, "冲压工段");
   assert.equal(body.sections.overdue_receivables[0].bill_no, "R-1");
   assert.equal(body.source_status.sqlite_quote_followups.rows, 2);
+});
+
+test("buildUserRoleCandidates summarizes owners across ERP sources", () => {
+  const rows = buildUserRoleCandidates({
+    salesOrders: [
+      { order_no: "SO-OPEN", owner: "张三", status_text: "生产中" },
+      { order_no: "SO-DONE", owner: "葛梓", status_text: "出库完毕 / 发货完毕 / 未收款" }
+    ],
+    procedurePlans: [
+      { work_assignment_id: "W-1", owner: "张三" }
+    ],
+    quoteFollowups: [
+      { quote_no: "Q-1", owner: "李四", quote_status: "待报价" }
+    ],
+    financeRows: [
+      { record_id: "F-1", owner: "葛梓", direction: "receivable" }
+    ],
+    userRoles: [
+      { name: "葛梓", role: "财务经理", is_followup: 0 }
+    ]
+  });
+
+  const byName = new Map(rows.map((row) => [row.name, row]));
+
+  assert.equal(byName.get("张三").suggested_role, "跟单员");
+  assert.equal(byName.get("张三").active_orders, 1);
+  assert.equal(byName.get("张三").procedure_plans, 1);
+  assert.equal(byName.get("李四").suggested_role, "销售/报价");
+  assert.equal(byName.get("葛梓").configured_role, "财务经理");
+  assert.equal(byName.get("葛梓").configured_followup, "否");
+  assert.equal(byName.get("葛梓").suggested_role, "财务");
 });
 
 test("buildLocalPmcDashboard promotes stamping delays into first-screen risks", () => {
