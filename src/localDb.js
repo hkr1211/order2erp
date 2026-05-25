@@ -366,6 +366,15 @@ export function listLocalUserRoles({ limit = 200 } = {}) {
     .all(safeLimit);
 }
 
+export function deleteLocalUserRole(name) {
+  const userName = String(name || "").trim();
+  if (!userName) {
+    throw new Error("name is required");
+  }
+  const result = initLocalDb().prepare("DELETE FROM local_user_roles WHERE name = ?").run(userName);
+  return { name: userName, deleted: result.changes > 0 };
+}
+
 export function pmcInterventionSummary({ today = new Date(), limit = 8 } = {}) {
   const database = initLocalDb();
   const safeLimit = Math.max(1, Math.min(Number(limit) || 8, 50));

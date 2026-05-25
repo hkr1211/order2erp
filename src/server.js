@@ -4,7 +4,7 @@ import { ErpClient, ERP_VIEWS, normalizeTable, toBusinessView } from "./erpClien
 import { queryOrderDeliveryRisks } from "./orderDeliveryRisks.js";
 import { queryOrderShortages } from "./orderShortages.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
-import { finishHistorySyncRun, initLocalDb, latestErpRequestLogs, latestHistorySyncRuns, latestPmcInterventions, latestPmcInterventionsByRelatedNos, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listLocalUserRoles, listMaterialAlerts, listOrderProcedureLinks, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, pmcInterventionSummary, saveLocalUserRole, saveOrderProcedureLink, savePmcIntervention, savePmcSnapshot, startHistorySyncRun, tableStats } from "./localDb.js";
+import { deleteLocalUserRole, finishHistorySyncRun, initLocalDb, latestErpRequestLogs, latestHistorySyncRuns, latestPmcInterventions, latestPmcInterventionsByRelatedNos, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listLocalUserRoles, listMaterialAlerts, listOrderProcedureLinks, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, pmcInterventionSummary, saveLocalUserRole, saveOrderProcedureLink, savePmcIntervention, savePmcSnapshot, startHistorySyncRun, tableStats } from "./localDb.js";
 import { syncCoreData } from "./syncService.js";
 import { buildSyncPolicyRows } from "./syncPolicy.js";
 import { buildErpHealthSummary, shouldBlockErpBusinessQuery } from "./erpHealth.js";
@@ -216,13 +216,20 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/user-roles") {
-      return sendHtml(res, 200, userRolesPage(queryUserRoles().body));
+      const params = Object.fromEntries(url.searchParams);
+      return sendHtml(res, 200, userRolesPage(queryUserRoles(null, params).body));
     }
 
     if (req.method === "GET" && url.pathname === "/user-roles/save") {
       const params = Object.fromEntries(url.searchParams);
       const saved = saveLocalUserRole(params);
       return sendHtml(res, 200, userRolesPage(queryUserRoles(saved).body));
+    }
+
+    if (req.method === "GET" && url.pathname === "/user-roles/delete") {
+      const params = Object.fromEntries(url.searchParams);
+      const deleted = deleteLocalUserRole(params.name);
+      return sendHtml(res, 200, userRolesPage(queryUserRoles({ ...deleted, deleted_role: true }).body));
     }
 
     if (req.method === "GET" && url.pathname === "/sqlite-coverage") {
@@ -1384,6 +1391,9 @@ function labelFor(key) {
     intervention_log: "处理记录",
     role_action: "标记跟单",
     exclude_action: "标记非跟单",
+    edit_action: "编辑",
+    delete_action: "删除配置",
+    toggle_action: "切换跟单",
     days_from_today: "距今天数",
     delivery_date: "交期",
     signed_date: "签订日期",
@@ -3207,6 +3217,15 @@ function formatDetailCell(column, value, row = {}) {
   }
   if (column === "exclude_action" && value) {
     return `<a class="button" href="${escapeHtml(value)}">标记非跟单</a>`;
+  }
+  if (column === "edit_action" && value) {
+    return `<a class="button" href="${escapeHtml(value)}">编辑</a>`;
+  }
+  if (column === "delete_action" && value) {
+    return `<a class="button" href="${escapeHtml(value)}">删除</a>`;
+  }
+  if (column === "toggle_action" && value) {
+    return `<a class="button" href="${escapeHtml(value)}">切换</a>`;
   }
   if (["quantity", "demand_qty", "delivered_qty", "remaining_qty", "available_qty", "stock_qty", "shortage_qty", "planned_qty", "finished_qty"].includes(column)) {
     return escapeHtml(formatPmcQuantity(value, row?.unit || row?.raw?.unit || row?.raw?.raw?.Unit || row?.raw?.raw?.单位));
@@ -6094,11 +6113,12 @@ function systemStatusPage(body) {
   });
 }
 
-function queryUserRoles(saved = null) {
+function queryUserRoles(saved = null, params = {}) {
   const dashboard = queryLocalPmcDashboard({ local_limit: 5000 });
   const configuredRoles = listLocalUserRoles({ limit: 500 });
   const detectedOwners = dashboard?.sections?.owner_workbenches || [];
   const configuredNames = new Set(configuredRoles.map((row) => row.name));
+  const editRole = selectedUserRole(configuredRoles, params);
   const detectedRows = detectedOwners.map((row) => ({
     name: row.owner,
     detected_from: "跟单负责人池",
@@ -6125,10 +6145,19 @@ function queryUserRoles(saved = null) {
       sections: {
         configured_roles: configuredRoles.map((row) => ({
           ...row,
-          followup_text: Number(row.is_followup) === 0 ? "否" : "是"
+          followup_text: Number(row.is_followup) === 0 ? "否" : "是",
+          edit_action: userRoleEditHref(row),
+          toggle_action: roleSaveHref({
+            name: row.name,
+            role: row.role,
+            is_followup: Number(row.is_followup) === 0 ? 1 : 0,
+            note: row.note || "切换是否跟单"
+          }),
+          delete_action: `/user-roles/delete?name=${encodeURIComponent(row.name)}`
         })),
         detected_followup_owners: detectedRows
       },
+      edit_role: editRole,
       notes: [
         "本页读取 SQLite local_user_roles 表，用于修正 ERP 字段里混入的非跟单人员。",
         "当前先提供只读检查入口；后续可增加页面表单，直接在浏览器里维护角色。",
@@ -6149,8 +6178,8 @@ function userRolesPage(body) {
     ],
     panels: [
       body.saved ? userRoleSavedPanel(body.saved) : "",
-      userRoleFormPanel(body.saved || {}),
-      modulePanel("本地角色配置", body.sections.configured_roles, ["name", "role", "followup_text", "note", "updated_at"], { fullWidth: true }),
+      userRoleFormPanel(body.edit_role || body.saved || {}),
+      modulePanel("本地角色配置", body.sections.configured_roles, ["name", "role", "followup_text", "note", "updated_at", "edit_action", "toggle_action", "delete_action"], { fullWidth: true }),
       modulePanel("当前跟单负责人池", body.sections.detected_followup_owners, ["name", "configured", "active_orders", "shortage_orders", "pending_quotes", "open_procedures", "todos", "role_action", "exclude_action"], { fullWidth: true })
     ].filter(Boolean),
     notes: body.notes,
@@ -6163,6 +6192,9 @@ function userRolesPage(body) {
 }
 
 function userRoleSavedPanel(saved) {
+  if (saved.deleted_role) {
+    return `<section class="panel full-width"><h2>已删除 <span class="pill">${escapeHtml(saved.name)}</span></h2><div class="empty">${escapeHtml(saved.name)} 已恢复为自动识别。</div></section>`;
+  }
   const followupText = Number(saved.is_followup) === 0 ? "非跟单" : "跟单";
   return `<section class="panel full-width"><h2>已保存 <span class="pill">${escapeHtml(saved.name)}</span></h2><div class="empty">${escapeHtml(saved.name)} 已标记为 ${escapeHtml(saved.role)} / ${escapeHtml(followupText)}。</div></section>`;
 }
@@ -6192,6 +6224,21 @@ function roleSaveHref({ name, role, is_followup, note }) {
     note: note || ""
   });
   return `/user-roles/save?${query.toString()}`;
+}
+
+function userRoleEditHref(row = {}) {
+  const query = new URLSearchParams({
+    edit_name: row.name || ""
+  });
+  return `/user-roles?${query.toString()}`;
+}
+
+function selectedUserRole(configuredRoles = [], params = {}) {
+  const editName = String(params.edit_name || "").trim();
+  if (!editName) {
+    return null;
+  }
+  return configuredRoles.find((row) => row.name === editName) || { name: editName, role: "跟单员", is_followup: 1, note: "" };
 }
 
 function systemToolRows() {

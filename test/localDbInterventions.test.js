@@ -216,3 +216,24 @@ test("local user roles can mark finance staff as non-followup", async () => {
   assert.equal(rows[0].is_followup, 1);
   assert.equal(rows[0].note, "临时允许查看跟单池");
 });
+
+test("local user roles can be deleted to restore automatic detection", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-user-role-delete-"));
+  process.env.PMC_DB_PATH = path.join(tempDir, "pmc.db");
+  const modulePath = `../src/localDb.js?userRoleDelete=${Date.now()}`;
+  const { deleteLocalUserRole, listLocalUserRoles, saveLocalUserRole } = await import(modulePath);
+
+  saveLocalUserRole({
+    name: "王测试",
+    role: "非跟单",
+    is_followup: 0,
+    note: "测试删除"
+  });
+
+  const deleted = deleteLocalUserRole("王测试");
+  const rows = listLocalUserRoles({ limit: 10 });
+
+  assert.equal(deleted.name, "王测试");
+  assert.equal(deleted.deleted, true);
+  assert.equal(rows.some((row) => row.name === "王测试"), false);
+});
