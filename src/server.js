@@ -4714,7 +4714,8 @@ function emptyFinanceCenterBody(message) {
 function mapFinanceRow(row, direction, today) {
   const amount = firstNumber(row.moneyall, row.MoneyAll, row.money1, row.Money1, row.money, row.Money, row.cmoney, row.CMoney, row["金额"], row["应收金额"], row["应付金额"]);
   const paidAmount = firstNumber(row.hkmoney, row.HkMoney, row.money2, row.Money2, row.paymoney, row.PayMoney, row["已收金额"], row["已付金额"], row["收款金额"], row["付款金额"]);
-  const unpaidAmount = firstNumber(row.wsmoney, row.WsMoney, row.leftmoney, row.LeftMoney, row["未收金额"], row["未付金额"], amount !== null && paidAmount !== null ? amount - paidAmount : null);
+  const statusText = firstText(row.status, row.Status, row.zt, row.Zt, row.skzt, row.fkzt, row["状态"], row["收款状态"], row["付款状态"]);
+  const unpaidAmount = financeUnpaidAmount(row, amount, paidAmount, statusText, direction);
   const billDateText = firstText(row.date1, row.Date1, row.dateadd, row.DateAdd, row.tdate, row.TDate, row["单据日期"], row["申请日期"]);
   const paymentTermsDays = firstNumber(row.paydays, row.PayDays, row.daynum, row.DayNum, row.zq, row.Zq, row["账期"], row["付款条件"], row["付款条件天数"]);
   const dueDateText = firstText(row.date2, row.Date2, row.dateend, row.DateEnd, row["到期日"], row["计划日期"]);
@@ -4737,7 +4738,7 @@ function mapFinanceRow(row, direction, today) {
     age_days: ageDays,
     due_days: dueDays,
     risk_status: riskStatus,
-    status: firstText(row.status, row.Status, row.zt, row.Zt, row.skzt, row.fkzt, row["状态"], row["收款状态"], row["付款状态"]),
+    status: statusText,
     owner: firstText(row.xsry, row.person, row.Person, row.owner, row["负责人"], row["经办人"]),
     raw: row
   };
@@ -4758,6 +4759,15 @@ function financeRiskStatus(unpaidAmount, dueDays) {
     return "7天内到期";
   }
   return "未到期";
+}
+
+function financeUnpaidAmount(row, amount, paidAmount, statusText, direction) {
+  const explicit = firstNumber(row.wsmoney, row.WsMoney, row.leftmoney, row.LeftMoney, row["未收金额"], row["未付金额"]);
+  if (explicit !== null) return explicit;
+  if (amount !== null && paidAmount !== null) return Math.max(0, Number((amount - paidAmount).toFixed(2)));
+  if (direction === "payable" ? /未付款/.test(statusText || "") : /未收款/.test(statusText || "")) return amount;
+  if (direction === "payable" ? /已付款/.test(statusText || "") : /已收款/.test(statusText || "")) return 0;
+  return null;
 }
 
 function financeRowsByRisk(rows, riskStatus) {

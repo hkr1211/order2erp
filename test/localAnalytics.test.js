@@ -377,6 +377,63 @@ test("buildLocalFinanceCenter summarizes receivables and payables by risk", () =
   assert.equal(body.sections.due_soon_payables[0].risk_status, "7天内到期");
 });
 
+test("mapFinanceRowForLocal derives unpaid amount from ERP unpaid status", () => {
+  const today = new Date("2026-05-23T08:00:00+08:00");
+  const unpaidReceivable = mapFinanceRowForLocal({
+    name: "客户A",
+    title: "销售订单",
+    money1: "34,357.00",
+    date1: "2026-05-22",
+    status: "未收款"
+  }, "receivable", today);
+  const settledReceivable = mapFinanceRowForLocal({
+    name: "客户B",
+    title: "销售订单",
+    money1: "500.00",
+    date1: "2026-05-22",
+    status: "已收款"
+  }, "receivable", today);
+  const unpaidPayable = mapFinanceRowForLocal({
+    name: "供应商A",
+    title: "采购订单",
+    money1: "7,317.39",
+    date1: "2026-05-23",
+    status: "未付款 未收票"
+  }, "payable", today);
+
+  assert.equal(unpaidReceivable.unpaid_amount, 34357);
+  assert.equal(unpaidReceivable.risk_status, "未清");
+  assert.equal(settledReceivable.unpaid_amount, 0);
+  assert.equal(settledReceivable.risk_status, "已结清");
+  assert.equal(unpaidPayable.unpaid_amount, 7317.39);
+  assert.equal(unpaidPayable.risk_status, "未清");
+});
+
+test("buildLocalFinanceCenter repairs stored rows with raw ERP unpaid status", () => {
+  const body = buildLocalFinanceCenter({
+    financeRows: [
+      {
+        direction: "receivable",
+        counterparty: "",
+        business_title: "销售订单",
+        amount: 80,
+        paid_amount: null,
+        unpaid_amount: null,
+        bill_date: "2026-05-23",
+        due_date: "",
+        due_days: null,
+        risk_status: "已结清",
+        raw_json: JSON.stringify({ name: "美国SDI", status: "未收款", money1: "80.00", catename: "田小静" })
+      }
+    ]
+  });
+
+  assert.equal(body.summary.receivable_unpaid, 80);
+  assert.equal(body.sections.receivables[0].counterparty, "美国SDI");
+  assert.equal(body.sections.receivables[0].unpaid_amount, 80);
+  assert.equal(body.sections.receivables[0].risk_status, "未清");
+});
+
 test("mapQuoteFollowupForLocal marks old or high value quote items urgent", () => {
   const row = mapQuoteFollowupForLocal({
     project_no: "Q-1",

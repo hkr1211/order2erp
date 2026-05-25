@@ -414,7 +414,8 @@ export function mapFinanceRowForLocal(row, direction, today = new Date()) {
   const currentDay = startOfDay(today);
   const amount = number(firstPresent(row.amount, row.moneyall, row.MoneyAll, row.money1, row.Money1, row.money, row.Money, row.cmoney, row.CMoney));
   const paidAmount = number(firstPresent(row.paid_amount, row.hkmoney, row.HkMoney, row.money2, row.Money2, row.paymoney, row.PayMoney));
-  const unpaidAmount = number(firstPresent(row.unpaid_amount, row.wsmoney, row.WsMoney, row.leftmoney, row.LeftMoney, amount !== null && paidAmount !== null ? amount - paidAmount : null));
+  const statusText = firstPresent(row.status, row.Status, row.zt, row.Zt, row.skzt, row.fkzt);
+  const unpaidAmount = financeUnpaidAmount(row, amount, paidAmount, statusText, direction);
   const billDateText = firstPresent(row.bill_date, row.date1, row.Date1, row.dateadd, row.DateAdd, row.tdate, row.TDate);
   const paymentTermsDays = number(firstPresent(row.paydays, row.PayDays, row.daynum, row.DayNum, row.zq, row.Zq));
   const dueDateText = firstPresent(row.due_date, row.date2, row.Date2, row.dateend, row.DateEnd);
@@ -436,15 +437,16 @@ export function mapFinanceRowForLocal(row, direction, today = new Date()) {
     age_days: ageDays,
     due_days: dueDays,
     risk_status: financeRiskStatus(unpaidAmount, dueDays),
-    status: firstPresent(row.status, row.Status, row.zt, row.Zt, row.skzt, row.fkzt),
+    status: statusText,
     owner: firstPresent(row.owner, row.xsry, row.person, row.Person),
     raw: row.raw || row
   };
 }
 
 export function buildLocalFinanceCenter({ financeRows = [] } = {}) {
-  const receivableRows = financeRows.filter((row) => row.direction === "receivable");
-  const payableRows = financeRows.filter((row) => row.direction === "payable");
+  const normalizedRows = financeRows.map(normalizeStoredFinanceRow);
+  const receivableRows = normalizedRows.filter((row) => row.direction === "receivable");
+  const payableRows = normalizedRows.filter((row) => row.direction === "payable");
   const receivableDebtRows = topFinanceCounterpartiesForLocal(receivableRows);
   const payableDebtRows = topFinanceCounterpartiesForLocal(payableRows);
   const overdueReceivables = financeRowsByRiskForLocal(receivableRows, "已逾期");
@@ -474,7 +476,7 @@ export function buildLocalFinanceCenter({ financeRows = [] } = {}) {
       payable_debts: payableDebtRows
     },
     source_status: {
-      sqlite_finance_records: { ok: true, rows: financeRows.length }
+      sqlite_finance_records: { ok: true, rows: normalizedRows.length }
     },
     notes: [
       "当前读取本地 SQLite 应收应付数据。",
@@ -1086,6 +1088,44 @@ function financeRiskStatus(unpaidAmount, dueDays) {
   if (dueDays < 0) return "已逾期";
   if (dueDays <= 7) return "7天内到期";
   return "未到期";
+}
+
+function financeUnpaidAmount(row, amount, paidAmount, statusText, direction) {
+  const explicit = number(firstPresent(row.unpaid_amount, row.wsmoney, row.WsMoney, row.leftmoney, row.LeftMoney));
+  if (explicit !== null) return explicit;
+  if (amount !== null && paidAmount !== null) return Math.max(0, Number((amount - paidAmount).toFixed(2)));
+  if (isFinanceUnpaidStatus(statusText, direction)) return amount;
+  if (isFinanceSettledStatus(statusText, direction)) return 0;
+  return null;
+}
+
+function normalizeStoredFinanceRow(row) {
+  const raw = parseJson(row.raw_json, row.raw || row);
+  const amount = number(firstPresent(row.amount, raw?.amount, raw?.moneyall, raw?.MoneyAll, raw?.money1, raw?.Money1, raw?.money, raw?.Money));
+  const paidAmount = number(firstPresent(row.paid_amount, raw?.paid_amount, raw?.hkmoney, raw?.HkMoney, raw?.money2, raw?.Money2, raw?.paymoney, raw?.PayMoney));
+  const statusText = firstPresent(row.status, raw?.status, raw?.Status, raw?.zt, raw?.Zt, raw?.skzt, raw?.fkzt);
+  const unpaidAmount = financeUnpaidAmount({ ...raw, unpaid_amount: row.unpaid_amount }, amount, paidAmount, statusText, row.direction);
+  const dueDays = row.due_days === undefined ? null : row.due_days;
+  return {
+    ...row,
+    counterparty: row.counterparty || raw?.counterparty || raw?.name || raw?.khmc || raw?.gysname || raw?.cateName || raw?.title2 || "",
+    owner: row.owner || raw?.owner || raw?.xsry || raw?.person || raw?.Person || raw?.catename || "",
+    status: statusText,
+    amount,
+    paid_amount: paidAmount,
+    unpaid_amount: unpaidAmount,
+    risk_status: financeRiskStatus(unpaidAmount, dueDays)
+  };
+}
+
+function isFinanceUnpaidStatus(statusText, direction) {
+  const text = String(statusText || "");
+  return direction === "payable" ? /未付款/.test(text) : /未收款/.test(text);
+}
+
+function isFinanceSettledStatus(statusText, direction) {
+  const text = String(statusText || "");
+  return direction === "payable" ? /已付款/.test(text) : /已收款/.test(text);
 }
 
 function financeRowsByRiskForLocal(rows, riskStatus) {
