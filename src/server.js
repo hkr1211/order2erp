@@ -684,6 +684,7 @@ function normalizeNavPath(value) {
 function modulePathForTitle(title) {
   const text = String(title || "");
   if (text.includes("角色")) return "/roles";
+  if (text.includes("跟单")) return "/followup";
   if (text.includes("物料")) return "/materials";
   if (text.includes("待报价")) return "/quotes";
   if (text.includes("采购")) return "/procurement";
@@ -1650,8 +1651,10 @@ function pmcConsolePage(body, params = {}) {
     h1 { margin: 0; font-size: 30px; line-height: 1.2; letter-spacing: 0; }
     .sub { margin-top: 8px; color: var(--muted); font-size: 14px; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-    .button { min-height: 36px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); text-decoration: none; font-size: 14px; }
+    .button { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); text-decoration: none; font-size: 14px; line-height: 1.2; white-space: nowrap; }
     .button.primary { background: var(--green); border-color: var(--green); color: #ffffff; }
+    .action-buttons { display: flex; flex-wrap: wrap; gap: 6px; min-width: 180px; align-items: flex-start; }
+    .action-buttons .button { min-height: 32px; padding: 6px 10px; font-size: 13px; }
     .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 10px; margin: 18px 0; }
     .kpi { min-height: 112px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
     a.kpi { color: inherit; text-decoration: none; transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease; }
@@ -3117,8 +3120,10 @@ function orderDetailPage(body, url) {
     h2 { margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--border); font-size: 17px; letter-spacing: 0; }
     .sub { margin-top: 8px; color: var(--muted); font-size: 14px; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-    .button { min-height: 36px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); text-decoration: none; font-size: 14px; }
+    .button { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); text-decoration: none; font-size: 14px; line-height: 1.2; white-space: nowrap; }
     .button.primary { background: var(--green); border-color: var(--green); color: #ffffff; }
+    .action-buttons { display: flex; flex-wrap: wrap; gap: 6px; min-width: 180px; align-items: flex-start; }
+    .action-buttons .button { min-height: 32px; padding: 6px 10px; font-size: 13px; }
     .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin: 18px 0; }
     .metric, .info { padding: 13px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
     .metric span, .info span { display: block; color: var(--muted); font-size: 13px; }
@@ -3206,9 +3211,9 @@ function formatDetailCell(column, value, row = {}) {
     return `<span class="pill ${tone}">${escapeHtml(label || "")}</span>`;
   }
   if (column === "buttons" && Array.isArray(value)) {
-    return value
+    return `<div class="action-buttons">${value
       .map((label) => `<a class="button" href="${escapeHtml(pmcInterventionHref(row, label))}">${escapeHtml(label)}</a>`)
-      .join("");
+      .join("")}</div>`;
   }
   if (column === "owner_link") {
     const owner = row?.owner_link || row?.owner || "";
@@ -3224,7 +3229,7 @@ function formatDetailCell(column, value, row = {}) {
     return `<a class="button" href="${escapeHtml(pmcInterventionHref(row, row.action_label || "记录处理"))}">处理</a>`;
   }
   if (column === "intervention_log" && value) {
-    return `<a class="button" href="${escapeHtml(value)}">查看</a>`;
+    return `<div class="action-buttons"><a class="button" href="${escapeHtml(value)}">查看</a></div>`;
   }
   if (column === "role_action" && value) {
     return `<a class="button" href="${escapeHtml(value)}">标记跟单</a>`;
@@ -4426,8 +4431,10 @@ function modulePage({ title, subtitle, summary = [], panels = [], notes = [], ac
     h2 { margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--border); font-size: 17px; letter-spacing: 0; }
     .sub { margin-top: 8px; color: var(--muted); font-size: 14px; line-height: 1.6; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-    .button { min-height: 36px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); text-decoration: none; font-size: 14px; }
+    .button { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); text-decoration: none; font-size: 14px; line-height: 1.2; white-space: nowrap; }
     .button.primary { background: var(--green); border-color: var(--green); color: #ffffff; }
+    .action-buttons { display: flex; flex-wrap: wrap; gap: 6px; min-width: 180px; align-items: flex-start; }
+    .action-buttons .button { min-height: 32px; padding: 6px 10px; font-size: 13px; }
     .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 18px 0; }
     .metric { min-height: 92px; padding: 13px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
     a.metric { color: inherit; text-decoration: none; transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease; }
