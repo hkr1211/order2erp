@@ -60,7 +60,7 @@ test("historySyncParams applies 90 day range to quote projects", () => {
   assert.equal(params.erpParams.include_all, "1");
 });
 
-test("historySyncParams supports process report paging for procedure history", () => {
+test("historySyncParams omits process report dates so paging can reach older history", () => {
   const params = historySyncParams({
     source: "process_reports",
     start_date: "2026-02-24",
@@ -71,9 +71,9 @@ test("historySyncParams supports process report paging for procedure history", (
 
   assert.equal(params.viewName, "process_reports");
   assert.equal(params.erpParams.page_index, 500);
-  assert.equal(params.erpParams.page_size, 10);
-  assert.equal(params.erpParams.dateStart, "2026-02-24");
-  assert.equal(params.erpParams.dateEnd, "2026-05-24");
+  assert.equal(params.erpParams.page_size, 5);
+  assert.equal(params.erpParams.dateStart, undefined);
+  assert.equal(params.erpParams.dateEnd, undefined);
 });
 
 test("historySyncDryRun does not access ERP and shows request parameters", () => {

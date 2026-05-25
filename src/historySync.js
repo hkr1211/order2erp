@@ -25,9 +25,11 @@ export const HISTORY_SYNC_SOURCES = [
     source: "process_reports",
     label: "工序汇报历史",
     viewName: "process_reports",
+    defaultPageSize: 5,
+    maxPageSize: 5,
     dateSupport: "日期参数暂不生效，按页翻取历史汇报",
     suggestedRange: "近90天工序汇报明细，按页小批量补齐",
-    riskNote: "每次只拉一页20条，通过页码回溯历史，写入 SQLite upsert。"
+    riskNote: "每次只拉一页5条，通过页码回溯历史，写入 SQLite upsert。"
   },
   {
     source: "quote_projects",
@@ -60,7 +62,7 @@ export function defaultHistoryRange(now = new Date()) {
 export function historySyncParams(options = {}) {
   const sourceConfig = HISTORY_SYNC_SOURCES.find((item) => item.source === options.source) || HISTORY_SYNC_SOURCES[0];
   const pageIndex = clampInt(options.pageindex || options.page_index || 1, 1, 100000);
-  const pageSize = clampInt(options.pagesize || options.page_size || 20, 1, 20);
+  const pageSize = clampInt(options.pagesize || options.page_size || sourceConfig.defaultPageSize || 20, 1, sourceConfig.maxPageSize || 20);
   const range = {
     start_date: options.start_date || options.date_start || defaultHistoryRange().start_date,
     end_date: options.end_date || options.date_end || defaultHistoryRange().end_date
@@ -287,8 +289,6 @@ function historyErpParams(source, { pageIndex, pageSize, range, searchKey }) {
     return {
       page_index: pageIndex,
       page_size: pageSize,
-      dateStart: range.start_date,
-      dateEnd: range.end_date,
       searchKey
     };
   }
