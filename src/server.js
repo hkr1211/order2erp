@@ -1035,6 +1035,7 @@ function followupWorkbenchPage(body) {
       ["负责人", owner || "--", owner ? `/pmc?rebuild=1&owner=${encodeURIComponent(owner)}` : "/pmc?rebuild=1"],
       ["今日待办", dashboard.command_center?.today_todos ?? 0, openOnlyHref],
       ["待响应风险", closure.open_total, openOnlyHref],
+      ["超时未闭环", closure.overdue_closures, openOnlyHref],
       ["已响应风险", closure.responded_total, owner ? `/reports?owner=${encodeURIComponent(owner)}` : "/reports"],
       ["红牌", dashboard.command_center?.red_count ?? 0, openOnlyHref],
       ["黄牌", dashboard.command_center?.yellow_count ?? 0, openOnlyHref],
@@ -1045,9 +1046,9 @@ function followupWorkbenchPage(body) {
     ],
     panels: [
       modulePanel("负责人切换", body.owners || [], ["owner", "active_orders", "shortage_orders", "pending_quotes", "open_procedures", "todos", "owner_link"]),
-      modulePanel("我的待干预动作", displayDashboard.sections?.intervention_tasks || [], ["task_no", "risk_level", "risk_type", "related_no", "problem", "intervention_state", "response_sla", "latest_intervention", "intervention_log", "primary_action", "buttons"], { fullWidth: true }),
-      modulePanel("我的红牌", displayDashboard.sections?.red_risks || [], ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "response_sla", "latest_intervention", "intervention_log", "owner_role", "buttons"], { fullWidth: true }),
-      modulePanel("我的黄牌", displayDashboard.sections?.yellow_risks || [], ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "response_sla", "latest_intervention", "intervention_log", "owner_role", "buttons"], { fullWidth: true }),
+      modulePanel("我的待干预动作", displayDashboard.sections?.intervention_tasks || [], ["task_no", "risk_level", "risk_type", "related_no", "problem", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "intervention_log", "primary_action", "buttons"], { fullWidth: true }),
+      modulePanel("我的红牌", displayDashboard.sections?.red_risks || [], ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "intervention_log", "owner_role", "buttons"], { fullWidth: true }),
+      modulePanel("我的黄牌", displayDashboard.sections?.yellow_risks || [], ["risk_type", "related_no", "problem", "rule_reason", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "intervention_log", "owner_role", "buttons"], { fullWidth: true }),
       modulePanel("我的交期订单", [...(dashboard.sections?.overdue_orders || []), ...(dashboard.sections?.due_soon_orders || [])], ["order_no", "customer", "product_name", "remaining_qty", "delivery_date", "owner"]),
       modulePanel("我的缺料订单", dashboard.sections?.shortage_orders || [], ["order_no", "customer", "product_name", "demand_qty", "available_qty", "shortage_qty"]),
       modulePanel("我的待报价", dashboard.sections?.pending_quotes || [], ["quote_no", "customer", "title", "project_stage", "created_date", "age_days", "action"]),
@@ -1612,6 +1613,7 @@ function pmcConsolePage(body, params = {}) {
   const todayText = formatDate(new Date());
   const cards = [
     ["待响应风险", closure.open_total, "红黄牌尚未留痕", closure.open_red > 0 ? "danger" : closure.open_yellow > 0 ? "warning" : "neutral", openOnlyHref],
+    ["超时未闭环", closure.overdue_closures, "处理中超过响应时限", closure.overdue_closures > 0 ? "danger" : "neutral", openOnlyHref],
     ["今日已处理", interventions.today_actions ?? 0, "本地干预留痕", "neutral", `/interventions?date_from=${todayText}&date_to=${todayText}`],
     ["红牌待响应", closure.open_red, `红牌总数 ${command.red_count ?? 0}`, closure.open_red > 0 ? "danger" : "neutral", openOnlyHref],
     ["黄牌待响应", closure.open_yellow, `黄牌总数 ${command.yellow_count ?? 0}`, closure.open_yellow > 0 ? "warning" : "neutral", openOnlyHref],
@@ -1743,7 +1745,7 @@ function pmcConsolePage(body, params = {}) {
     </section>
     <div class="zone-title">今日早会风险摘要</div>
     <section class="intervention-list">
-      ${pmcTablePanel("老板/管理层重点", displayBody.sections.morning_brief, ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "latest_intervention", "latest_actor", "next_action", "meeting_focus", "intervention_log", "buttons"], "danger", "command-panel")}
+      ${pmcTablePanel("老板/管理层重点", displayBody.sections.morning_brief, ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "latest_actor", "next_action", "meeting_focus", "intervention_log", "buttons"], "danger", "command-panel")}
     </section>
     <div class="zone-title">红黄牌风险区</div>
     <section class="risk-board risk-board-command">
@@ -1822,6 +1824,8 @@ function enrichPmcInterventionStatus(body) {
         latest_intervention: latest?.action_label || row.latest_intervention || "",
         latest_actor: latest?.actor || row.latest_actor || "",
         latest_at: latest?.created_at || row.latest_at || "",
+        closure_overdue: closure.closure_overdue,
+        overdue_hours: closure.overdue_hours,
         intervention_log: interventionLogHref(row.related_no)
       };
     });
@@ -1832,9 +1836,11 @@ function enrichPmcInterventionStatus(body) {
 
 function sortMorningBriefByResponse(rows = []) {
   return [...rows].sort((a, b) => {
+    const aOverdue = a.closure_overdue ? 0 : 1;
+    const bOverdue = b.closure_overdue ? 0 : 1;
     const aOpen = isInterventionFinal(a.intervention_state) ? 1 : 0;
     const bOpen = isInterventionFinal(b.intervention_state) ? 1 : 0;
-    return aOpen - bOpen || Number(a.priority_no || 999) - Number(b.priority_no || 999);
+    return aOverdue - bOverdue || aOpen - bOpen || Number(a.priority_no || 999) - Number(b.priority_no || 999);
   });
 }
 
@@ -1846,30 +1852,39 @@ function pmcRiskClosure(row = {}, latest = null) {
   if (latest?.created_at) {
     const hours = hoursSince(latest.created_at);
     const state = latest.intervention_state || defaultInterventionState(latest.action_label);
+    const overdue = !isInterventionFinal(state) && hours !== null && hours >= responseHours;
     if (state === "已关闭") {
       return {
         intervention_state: "已关闭",
         response_sla: `已关闭${hours === null ? "" : ` · ${hours}小时前`}`,
-        escalation_state: "已闭环，进入复盘"
+        escalation_state: "已闭环，进入复盘",
+        closure_overdue: false,
+        overdue_hours: 0
       };
     }
     if (state === "已响应") {
       return {
         intervention_state: "已响应",
         response_sla: `已响应${hours === null ? "" : ` · ${hours}小时前`}`,
-        escalation_state: "继续跟踪结果"
+        escalation_state: "继续跟踪结果",
+        closure_overdue: false,
+        overdue_hours: 0
       };
     }
     return {
       intervention_state: "处理中",
-      response_sla: `处理中${hours === null ? "" : ` · ${hours}小时前`}`,
-      escalation_state: isRed ? "处理中，超时需升级" : "处理中，24小时内复核"
+      response_sla: overdue ? `处理中超时 · ${hours}小时前` : `处理中${hours === null ? "" : ` · ${hours}小时前`}`,
+      escalation_state: overdue ? "已超时，立即升级老板/管理层" : isRed ? "处理中，超时需升级" : "处理中，24小时内复核",
+      closure_overdue: overdue,
+      overdue_hours: overdue ? hours : 0
     };
   }
   return {
     intervention_state: "待响应",
     response_sla: `${responseHours}小时内响应`,
-    escalation_state: isRed ? "超时需升级老板/管理层" : "24小时未处理转红牌"
+    escalation_state: isRed ? "超时需升级老板/管理层" : "24小时未处理转红牌",
+    closure_overdue: false,
+    overdue_hours: 0
   };
 }
 
@@ -1888,6 +1903,8 @@ function pmcClosureSummary(sections = {}) {
     open_total: openRows.length,
     open_red: (sections.red_risks || []).filter((row) => !isInterventionFinal(row.intervention_state)).length,
     open_yellow: (sections.yellow_risks || []).filter((row) => !isInterventionFinal(row.intervention_state)).length,
+    overdue_closures: openRows.filter((row) => row.closure_overdue).length,
+    processing_total: openRows.filter((row) => row.intervention_state === "处理中").length,
     responded_total: rows.length - openRows.length
   };
 }
@@ -1926,6 +1943,7 @@ function pmcMorningBriefText(body = {}, params = {}) {
     `生成时间：${formatDateTime(new Date())}`,
     scope,
     `待响应：${closure.open_total}（红牌${closure.open_red}，黄牌${closure.open_yellow}）；已响应：${closure.responded_total}`,
+    `超时未闭环：${closure.overdue_closures}`,
     ""
   ];
   if (!rows.length) {
@@ -1934,7 +1952,7 @@ function pmcMorningBriefText(body = {}, params = {}) {
   }
   rows.forEach((row, index) => {
     lines.push(`${index + 1}. [${row.risk_level || "风险"}][${row.intervention_state || "待响应"}] ${row.headline || row.related_no || "待确认风险"}`);
-    lines.push(`   关联单号：${row.related_no || "--"}；责任角色：${row.owner_role || "--"}；响应时限：${row.response_sla || "--"}`);
+    lines.push(`   关联单号：${row.related_no || "--"}；责任角色：${row.owner_role || "--"}；响应时限：${row.response_sla || "--"}；升级状态：${row.escalation_state || "--"}`);
     lines.push(`   早会关注：${row.meeting_focus || "--"}`);
     lines.push(`   下一步：${row.next_action || row.primary_action || "--"}`);
     if (row.latest_intervention || row.latest_actor) {
@@ -4231,17 +4249,20 @@ function enrichExceptionCenterStatus(body) {
       latest_intervention: latest?.action_label || "",
       latest_actor: latest?.actor || "",
       latest_at: latest?.created_at || "",
+      closure_overdue: closure.closure_overdue,
+      overdue_hours: closure.overdue_hours,
       intervention_log: interventionLogHref(row.related_no),
       intervention_action: pmcInterventionHref(row, row.action || "记录处理")
     };
   });
-  const pending = nextTasks.filter((row) => row.intervention_state !== "已响应").length;
+  const pending = nextTasks.filter((row) => !isInterventionFinal(row.intervention_state)).length;
   return {
     ...body,
     summary: {
       ...(body.summary || {}),
       open_tasks: pending,
       pending_response_tasks: pending,
+      overdue_closures: nextTasks.filter((row) => !isInterventionFinal(row.intervention_state) && row.closure_overdue).length,
       responded_tasks: nextTasks.length - pending
     },
     sections: {
@@ -5227,6 +5248,7 @@ function exceptionCenterPage(body) {
     subtitle: "把交期、缺料、待报价、库存异常统一成按优先级排序的 PMC 待办池。",
     summary: [
       ["未关闭待办", body.summary.open_tasks],
+      ["超时未闭环", body.summary.overdue_closures || 0],
       ["已响应", body.summary.responded_tasks || 0],
       ["高优先级", body.summary.critical_tasks],
       ["逾期订单", body.summary.overdue_orders],
@@ -5236,7 +5258,7 @@ function exceptionCenterPage(body) {
       ["低库存", body.summary.low_stock]
     ],
     panels: [
-      modulePanel("统一异常待办", body.sections.tasks, ["task_no", "priority", "exception_type", "related_no", "customer", "item", "quantity", "due_date", "responsible_role", "action", "status", "response_sla", "latest_intervention", "intervention_log", "intervention_action"]),
+      modulePanel("统一异常待办", body.sections.tasks, ["task_no", "priority", "exception_type", "related_no", "customer", "item", "quantity", "due_date", "responsible_role", "action", "status", "response_sla", "escalation_state", "latest_intervention", "intervention_log", "intervention_action"]),
       modulePanel("逾期订单", body.sections.overdue_orders, ["order_no", "customer", "product_name", "remaining_qty", "delivery_date"]),
       modulePanel("7天内交期", body.sections.due_soon_orders, ["order_no", "customer", "product_name", "remaining_qty", "delivery_date"]),
       modulePanel("缺料明细", body.sections.shortage_rows, ["order_no", "customer", "product_name", "available_qty", "shortage_qty"]),
@@ -5372,7 +5394,7 @@ function reportCenterPage(body) {
       ["早会重点", body.summary.morning_brief_items || 0]
     ],
     panels: [
-      modulePanel("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "latest_intervention", "latest_actor", "next_action", "meeting_focus", "intervention_log", "morning_action"], { fullWidth: true }),
+      modulePanel("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "latest_actor", "next_action", "meeting_focus", "intervention_log", "morning_action"], { fullWidth: true }),
       modulePanel("风险闭环待办", body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention", "responsible_role", "action"], { fullWidth: true }),
       modulePanel("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "note", "actor"], { fullWidth: true }),
       modulePanel("订单状态样本", body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]),
@@ -5457,7 +5479,7 @@ function reportPrintPage(body) {
     <section class="summary">
       ${summaryRows.map(([label, value]) => `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value ?? "")}</strong></div>`).join("")}
     </section>
-    ${printTable("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "latest_intervention", "latest_actor", "next_action", "meeting_focus"])}
+    ${printTable("今日早会风险摘要", body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "latest_actor", "next_action", "meeting_focus"])}
     ${printTable("风险闭环待办", body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"])}
     ${printTable("今日/最近处理", body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "note", "actor"])}
     ${printTable("订单状态样本", body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"])}
@@ -5501,7 +5523,7 @@ function reportCenterCsv(body) {
       早会重点: body.summary.morning_brief_items || 0
     })
   ]);
-  appendCsvSection(lines, "今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "latest_intervention", "latest_actor", "next_action", "meeting_focus"]));
+  appendCsvSection(lines, "今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "latest_actor", "next_action", "meeting_focus"]));
   appendCsvSection(lines, "风险闭环待办", tableRowsForCsv(body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"]));
   appendCsvSection(lines, "今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "note", "actor"]));
   appendCsvSection(lines, "订单状态样本", tableRowsForCsv(body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]));
@@ -5549,7 +5571,7 @@ function reportCenterExcel(body) {
   <h1>蕴杰金属 PMC 日报</h1>
   <div class="meta">生成时间：${escapeHtml(generatedAt)}</div>
   ${excelTable("指标汇总", summaryRows)}
-  ${excelTable("今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "latest_intervention", "latest_actor", "next_action", "meeting_focus"]))}
+  ${excelTable("今日早会风险摘要", tableRowsForCsv(body.sections.morning_brief || [], ["priority_no", "risk_level", "headline", "related_no", "owner_role", "intervention_state", "response_sla", "escalation_state", "latest_intervention", "latest_actor", "next_action", "meeting_focus"]))}
   ${excelTable("风险闭环待办", tableRowsForCsv(body.sections.exception_tasks || [], ["task_no", "priority", "exception_type", "related_no", "item", "status", "response_sla", "latest_intervention"]))}
   ${excelTable("今日/最近处理", tableRowsForCsv(body.sections.intervention_actions || [], ["created_at", "risk_type", "related_no", "action_label", "intervention_state", "note", "actor"]))}
   ${excelTable("订单状态样本", tableRowsForCsv(body.sections.order_rows, ["status_light", "order_no", "customer", "owner", "amount", "due_status", "shortage_status"]))}
