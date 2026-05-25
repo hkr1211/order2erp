@@ -9,6 +9,7 @@ test("buildSqliteCoverage summarizes page table dependencies and missing sources
       erp_material_alerts: { row_count: 0, latest_at: "" },
       erp_finance_records: { row_count: 2200, latest_at: "2026-05-24T01:00:00.000Z", min_date: "2026-02-14", max_date: "2026-05-23" },
       erp_procedure_plans: { row_count: 768, latest_at: "2026-05-24T01:20:00.000Z", min_date: "2026-05-16", max_date: "2026-06-22" },
+      erp_process_reports: { row_count: 2500, latest_at: "2026-05-24T02:20:00.000Z", min_date: "2026-02-20", max_date: "2026-05-24" },
       order_procedure_links: { row_count: 3, latest_at: "2026-05-24T02:00:00.000Z" },
       pmc_intervention_logs: { row_count: 5, latest_at: "2026-05-24T03:00:00.000Z" },
       pmc_dashboard_snapshots: { row_count: 1, latest_at: "2026-05-23T08:30:00.000Z" }
@@ -36,7 +37,8 @@ test("buildSqliteCoverage summarizes page table dependencies and missing sources
   assert.equal(coverage.tables.find((row) => row.table_name === "erp_sales_orders").history_status, "90天已覆盖");
   assert.equal(coverage.tables.find((row) => row.table_name === "erp_finance_records").history_status, "90天已覆盖");
   assert.equal(coverage.tables.find((row) => row.table_name === "erp_procedure_plans").history_status, "未覆盖90天");
-  assert.equal(coverage.summary.history_ready_tables, 2);
+  assert.equal(coverage.tables.find((row) => row.table_name === "erp_process_reports").history_status, "90天已覆盖");
+  assert.equal(coverage.summary.history_ready_tables, 3);
   assert.equal(coverage.summary.pages, coverage.pages.length);
   assert.ok(coverage.tables.some((row) => row.table_name === "erp_material_alerts"));
   assert.equal(coverage.tables.find((row) => row.table_name === "order_procedure_links").incremental, "人工维护");

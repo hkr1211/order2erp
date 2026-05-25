@@ -121,6 +121,26 @@ export function initLocalDb(dbPath = process.env.PMC_DB_PATH || DEFAULT_DB_PATH)
       synced_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS erp_process_reports (
+      report_id TEXT PRIMARY KEY,
+      subject TEXT,
+      product_name TEXT,
+      procedure_name TEXT,
+      batch_no TEXT,
+      serial_no TEXT,
+      report_qty REAL,
+      work_hours REAL,
+      operator TEXT,
+      machine TEXT,
+      report_result TEXT,
+      scrap_reason TEXT,
+      creator TEXT,
+      added_at TEXT,
+      audit_status TEXT,
+      raw_json TEXT NOT NULL,
+      synced_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS erp_material_alerts (
       alert_id TEXT PRIMARY KEY,
       alert_type TEXT NOT NULL,
@@ -710,6 +730,13 @@ export function upsertProcedurePlans(rows) {
   });
 }
 
+export function upsertProcessReports(rows) {
+  const database = initLocalDb();
+  runInTransaction(database, () => {
+    insertProcessReports(database, rows);
+  });
+}
+
 export function replaceMaterialAlerts(rows) {
   const database = initLocalDb();
   runInTransaction(database, () => {
@@ -761,6 +788,10 @@ export function listSalesOrders({ limit = 100, offset = 0 } = {}) {
 
 export function listProcedurePlans({ limit = 100 } = {}) {
   return initLocalDb().prepare("SELECT * FROM erp_procedure_plans ORDER BY planned_finish_date IS NULL, planned_finish_date LIMIT ?").all(limit);
+}
+
+export function listProcessReports({ limit = 100 } = {}) {
+  return initLocalDb().prepare("SELECT * FROM erp_process_reports ORDER BY added_at DESC LIMIT ?").all(limit);
 }
 
 export function listMaterialAlerts({ limit = 100 } = {}) {
@@ -826,6 +857,17 @@ function insertProcedurePlans(database, rows) {
   `);
   for (const row of rows) {
     stmt.run(row.erp_id, row.work_assignment_id, row.order_no, row.product_name, row.product_code, row.product_model, row.procedure_name, row.work_center_name, row.planned_qty, row.finished_qty, row.remaining_qty, row.planned_start_date, row.planned_finish_date, row.owner, row.state, JSON.stringify(row.raw || row), row.synced_at);
+  }
+}
+
+function insertProcessReports(database, rows) {
+  const stmt = database.prepare(`
+    INSERT OR REPLACE INTO erp_process_reports
+    (report_id, subject, product_name, procedure_name, batch_no, serial_no, report_qty, work_hours, operator, machine, report_result, scrap_reason, creator, added_at, audit_status, raw_json, synced_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const row of rows) {
+    stmt.run(row.report_id, row.subject, row.product_name, row.procedure_name, row.batch_no, row.serial_no, row.report_qty, row.work_hours, row.operator, row.machine, row.report_result, row.scrap_reason, row.creator, row.added_at, row.audit_status, JSON.stringify(row.raw || row), row.synced_at);
   }
 }
 

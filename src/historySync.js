@@ -1,6 +1,6 @@
 import { normalizeTable, toBusinessView } from "./erpClient.js";
 import { mapFinanceRowForLocal, mapQuoteFollowupForLocal } from "./localAnalytics.js";
-import { upsertFinanceRecords, upsertProcedurePlans, upsertQuoteFollowups, upsertSalesOrders } from "./localDb.js";
+import { upsertFinanceRecords, upsertProcedurePlans, upsertProcessReports, upsertQuoteFollowups, upsertSalesOrders } from "./localDb.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
 import { mapProcedurePlan, mapSalesOrder } from "./syncService.js";
 
@@ -20,6 +20,14 @@ export const HISTORY_SYNC_SOURCES = [
     dateSupport: "接口暂未确认日期参数",
     suggestedRange: "先按页小批量补齐，再确认日期字段后改增量",
     riskNote: "每次只拉一页20条，不带日期过滤，写入 SQLite upsert。"
+  },
+  {
+    source: "process_reports",
+    label: "工序汇报历史",
+    viewName: "process_reports",
+    dateSupport: "日期参数暂不生效，按页翻取历史汇报",
+    suggestedRange: "近90天工序汇报明细，按页小批量补齐",
+    riskNote: "每次只拉一页20条，通过页码回溯历史，写入 SQLite upsert。"
   },
   {
     source: "quote_projects",
@@ -191,6 +199,13 @@ export async function runHistorySyncBatch(client, options = {}) {
     upsertProcedurePlans(rows);
     return historyBatchResult(plan, rows.length);
   }
+  if (plan.source === "process_reports") {
+    const response = await client.callModern("/webapi/v3/produceV2/processreportlist/detail", plan.erpParams);
+    const table = normalizeTable(response);
+    const rows = table.rows.map((row, index) => mapProcessReport(row, index, plan));
+    upsertProcessReports(rows);
+    return historyBatchResult(plan, rows.length);
+  }
   if (plan.source === "quote_projects") {
     const pending = await queryPendingQuotes(client, plan.erpParams);
     const today = options.today ? new Date(options.today) : new Date();
@@ -268,6 +283,15 @@ function historyErpParams(source, { pageIndex, pageSize, range, searchKey }) {
       searchKey
     };
   }
+  if (source === "process_reports") {
+    return {
+      page_index: pageIndex,
+      page_size: pageSize,
+      dateStart: range.start_date,
+      dateEnd: range.end_date,
+      searchKey
+    };
+  }
   if (source === "quote_projects") {
     return {
       pageindex: pageIndex,
@@ -298,6 +322,36 @@ function historyErpParams(source, { pageIndex, pageSize, range, searchKey }) {
 function summarizeError(error) {
   const message = error?.message || String(error || "未知错误");
   return message.length > 200 ? `${message.slice(0, 200)}...` : message;
+}
+
+function mapProcessReport(row, index, plan) {
+  return {
+    report_id: String(row["工序汇报ID"] || `${plan.pageIndex}-${index}`),
+    subject: row["单据主题"] || "",
+    product_name: row["产品名称"] || "",
+    procedure_name: row["加工工序"] || "",
+    batch_no: row["批号"] || "",
+    serial_no: row["序列号"] || "",
+    report_qty: parseNumber(row["汇报数量"]),
+    work_hours: parseNumber(row["加工工时"]),
+    operator: row["生产人员"] || "",
+    machine: row["生产设备"] || "",
+    report_result: row["汇报结果"] || "",
+    scrap_reason: row["报废原因"] || "",
+    creator: row["添加人员"] || "",
+    added_at: row["添加时间"] || "",
+    audit_status: row["审核状态"] || "",
+    raw: row,
+    synced_at: new Date().toISOString()
+  };
+}
+
+function parseNumber(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  const number = Number(String(value).replace(/,/g, ""));
+  return Number.isFinite(number) ? number : null;
 }
 
 export function buildHistorySyncProgress({ sources = HISTORY_SYNC_SOURCES, latestRuns = [] } = {}) {
