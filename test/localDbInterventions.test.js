@@ -336,3 +336,33 @@ test("local user roles can be deleted to restore automatic detection", async () 
   assert.equal(deleted.deleted, true);
   assert.equal(rows.some((row) => row.name === "王测试"), false);
 });
+
+test("local user passwords can be reset without storing the temporary password", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-user-password-reset-"));
+  process.env.PMC_DB_PATH = path.join(tempDir, "pmc.db");
+  const modulePath = `../src/localDb.js?userPasswordReset=${Date.now()}`;
+  const { listLocalUserRoles, resetLocalUserPassword, saveLocalUserRole } = await import(modulePath);
+
+  saveLocalUserRole({
+    name: "王测试",
+    role: "跟单员",
+    is_followup: 1,
+    note: "测试重置密码"
+  });
+
+  const reset = resetLocalUserPassword({
+    name: "王测试",
+    temporary_password: "Temp-123456",
+    reset_at: "2026-05-25T09:30:00.000Z"
+  });
+  const rows = listLocalUserRoles({ limit: 10 });
+  const row = rows.find((item) => item.name === "王测试");
+
+  assert.equal(reset.name, "王测试");
+  assert.equal(reset.temporary_password, "Temp-123456");
+  assert.equal(reset.password_reset_at, "2026-05-25T09:30:00.000Z");
+  assert.equal(row.password_reset_at, "2026-05-25T09:30:00.000Z");
+  assert.equal(row.password_reset_required, 1);
+  assert.notEqual(row.password_hash, "Temp-123456");
+  assert.match(row.password_hash, /^sha256:/);
+});

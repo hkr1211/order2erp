@@ -4,14 +4,15 @@ import { ErpClient, ERP_VIEWS, normalizeTable, toBusinessView } from "./erpClien
 import { queryOrderDeliveryRisks } from "./orderDeliveryRisks.js";
 import { queryOrderShortages } from "./orderShortages.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
-import { deleteLocalUserRole, finishHistorySyncRun, initLocalDb, latestErpRequestLogs, latestHistorySyncRuns, latestPmcInterventions, latestPmcInterventionsByRelatedNos, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listLocalUserRoles, listMaterialAlerts, listOrderProcedureLinks, listProcedurePlans, listQuoteFollowups, listSalesOrders, logErpRequest, pmcInterventionSummary, saveLocalUserRole, saveOrderProcedureLink, savePmcIntervention, savePmcSnapshot, startHistorySyncRun, tableStats } from "./localDb.js";
+import { deleteLocalUserRole, finishHistorySyncRun, initLocalDb, latestErpRequestLogs, latestHistorySyncRuns, latestPmcInterventions, latestPmcInterventionsByRelatedNos, latestPmcSnapshot, latestSyncRuns, listFinanceRecords, listLocalUserRoles, listMaterialAlerts, listOrderProcedureLinks, listProcedurePlans, listProcessReports, listQuoteFollowups, listSalesOrders, logErpRequest, pmcInterventionSummary, resetLocalUserPassword, saveLocalUserRole, saveOrderProcedureLink, savePmcIntervention, savePmcSnapshot, startHistorySyncRun, tableStats } from "./localDb.js";
 import { syncCoreData } from "./syncService.js";
 import { buildSyncPolicyRows } from "./syncPolicy.js";
 import { buildErpHealthSummary, shouldBlockErpBusinessQuery } from "./erpHealth.js";
 import { setSyncPaused, syncPauseGuard, syncPauseStatus } from "./syncPause.js";
 import { SQLITE_TABLES, buildSqliteCoverage } from "./sqliteCoverage.js";
 import { HISTORY_SYNC_SOURCES, buildHistorySyncProgress, defaultHistoryRange, historySyncDryRun, historySyncParams, historySyncWindowParams, runHistorySyncBatch, runHistorySyncWindow } from "./historySync.js";
-import { buildLocalExceptionCenter, buildLocalFinanceCenter, buildLocalPmcDashboard, buildUserRoleCandidates, quoteOwnerSummaryForLocal } from "./localAnalytics.js";
+import { buildForeignTradeBoard, buildLocalExceptionCenter, buildLocalFinanceCenter, buildLocalPmcDashboard, buildUserRoleCandidates, buildWorkshopBoard, quoteOwnerSummaryForLocal } from "./localAnalytics.js";
+import { WORKSHOP_ROUTE_TO_KEY, createWorkshopBoardPageRenderers } from "./pages/workshopBoardPage.js";
 
 loadEnvFile();
 initLocalDb();
@@ -29,9 +30,11 @@ const NAV_ITEMS = [
   ["跟单", "/followup"],
   ["PMC", "/pmc"],
   ["订单", "/orders"],
+  ["外贸", "/foreign-trade"],
   ["物料", "/materials"],
   ["生产", "/production"],
   ["派工", "/dispatch"],
+  ["看板", "/workshop-board"],
   ["排产", "/scheduling"],
   ["采购", "/procurement"],
   ["报价", "/quotes"],
@@ -40,6 +43,7 @@ const NAV_ITEMS = [
   ["报表", "/reports"],
   ["系统", "/system"]
 ];
+const { workshopBoardPage, workshopSectionScreenPage } = createWorkshopBoardPageRenderers({ modulePage, escapeHtml, formatCell, labelFor, parseBoolean });
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -147,6 +151,11 @@ const server = http.createServer(async (req, res) => {
       return sendHtml(res, 200, quoteCenterPage(result.body));
     }
 
+    if (req.method === "GET" && url.pathname === "/foreign-trade") {
+      const params = Object.fromEntries(url.searchParams);
+      return sendHtml(res, 200, foreignTradeBoardPage(queryForeignTradeBoard(params)));
+    }
+
     if (req.method === "GET" && url.pathname === "/production") {
       const params = Object.fromEntries(url.searchParams);
       const result = parseBoolean(params.refresh) ? await queryProductionCenter(params) : await queryLocalProductionCenter(params);
@@ -157,6 +166,16 @@ const server = http.createServer(async (req, res) => {
       const params = Object.fromEntries(url.searchParams);
       const result = parseBoolean(params.refresh) ? await queryProductionCenter(params) : await queryLocalProductionCenter(params);
       return sendHtml(res, 200, dispatchTrackingPage(result.body));
+    }
+
+    if (req.method === "GET" && url.pathname === "/workshop-board") {
+      const params = Object.fromEntries(url.searchParams);
+      return sendHtml(res, 200, workshopBoardPage(queryWorkshopBoard(params)));
+    }
+
+    if (req.method === "GET" && WORKSHOP_ROUTE_TO_KEY[url.pathname]) {
+      const params = Object.fromEntries(url.searchParams);
+      return sendHtml(res, 200, workshopSectionScreenPage(queryWorkshopBoard(params), WORKSHOP_ROUTE_TO_KEY[url.pathname], params));
     }
 
     if (req.method === "GET" && url.pathname === "/scheduling") {
@@ -224,6 +243,12 @@ const server = http.createServer(async (req, res) => {
       const params = Object.fromEntries(url.searchParams);
       const saved = saveLocalUserRole(params);
       return sendRedirect(res, userRoleResultHref(saved));
+    }
+
+    if (req.method === "GET" && url.pathname === "/user-roles/reset-password") {
+      const params = Object.fromEntries(url.searchParams);
+      const reset = resetLocalUserPassword(params);
+      return sendHtml(res, 200, userRolesPage(queryUserRoles(reset, params).body));
     }
 
     if (req.method === "GET" && url.pathname === "/user-roles/delete") {
@@ -678,6 +703,9 @@ function normalizeNavPath(value) {
   if (path === "/sqlite-coverage" || path.startsWith("/history-sync") || path === "/erp-logs" || path === "/user-roles") {
     return "/system";
   }
+  if (path.startsWith("/workshop-board/")) {
+    return "/workshop-board";
+  }
   return path;
 }
 
@@ -685,11 +713,13 @@ function modulePathForTitle(title) {
   const text = String(title || "");
   if (text.includes("角色")) return "/roles";
   if (text.includes("跟单")) return "/followup";
+  if (text.includes("外贸")) return "/foreign-trade";
   if (text.includes("物料")) return "/materials";
   if (text.includes("待报价")) return "/quotes";
   if (text.includes("采购")) return "/procurement";
   if (text.includes("应收应付")) return "/finance";
   if (text.includes("排产")) return "/scheduling";
+  if (text.includes("车间") || text.includes("看板") || text.includes("大屏") || text.includes("工位")) return "/workshop-board";
   if (text.includes("生产")) return "/production";
   if (text.includes("派工")) return "/dispatch";
   if (text.includes("异常")) return "/exceptions";
@@ -711,11 +741,13 @@ function homePage() {
     ["角色工作台", "/roles", "老板、PMC、销售的常用入口和处理重点"],
     ["PMC 驾驶舱", "/pmc", "老板、PMC、销售共用的一屏总览"],
     ["订单管理中心", "/orders", "订单作战清单、阻塞点、下一步动作"],
+    ["外贸订单看板", "/foreign-trade", "外贸出口、USD订单、发货收款和缺料风险"],
     ["物料控制中心", "/materials", "缺料、低库存、冻结、长库龄统一处理"],
     ["异常管理中心", "/exceptions", "交期、缺料、报价、库存异常待办池"],
     ["排产甘特视图", "/scheduling", "交期时间轴、压力分布、插单影响评估"],
     ["采购跟催中心", "/procurement", "供应商跟催、入库、应付付款跟踪"],
     ["生产进度中心", "/production", "延期工序、工作中心负荷、BOM 数据"],
+    ["车间电子看板", "/workshop-board", "轧制、冲压、钨钼三大工段当日计划、进度和异常预警"],
     ["派工进度追踪", "/dispatch", "查看派工单ID、工序计划、完工数量和延期派工"],
     ["待报价中心", "/quotes", "销售报价跟进池、负责人汇总"],
     ["应收应付中心", "/finance", "客户欠款、逾期应收、近期应付"]
@@ -1368,6 +1400,10 @@ function labelFor(key) {
     title: "标题",
     customer: "客户",
     owner: "负责人",
+    currency: "币种",
+    category: "合同分类",
+    sales_order_no: "销售订单号",
+    order_match_by: "订单匹配方式",
     product_name: "产品名称",
     product_code: "产品编号",
     product_model: "规格型号",
@@ -1408,6 +1444,10 @@ function labelFor(key) {
     edit_action: "编辑",
     delete_action: "删除配置",
     toggle_action: "切换跟单",
+    reset_action: "重置密码",
+    password_reset_at: "密码重置时间",
+    password_reset_required: "需改密",
+    password_state: "密码状态",
     suggested_role: "建议角色",
     configured_role: "已配置角色",
     configured_followup: "已配置跟单",
@@ -1424,6 +1464,7 @@ function labelFor(key) {
     amount: "金额",
     estimated_amount: "预计金额",
     quoted_amount: "报价金额",
+    usd_amount: "USD金额",
     project_stage: "项目阶段",
     po_no: "PO编号",
     unit: "单位",
@@ -1572,11 +1613,22 @@ function labelFor(key) {
     erp_params_json: "ERP请求参数",
     will_access_erp: "是否访问ERP",
     status: "状态",
+    warning_type: "预警类型",
+    level: "等级",
+    related_object: "关联对象",
+    related_id: "关联编号",
+    message: "提示内容",
     warehouse_status: "出库状态",
     delivery_status: "发货状态",
     payment_status: "收款状态",
+    invoice_status: "开票状态",
     approval_status: "审批状态",
     risk_flags: "风险标签",
+    foreign_orders: "外贸订单",
+    unshipped_orders: "未发货订单",
+    unpaid_orders: "未收款订单",
+    pending_approval_orders: "待审批订单",
+    latest_signed_date: "最近签订日期",
     scanned_orders: "扫描订单",
     candidate_orders: "候选订单",
     checked_orders: "已检查订单",
@@ -3336,6 +3388,9 @@ function formatDetailCell(column, value, row = {}) {
   if (column === "toggle_action" && value) {
     return `<a class="button" href="${escapeHtml(value)}">切换</a>`;
   }
+  if (column === "reset_action" && value) {
+    return `<a class="button" href="${escapeHtml(value)}">重置密码</a>`;
+  }
   if (["quantity", "demand_qty", "delivered_qty", "remaining_qty", "available_qty", "stock_qty", "shortage_qty", "planned_qty", "finished_qty"].includes(column)) {
     return escapeHtml(formatPmcQuantity(value, row?.unit || row?.raw?.unit || row?.raw?.raw?.Unit || row?.raw?.raw?.单位));
   }
@@ -3908,6 +3963,14 @@ async function queryQuoteCenter(params = {}) {
   };
 }
 
+function queryForeignTradeBoard(params = {}) {
+  const limit = clampInt(params.limit || params.pagesize || 1000, 1, 5000);
+  return buildForeignTradeBoard({
+    salesOrders: listSalesOrders({ limit }),
+    materialAlerts: listMaterialAlerts({ limit: 2000 })
+  });
+}
+
 function emptyQuoteCenterBody(message) {
   return {
     model: "quote_center",
@@ -4116,6 +4179,20 @@ async function queryLocalProductionCenter(params = {}) {
       ]
     }
   };
+}
+
+function queryWorkshopBoard(params = {}) {
+  const limit = clampInt(params.limit || 5000, 1, 10000);
+  const reportLimit = clampInt(params.report_limit || 1000, 1, 5000);
+  const today = parseDate(params.today) || new Date();
+  return buildWorkshopBoard({
+    today,
+    procedurePlans: listProcedurePlans({ limit }),
+    processReports: listProcessReports({ limit: reportLimit }),
+    materialAlerts: listMaterialAlerts({ limit: 1000 }),
+    salesOrders: listSalesOrders({ limit: 5000 }),
+    procedureLinks: listOrderProcedureLinks({ limit: 1000 })
+  });
 }
 
 function settledStatus(result) {
@@ -4518,7 +4595,7 @@ async function queryReportCenter(params = {}) {
   };
 }
 
-function modulePage({ title, subtitle, summary = [], panels = [], notes = [], actions = [], afterMain = "" }) {
+function modulePage({ title, subtitle, summary = [], panels = [], notes = [], actions = [], afterMain = "", pageClass = "" }) {
   const visibleActions = actions.filter(([label]) => !/JSON|Jason/i.test(String(label || "")));
   return `<!doctype html>
 <html lang="zh-CN">
@@ -4574,11 +4651,34 @@ function modulePage({ title, subtitle, summary = [], panels = [], notes = [], ac
     .timeline-dot.yellow { background: #f4a000; }
     .timeline-dot.green { background: var(--green); }
     .timeline-text { position: absolute; top: 22px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+    body.workshop-screen { background: #eef2f6; }
+    body.workshop-screen main { width: min(1920px, calc(100% - 24px)); padding: 14px 0 28px; }
+    body.workshop-screen .global-nav { margin-bottom: 10px; padding: 8px; }
+    body.workshop-screen header { position: sticky; top: 0; z-index: 4; padding: 14px 0; background: #eef2f6; }
+    body.workshop-screen h1 { font-size: clamp(30px, 3vw, 48px); }
+    body.workshop-screen h2 { padding: 16px 18px; font-size: 24px; }
+    body.workshop-screen .sub { font-size: 16px; }
+    body.workshop-screen .summary { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin: 14px 0; }
+    body.workshop-screen .metric { min-height: 116px; padding: 16px; border-width: 2px; }
+    body.workshop-screen .metric span { font-size: 16px; }
+    body.workshop-screen .metric strong { font-size: clamp(30px, 3vw, 44px); }
+    body.workshop-screen .panel { border-width: 2px; }
+    body.workshop-screen .panel.full-width table { min-width: 0; }
+    body.workshop-screen table { min-width: 0; table-layout: fixed; }
+    body.workshop-screen th, body.workshop-screen td { padding: 13px 12px; font-size: 18px; line-height: 1.35; }
+    body.workshop-screen th { position: sticky; top: 0; z-index: 2; }
+    body.workshop-screen .button { font-size: 16px; min-height: 40px; }
+    body.workshop-screen .pill { font-size: 15px; border-radius: 6px; }
+    body.workshop-screen .notes { font-size: 15px; }
+    body.workshop-screen td:first-child { font-weight: 700; }
+    body.workshop-screen tr.row-danger td { background: var(--red-soft); }
+    body.workshop-screen tr.row-warning td { background: var(--amber-soft); }
+    body.workshop-screen tr.row-ok td { background: var(--green-soft); }
     @media (max-width: 980px) { header, .grid { display: block; } .actions { justify-content: flex-start; margin-top: 14px; } .panel { margin-top: 12px; } h1 { font-size: 24px; } }
     ${sharedNavCss()}
   </style>
 </head>
-<body>
+<body class="${escapeHtml(pageClass)}">
   <main>
     ${renderTopNav(modulePathForTitle(title))}
     <header>
@@ -4669,6 +4769,31 @@ function quoteCenterPage(body) {
     ],
     notes: body.notes,
     actions: [["谨慎同步报价20条", "/sync?sources=quote_projects&pagesize=20&limit=20"], ["刷新实时ERP", "/quotes?refresh=1"]]
+  });
+}
+
+function foreignTradeBoardPage(body) {
+  return modulePage({
+    title: "外贸订单看板",
+    subtitle: "按外贸出口和非 RMB 币种识别订单，集中查看发货、收款、审批和缺料风险。",
+    summary: [
+      ["外贸订单", body.summary.foreign_orders],
+      ["USD金额", body.summary.usd_amount],
+      ["未发货", body.summary.unshipped_orders],
+      ["未收款", body.summary.unpaid_orders],
+      ["待审批", body.summary.pending_approval_orders],
+      ["缺料订单", body.summary.shortage_orders],
+      ["客户数", body.summary.customers]
+    ],
+    panels: [
+      modulePanel("外贸风险订单", body.sections.risk_orders, ["risk_flags", "order_no", "customer", "owner", "currency", "amount", "signed_date", "warehouse_status", "delivery_status", "payment_status", "approval_status"], { fullWidth: true }),
+      modulePanel("外贸订单列表", body.sections.order_rows, ["order_no", "customer", "owner", "currency", "category", "amount", "signed_date", "warehouse_status", "delivery_status", "payment_status", "invoice_status", "approval_status"], { fullWidth: true }),
+      modulePanel("外贸缺料明细", body.sections.shortage_rows, ["order_no", "customer", "product_name", "product_code", "demand_qty", "available_qty", "shortage_qty", "unit"], { fullWidth: true }),
+      modulePanel("负责人汇总", body.sections.owner_summary, ["owner", "foreign_orders", "usd_amount", "unshipped_orders", "unpaid_orders", "shortage_orders"]),
+      modulePanel("客户/国家汇总", body.sections.customer_summary, ["customer", "foreign_orders", "usd_amount", "latest_signed_date"])
+    ],
+    notes: body.notes,
+    actions: [["订单中心", "/orders"], ["物料中心", "/materials"], ["谨慎同步订单20条", "/sync?sources=sales_orders&pagesize=20"]]
   });
 }
 
@@ -6277,7 +6402,7 @@ function systemStatusPage(body) {
       modulePanel("同步策略", body.sections.sync_policy, ["label", "recommended_interval", "risk_level", "last_status", "last_rows", "last_finished_at", "next_allowed_at", "health_status", "action"]),
       modulePanel("最近同步状态", body.sections.sync_runs, ["source_key", "started_at", "finished_at", "status", "rows_synced", "error_message"]),
       modulePanel("系统工具", systemToolRows(), ["tool_name", "tool_path", "tool_desc"]),
-      modulePanel("本地角色配置", body.sections.user_roles, ["name", "role", "is_followup", "note", "updated_at"]),
+      modulePanel("用户信息维护", body.sections.user_roles, ["name", "role", "is_followup", "note", "password_reset_at", "updated_at"]),
       modulePanel("业务入口状态", body.sections.modules, ["name", "path", "status"])
     ],
     notes: body.notes,
@@ -6285,7 +6410,7 @@ function systemStatusPage(body) {
       ...(body.summary.sync_paused === "已暂停" ? [["恢复同步", "/sync-pause?state=off"]] : [["暂停同步", "/sync-pause?state=on"]]),
       ["谨慎同步订单20条", "/sync?sources=sales_orders&pagesize=20"],
       ["检测ERP登录", "/system?check_erp=1"],
-      ["角色配置", "/user-roles"],
+      ["用户信息维护", "/user-roles"],
       ["ERP请求日志", "/erp-logs"],
       ["刷新状态", "/system"],
       ["PMC驾驶舱", "/pmc"]
@@ -6338,6 +6463,7 @@ function queryUserRoles(saved = null, params = {}) {
         configured_roles: configuredRoles.map((row) => ({
           ...row,
           followup_text: Number(row.is_followup) === 0 ? "否" : "是",
+          password_state: row.password_reset_at ? "已重置" : "未设置",
           edit_action: userRoleEditHref(row),
           toggle_action: roleSaveHref({
             name: row.name,
@@ -6345,6 +6471,7 @@ function queryUserRoles(saved = null, params = {}) {
             is_followup: Number(row.is_followup) === 0 ? 1 : 0,
             note: row.note || "切换是否跟单"
           }),
+          reset_action: userPasswordResetHref(row),
           delete_action: `/user-roles/delete?name=${encodeURIComponent(row.name)}`
         })),
         detected_followup_owners: detectedRows,
@@ -6352,8 +6479,8 @@ function queryUserRoles(saved = null, params = {}) {
       },
       edit_role: editRole,
       notes: [
-        "本页读取 SQLite local_user_roles 表，用于修正 ERP 字段里混入的非跟单人员。",
-        "当前先提供只读检查入口；后续可增加页面表单，直接在浏览器里维护角色。",
+        "本页读取 SQLite local_user_roles 表，用于维护内网用户资料、跟单识别规则和本地临时密码状态。",
+        "重置密码会生成一次性临时密码，页面只在重置完成后显示一次；数据库只保存哈希。",
         "默认已将葛梓配置为财务经理/非跟单。"
       ]
     }
@@ -6362,10 +6489,10 @@ function queryUserRoles(saved = null, params = {}) {
 
 function userRolesPage(body) {
   return modulePage({
-    title: "本地角色配置",
-    subtitle: "维护内网免登录版的人员角色覆盖规则，防止财务/管理人员误入跟单员工作台。",
+    title: "用户信息维护",
+    subtitle: "维护内网用户资料、跟单识别规则和本地临时密码，为后续权限登录打基础。",
     summary: [
-      ["已配置人员", body.summary.configured_roles],
+      ["本地用户", body.summary.configured_roles],
       ["非跟单人员", body.summary.non_followup_roles],
       ["识别到跟单负责人", body.summary.detected_followup_owners],
       ["ERP负责人候选", body.summary.candidate_owners]
@@ -6373,7 +6500,7 @@ function userRolesPage(body) {
     panels: [
       body.saved ? userRoleSavedPanel(body.saved) : "",
       userRoleFormPanel(body.edit_role || body.saved || {}),
-      modulePanel("本地角色配置", body.sections.configured_roles, ["name", "role", "followup_text", "note", "updated_at", "edit_action", "toggle_action", "delete_action"], { fullWidth: true }),
+      modulePanel("本地用户信息", body.sections.configured_roles, ["name", "role", "followup_text", "note", "password_state", "password_reset_at", "updated_at", "edit_action", "toggle_action", "reset_action", "delete_action"], { fullWidth: true }),
       modulePanel("ERP负责人候选池", body.sections.role_candidates, ["name", "suggested_role", "configured_role", "configured_followup", "sales_orders", "active_orders", "completed_orders", "procedure_plans", "quote_followups", "finance_records", "role_action", "exclude_action"], { fullWidth: true, limit: 80 }),
       modulePanel("当前跟单负责人池", body.sections.detected_followup_owners, ["name", "configured", "active_orders", "shortage_orders", "pending_quotes", "open_procedures", "todos", "role_action", "exclude_action"], { fullWidth: true })
     ].filter(Boolean),
@@ -6390,6 +6517,9 @@ function userRolesPage(body) {
 function userRoleSavedPanel(saved) {
   if (saved.deleted_role) {
     return `<section class="panel full-width"><h2>已删除 <span class="pill">${escapeHtml(saved.name)}</span></h2><div class="empty">${escapeHtml(saved.name)} 已恢复为自动识别。</div></section>`;
+  }
+  if (saved.temporary_password) {
+    return `<section class="panel full-width"><h2>已重置密码 <span class="pill">${escapeHtml(saved.name)}</span></h2><div class="empty">临时密码：<strong>${escapeHtml(saved.temporary_password)}</strong>。请立即转交给用户，刷新后将不再显示。</div></section>`;
   }
   const followupText = Number(saved.is_followup) === 0 ? "非跟单" : "跟单";
   return `<section class="panel full-width"><h2>已保存 <span class="pill">${escapeHtml(saved.name)}</span></h2><div class="empty">${escapeHtml(saved.name)} 已标记为 ${escapeHtml(saved.role)} / ${escapeHtml(followupText)}。</div></section>`;
@@ -6456,6 +6586,13 @@ function userRoleEditHref(row = {}) {
   return `/user-roles?${query.toString()}`;
 }
 
+function userPasswordResetHref(row = {}) {
+  const query = new URLSearchParams({
+    name: row.name || ""
+  });
+  return `/user-roles/reset-password?${query.toString()}`;
+}
+
 function selectedUserRole(configuredRoles = [], params = {}) {
   const editName = String(params.edit_name || "").trim();
   if (!editName) {
@@ -6467,9 +6604,9 @@ function selectedUserRole(configuredRoles = [], params = {}) {
 function systemToolRows() {
   return [
     {
-      tool_name: "本地角色配置",
+      tool_name: "用户信息维护",
       tool_path: "/user-roles",
-      tool_desc: "查看本地人员角色覆盖规则，避免财务/管理人员误入跟单工作台。"
+      tool_desc: "维护本地人员资料、跟单识别规则，并为用户生成一次性临时密码。"
     },
     {
       tool_name: "SQLite 数据覆盖率",

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildLocalFinanceCenter, buildLocalPmcDashboard, buildUserRoleCandidates, mapFinanceRowForLocal, mapQuoteFollowupForLocal } from "../src/localAnalytics.js";
+import { buildForeignTradeBoard, buildLocalFinanceCenter, buildLocalPmcDashboard, buildUserRoleCandidates, buildWorkshopBoard, mapFinanceRowForLocal, mapQuoteFollowupForLocal } from "../src/localAnalytics.js";
 
 test("buildLocalPmcDashboard summarizes SQLite orders and material alerts", () => {
   const body = buildLocalPmcDashboard({
@@ -26,6 +26,83 @@ test("buildLocalPmcDashboard summarizes SQLite orders and material alerts", () =
   assert.equal(body.sections.due_soon_orders[0].order_no, "SO-2");
   assert.equal(body.sections.shortage_orders[0].order_no, "SO-2");
   assert.equal(body.sections.low_stock[0].product_code, "MO-1");
+});
+
+test("buildWorkshopBoard groups active plans by the three main workshop sections", () => {
+  const body = buildWorkshopBoard({
+    today: new Date("2026-05-26T09:00:00+08:00"),
+    procedurePlans: [
+      { work_assignment_id: "R-1", order_no: "PO-R", product_name: "钼带", procedure_name: "冷轧420轧机", work_center_name: "420四辊轧机", planned_qty: 100, finished_qty: 30, remaining_qty: 70, planned_start_date: "2026-05-25", planned_finish_date: "2026-05-27", owner: "轧制班", state: "生产中" },
+      { work_assignment_id: "S-1", order_no: "PO-S", product_name: "钽杯", procedure_name: "落料", work_center_name: "冲压工", planned_qty: 80, finished_qty: 80, remaining_qty: 0, planned_start_date: "2026-05-26", planned_finish_date: "2026-05-26", owner: "冲压班", state: "已完工" },
+      { work_assignment_id: "S-2", order_no: "PO-S2", product_name: "锥形铌杯", procedure_name: "三引", work_center_name: "工段长", planned_qty: 20, finished_qty: 5, remaining_qty: 15, planned_start_date: "2026-05-25", planned_finish_date: "2026-05-27", owner: "冲压班", state: "生产中" },
+      { work_assignment_id: "W-1", order_no: "PO-W", product_name: "钨棒", procedure_name: "无心磨", work_center_name: "磨工", planned_qty: 50, finished_qty: 10, remaining_qty: 40, planned_start_date: "2026-05-24", planned_finish_date: "2026-05-25", owner: "", state: "生产中" },
+      { work_assignment_id: "F-1", order_no: "PO-F", product_name: "钼片", procedure_name: "质检", work_center_name: "质检", planned_qty: 20, finished_qty: 0, remaining_qty: 20, planned_start_date: "2026-05-27", planned_finish_date: "2026-05-28", owner: "质检", state: "未开始" }
+    ],
+    processReports: [
+      { report_id: "REP-1", procedure_name: "落料", product_name: "钽杯", report_qty: 12, added_at: "2026-05-26T10:20:00+08:00" },
+      { report_id: "REP-2", procedure_name: "无心磨", product_name: "钨棒", report_qty: 5, added_at: "2026-05-25T10:20:00+08:00" }
+    ],
+    materialAlerts: [
+      { alert_id: "A-1", alert_type: "shortage", order_no: "PO-R", product_name: "钼带", shortage_qty: 3 }
+    ],
+    salesOrders: [
+      { order_no: "PO-R", product_name: "钼带", delivery_date: "2026-05-28" },
+      { order_no: "PO-W-LINKED", product_name: "钨棒", delivery_date: "2026-05-30" }
+    ],
+    procedureLinks: [
+      { order_no: "PO-W-LINKED", work_assignment_id: "W-1", procedure_name: "无心磨" }
+    ]
+  });
+
+  assert.equal(body.summary.active_plans, 3);
+  assert.equal(body.summary.delayed_plans, 1);
+  assert.equal(body.sections.length, 3);
+
+  const byKey = new Map(body.sections.map((section) => [section.key, section]));
+  assert.equal(byKey.get("rolling").page_path, "/workshop-board/rolling");
+  assert.equal(byKey.get("stamping").page_path, "/workshop-board/stamping");
+  assert.equal(byKey.get("tungsten_molybdenum").page_path, "/workshop-board/tungsten-molybdenum");
+  assert.equal(byKey.get("rolling").active_plans, 1);
+  assert.equal(byKey.get("rolling").material_alerts, 1);
+  assert.equal(byKey.get("rolling").warnings[0].related_object, "订单");
+  assert.equal(byKey.get("rolling").warnings[0].related_id, "PO-R");
+  assert.equal(byKey.get("rolling").completion_rate, 30);
+  assert.equal(byKey.get("stamping").completed_plans, 1);
+  assert.equal(byKey.get("stamping").active_plans, 2);
+  assert.equal(byKey.get("stamping").plans.some((row) => row.work_assignment_id === "S-2"), true);
+  assert.equal(byKey.get("stamping").today_report_qty, 12);
+  assert.equal(byKey.get("tungsten_molybdenum").delayed_plans, 1);
+  assert.equal(byKey.get("tungsten_molybdenum").warnings.some((row) => row.warning_type === "无负责人"), true);
+  assert.equal(byKey.get("tungsten_molybdenum").warnings[0].related_object, "派工");
+  assert.equal(byKey.get("tungsten_molybdenum").warnings[0].related_id, "W-1");
+  assert.equal(byKey.get("tungsten_molybdenum").plans[0].sales_order_no, "PO-W-LINKED");
+  assert.equal(byKey.get("tungsten_molybdenum").plans[0].order_match_by, "人工绑定");
+  assert.equal(byKey.get("tungsten_molybdenum").plans[0].link_action.includes("/procedure-links?"), true);
+  assert.equal(byKey.get("tungsten_molybdenum").plans[0].work_assignment_id, "W-1");
+});
+
+test("buildForeignTradeBoard summarizes USD and foreign trade orders from SQLite rows", () => {
+  const body = buildForeignTradeBoard({
+    salesOrders: [
+      { order_no: "YJ外贸出口20260500011", customer: "日本", owner: "田小静", signed_date: "2026-05-23", amount: 3615, status_text: "未出库 / 未发货 / 未收款 / 审批通过", raw_json: JSON.stringify({ htbz: "USD", htfl: "外贸出口", kpjz: "不开票", title: "57696/日本YJ外贸出口20260500011" }) },
+      { order_no: "YJ外贸出口20260500012", customer: "Apex Life Inc", owner: "田小静", signed_date: "2026-05-20", amount: 1200, status_text: "出库完毕 / 发货完毕 / 已收款 / 审批通过", raw_json: JSON.stringify({ htbz: "USD", htfl: "外贸出口", title: "57697/Apex Life Inc YJ外贸出口20260500012" }) },
+      { order_no: "YJ生产销售20260500214", customer: "内贸客户", owner: "王五", signed_date: "2026-05-20", amount: 1000, status_text: "未发货 / 未收款", raw_json: JSON.stringify({ htbz: "RMB", htfl: "生产销售" }) }
+    ],
+    materialAlerts: [
+      { alert_type: "shortage", order_no: "YJ外贸出口20260500011", customer: "日本", product_name: "钼板", product_code: "Mo-1", shortage_qty: 2, unit: "件" },
+      { alert_type: "shortage", order_no: "YJ生产销售20260500214", customer: "内贸客户", product_name: "钽片", shortage_qty: 1 }
+    ]
+  });
+
+  assert.equal(body.summary.foreign_orders, 2);
+  assert.equal(body.summary.usd_amount, 4815);
+  assert.equal(body.summary.unshipped_orders, 1);
+  assert.equal(body.summary.unpaid_orders, 1);
+  assert.equal(body.summary.shortage_orders, 1);
+  assert.equal(body.sections.risk_orders[0].order_no, "YJ外贸出口20260500011");
+  assert.equal(body.sections.risk_orders[0].currency, "USD");
+  assert.equal(body.sections.shortage_rows[0].order_no, "YJ外贸出口20260500011");
+  assert.equal(body.sections.owner_summary[0].owner, "田小静");
 });
 
 test("buildLocalPmcDashboard includes synced quote, procedure, and finance data", () => {

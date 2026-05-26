@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
 const DEFAULT_DB_PATH = path.resolve("data/pmc.db");
@@ -271,6 +272,9 @@ export function initLocalDb(dbPath = process.env.PMC_DB_PATH || DEFAULT_DB_PATH)
       role TEXT NOT NULL,
       is_followup INTEGER NOT NULL DEFAULT 1,
       note TEXT,
+      password_hash TEXT,
+      password_reset_required INTEGER NOT NULL DEFAULT 0,
+      password_reset_at TEXT,
       updated_at TEXT NOT NULL
     );
   `);
@@ -278,6 +282,9 @@ export function initLocalDb(dbPath = process.env.PMC_DB_PATH || DEFAULT_DB_PATH)
   ensureColumn(db, "pmc_intervention_logs", "result_type", "TEXT");
   ensureColumn(db, "pmc_intervention_logs", "promised_date", "TEXT");
   ensureColumn(db, "pmc_intervention_logs", "next_owner", "TEXT");
+  ensureColumn(db, "local_user_roles", "password_hash", "TEXT");
+  ensureColumn(db, "local_user_roles", "password_reset_required", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "local_user_roles", "password_reset_at", "TEXT");
   seedDefaultLocalUserRoles(db);
   return db;
 }
@@ -481,7 +488,15 @@ export function saveLocalUserRole(entry = {}) {
     updated_at: entry.updated_at || new Date().toISOString()
   };
   database
-    .prepare("INSERT OR REPLACE INTO local_user_roles (name, role, is_followup, note, updated_at) VALUES (?, ?, ?, ?, ?)")
+    .prepare(
+      `INSERT INTO local_user_roles (name, role, is_followup, note, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(name) DO UPDATE SET
+         role = excluded.role,
+         is_followup = excluded.is_followup,
+         note = excluded.note,
+         updated_at = excluded.updated_at`
+    )
     .run(payload.name, payload.role, payload.is_followup, payload.note, payload.updated_at);
   return payload;
 }
@@ -489,8 +504,39 @@ export function saveLocalUserRole(entry = {}) {
 export function listLocalUserRoles({ limit = 200 } = {}) {
   const safeLimit = Math.max(1, Math.min(Number(limit) || 200, 1000));
   return initLocalDb()
-    .prepare("SELECT name, role, is_followup, note, updated_at FROM local_user_roles ORDER BY is_followup ASC, role, name LIMIT ?")
+    .prepare("SELECT name, role, is_followup, note, password_hash, password_reset_required, password_reset_at, updated_at FROM local_user_roles ORDER BY is_followup ASC, role, name LIMIT ?")
     .all(safeLimit);
+}
+
+export function resetLocalUserPassword(entry = {}) {
+  const database = initLocalDb();
+  const name = String(entry.name || "").trim();
+  if (!name) {
+    throw new Error("name is required");
+  }
+  const temporaryPassword = String(entry.temporary_password || generateTemporaryPassword()).trim();
+  if (!temporaryPassword) {
+    throw new Error("temporary_password is required");
+  }
+  const resetAt = entry.reset_at || new Date().toISOString();
+  const existing = database.prepare("SELECT name FROM local_user_roles WHERE name = ?").get(name);
+  if (!existing) {
+    saveLocalUserRole({ name, role: "未分类", is_followup: 1, note: "通过重置密码创建" });
+  }
+  const passwordHash = hashLocalPassword(temporaryPassword);
+  database
+    .prepare(
+      `UPDATE local_user_roles
+       SET password_hash = ?, password_reset_required = 1, password_reset_at = ?, updated_at = ?
+       WHERE name = ?`
+    )
+    .run(passwordHash, resetAt, resetAt, name);
+  return {
+    name,
+    temporary_password: temporaryPassword,
+    password_reset_at: resetAt,
+    password_reset_required: 1
+  };
 }
 
 export function deleteLocalUserRole(name) {
@@ -500,6 +546,16 @@ export function deleteLocalUserRole(name) {
   }
   const result = initLocalDb().prepare("DELETE FROM local_user_roles WHERE name = ?").run(userName);
   return { name: userName, deleted: result.changes > 0 };
+}
+
+function generateTemporaryPassword() {
+  return `YJ-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
+}
+
+function hashLocalPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const digest = crypto.createHash("sha256").update(`${salt}:${password}`).digest("hex");
+  return `sha256:${salt}:${digest}`;
 }
 
 export function pmcInterventionSummary({ today = new Date(), limit = 8 } = {}) {
