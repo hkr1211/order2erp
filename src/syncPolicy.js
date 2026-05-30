@@ -2,7 +2,6 @@ export const SYNC_SOURCES = [
   { source_key: "sales_orders", label: "销售订单", recommended_interval: "15分钟", risk_level: "中" },
   { source_key: "procedure_plans", label: "派工/工序计划", recommended_interval: "30分钟", risk_level: "中" },
   { source_key: "material_alerts", label: "物料/库存告警", recommended_interval: "30分钟", risk_level: "高" },
-  { source_key: "quote_projects", label: "待报价项目", recommended_interval: "60分钟", risk_level: "低" },
   { source_key: "finance_records", label: "应收应付", recommended_interval: "120分钟", risk_level: "低" }
 ];
 

@@ -7,10 +7,12 @@ import {
   latestSyncRuns,
   replaceFinanceRecords,
   replaceMaterialAlerts,
+  replaceOrgUsers,
   replaceProcedurePlans,
   replaceQuoteFollowups,
-  replaceSalesOrders,
-  startSyncRun
+  startSyncRun,
+  upsertOrgUsers,
+  upsertSalesOrders
 } from "./localDb.js";
 
 export async function syncCoreData(client, options = {}) {
@@ -37,6 +39,9 @@ export async function syncCoreData(client, options = {}) {
     }
     if (source === "finance_records") {
       results.push(await syncFinanceRecords(client, options));
+    }
+    if (source === "org_users") {
+      results.push(await syncOrgUsers(client, options));
     }
   }
   return { generated_at: new Date().toISOString(), results, latest: latestSyncRuns() };
@@ -85,7 +90,7 @@ export async function syncSalesOrders(client, options = {}) {
     });
     const table = normalizeTable(response);
     const rows = toBusinessView("sales_orders", table).rows.map((row, index) => mapSalesOrder(row, index));
-    replaceSalesOrders(rows);
+    upsertSalesOrders(rows);
     return rows.length;
   });
 }
@@ -229,6 +234,43 @@ export async function syncFinanceRecords(client, options = {}) {
   });
 }
 
+export async function syncOrgUsers(client, options = {}) {
+  return runSync("org_users", async () => {
+    const startPage = parsePositiveInt(options.page_index || options.pageindex || 1, 1);
+    const pageSize = parsePositiveInt(options.org_pagesize || options.pagesize || options.page_size || 100, 100);
+    const maxPages = parsePositiveInt(options.org_max_pages || options.max_pages || 10, 10);
+    const baseParams = {
+      page_size: pageSize,
+      userName: options.searchKey || options.userName || "",
+      empName: options.empName || "",
+      deptId: options.deptId || "",
+      Del: options.Del ?? ""
+    };
+    const rows = [];
+    for (let pageIndex = startPage; pageIndex < startPage + maxPages; pageIndex += 1) {
+      const response = await client.queryView("org_users", {
+        ...baseParams,
+        page_index: pageIndex
+      });
+      const table = normalizeTable(response);
+      rows.push(...table.rows.map((row, index) => mapOrgUser(row, rows.length + index)));
+      const pageCount = Number(response?.Page?.PageCount || table.page?.PageCount || 0);
+      if (pageCount && pageIndex >= pageCount) {
+        break;
+      }
+      if (!pageCount && table.rows.length < pageSize) {
+        break;
+      }
+    }
+    if (isFullOrgUserSync(options)) {
+      replaceOrgUsers(rows);
+    } else {
+      upsertOrgUsers(rows);
+    }
+    return rows.length;
+  });
+}
+
 async function runSync(sourceKey, action) {
   const run = startSyncRun(sourceKey);
   try {
@@ -323,8 +365,60 @@ export function mapProcedurePlan(row, index) {
   };
 }
 
+export function mapOrgUser(row, index) {
+  const displayName = firstText(row["员工姓名"], row.display_name, row.displayName, row.name, row.Name, row.realname, row.RealName, row.username, row["账号名称"]);
+  const username = firstText(row["账号名称"], row.username, row.userName, row.loginName, row.account, row.accountName);
+  const employeeStatus = firstText(row["员工状态"], row.employee_status, row.status, row.Status, row.Del, row.del);
+  return {
+    user_id: String(firstText(row["账号ID"], row.user_id, row.userId, row.userid, row.id, row.ID, username, displayName, `org-user-${index}`)),
+    username,
+    employee_no: firstText(row["员工编号"], row.employee_no, row.employeeNo, row.empNo),
+    display_name: displayName,
+    employee_status: employeeStatus,
+    department_id: firstText(row["部门id"], row.department_id, row.departmentId, row.deptId),
+    department_name: firstText(row["部门名称"], row.department_name, row.departmentName, row.deptName),
+    is_active: isActiveOrgUser(employeeStatus),
+    raw: row,
+    synced_at: new Date().toISOString()
+  };
+}
+
 function text(value) {
   return value === undefined || value === null ? "" : String(value);
+}
+
+function firstText(...values) {
+  for (const value of values) {
+    const clean = text(value).trim();
+    if (clean) {
+      return clean;
+    }
+  }
+  return "";
+}
+
+function isActiveOrgUser(value) {
+  const status = text(value).trim();
+  if (!status) {
+    return 1;
+  }
+  if (/离职|停用|禁用|删除|失效|冻结/.test(status)) {
+    return 0;
+  }
+  if (status === "1") {
+    return 0;
+  }
+  return 1;
+}
+
+function isFullOrgUserSync(options = {}) {
+  return ![
+    options.searchKey,
+    options.userName,
+    options.empName,
+    options.deptId,
+    options.Del
+  ].some((value) => text(value).trim());
 }
 
 function number(value) {

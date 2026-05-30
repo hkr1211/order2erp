@@ -111,6 +111,38 @@ export const ERP_VIEWS = {
     },
     allowedParams: ["Sort1", "Del", "page_index", "page_size"]
   },
+  org_users: {
+    name: "组织架构账号列表",
+    kind: "modern",
+    path: "/webapi/v3/orgs/user/list",
+    defaultParams: { page_size: "100", page_index: "1" },
+    paramAliases: {
+      pagesize: "page_size",
+      pageindex: "page_index",
+      searchKey: "userName"
+    },
+    allowedParams: [
+      "userName",
+      "empName",
+      "deptId",
+      "status",
+      "Del",
+      "page_index",
+      "page_size"
+    ]
+  },
+  org_departments: {
+    name: "组织架构部门列表",
+    kind: "modern",
+    path: "/webapi/v3/orgs/dept/list",
+    defaultParams: { page_size: "100", page_index: "1" },
+    paramAliases: {
+      pagesize: "page_size",
+      pageindex: "page_index",
+      searchKey: "deptName"
+    },
+    allowedParams: ["deptName", "Del", "page_index", "page_size"]
+  },
   products: {
     name: "产品视图",
     kind: "asp",
@@ -156,6 +188,42 @@ export const ERP_VIEWS = {
       "pageindex",
       "_rpt_sort"
     ]
+  },
+  purchase_orders: {
+    name: "采购订单视图",
+    kind: "asp",
+    path: "/sysa/mobilephone/storemanage/caigou/list.asp",
+    cmdkey: "refresh",
+    defaultParams: { pagesize: "20", pageindex: "1" },
+    allowedParams: [
+      "stype",
+      "datatype",
+      "ord",
+      "remind",
+      "tdate1",
+      "tdate2",
+      "cgdh",
+      "title",
+      "cgzt",
+      "status",
+      "glgys",
+      "searchKey",
+      "pagesize",
+      "pageindex",
+      "_rpt_sort"
+    ]
+  },
+  suppliers: {
+    name: "供应商档案视图",
+    kind: "modern",
+    path: "/webapi/v3/store/supplierList",
+    defaultParams: { page_size: "20", page_index: "1" },
+    paramAliases: {
+      pagesize: "page_size",
+      pageindex: "page_index",
+      searchKey: "title"
+    },
+    allowedParams: ["title", "name", "page_index", "page_size"]
   },
   stock_in_records: {
     name: "入库流水视图",

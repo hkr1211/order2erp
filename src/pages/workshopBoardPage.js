@@ -32,7 +32,7 @@ export function createWorkshopBoardPageRenderers({ modulePage, escapeHtml, forma
   function workshopSectionCards(sections) {
     return `<section class="panel full-width">
       <h2>三大工段总览 <span class="pill">${sections.length}</span></h2>
-      <div class="summary" style="margin:0;padding:14px 16px;">
+      <div class="summary workshop-overview-sections" style="margin:0;padding:14px 16px;">
         ${sections.map((section) => `<a class="metric" href="${escapeHtml(section.page_path || `#${section.key}`)}">
           <span>${escapeHtml(section.title)}</span>
           <strong>${escapeHtml(section.completion_rate)}%</strong>
@@ -64,7 +64,9 @@ export function createWorkshopBoardPageRenderers({ modulePage, escapeHtml, forma
         ["延期计划", section.delayed_plans || 0],
         ["红黄预警", (section.warnings || []).length],
         ["今日汇报数量", section.today_report_qty || 0],
-        ["计划/完成/剩余", `${formatWorkshopNumber(section.planned_qty)}/${formatWorkshopNumber(section.finished_qty)}/${formatWorkshopNumber(section.remaining_qty)}`]
+        ["计划数量", formatWorkshopNumber(section.planned_qty)],
+        ["完成数量", formatWorkshopNumber(section.finished_qty)],
+        ["剩余数量", formatWorkshopNumber(section.remaining_qty)]
       ],
       panels: [
         workshopScreenHero(section, tone),
@@ -138,7 +140,7 @@ export function createWorkshopBoardPageRenderers({ modulePage, escapeHtml, forma
   function workshopScreenHero(section, tone) {
     return `<section class="panel full-width">
       <h2>${escapeHtml(section.title || "工段")}滚动看板 <span class="pill">${escapeHtml(tone)}</span></h2>
-      <div class="summary" style="margin:0;padding:14px 16px;">
+      <div class="summary workshop-section-metrics" style="margin:0;padding:14px 16px;">
         <div class="metric"><span>计划数量</span><strong>${escapeHtml(formatWorkshopNumber(section.planned_qty))}</strong></div>
         <div class="metric"><span>完成数量</span><strong>${escapeHtml(formatWorkshopNumber(section.finished_qty))}</strong></div>
         <div class="metric"><span>剩余数量</span><strong>${escapeHtml(formatWorkshopNumber(section.remaining_qty))}</strong></div>
@@ -157,11 +159,13 @@ export function createWorkshopBoardPageRenderers({ modulePage, escapeHtml, forma
     const tone = section.delayed_plans > 0 || section.material_alerts > 0 ? "预警" : section.active_plans > 0 ? "进行中" : "平稳";
     return `<section class="panel full-width" id="${escapeHtml(section.key)}">
       <h2>${escapeHtml(section.title)} <span class="pill">${escapeHtml(section.description || "")}</span></h2>
-      <div class="summary" style="margin:0;padding:14px 16px;">
+      <div class="summary workshop-section-metrics" style="margin:0;padding:14px 16px;">
         <div class="metric"><span>状态</span><strong>${escapeHtml(tone)}</strong></div>
         <div class="metric"><span>进行中计划</span><strong>${escapeHtml(section.active_plans)}</strong></div>
         <div class="metric"><span>完成率</span><strong>${escapeHtml(section.completion_rate)}%</strong></div>
-        <div class="metric"><span>计划/完成/剩余</span><strong>${escapeHtml(`${formatWorkshopNumber(section.planned_qty)}/${formatWorkshopNumber(section.finished_qty)}/${formatWorkshopNumber(section.remaining_qty)}`)}</strong></div>
+        <div class="metric"><span>计划数量</span><strong>${escapeHtml(formatWorkshopNumber(section.planned_qty))}</strong></div>
+        <div class="metric"><span>完成数量</span><strong>${escapeHtml(formatWorkshopNumber(section.finished_qty))}</strong></div>
+        <div class="metric"><span>剩余数量</span><strong>${escapeHtml(formatWorkshopNumber(section.remaining_qty))}</strong></div>
         <div class="metric"><span>延期/预警</span><strong>${escapeHtml(`${section.delayed_plans}/${section.warnings.length}`)}</strong></div>
         <div class="metric"><span>今日汇报数量</span><strong>${escapeHtml(section.today_report_qty)}</strong></div>
       </div>
@@ -175,12 +179,35 @@ export function createWorkshopBoardPageRenderers({ modulePage, escapeHtml, forma
       return `<h2>${escapeHtml(title)} <span class="pill">0</span></h2><div class="empty">当前没有记录。</div>`;
     }
     return `<h2>${escapeHtml(title)} <span class="pill">${rows.length}</span></h2>
-      <div class="table-wrap">
+      ${workshopTabletCards(rows, columns)}
+      <div class="table-wrap workshop-desktop-table workshop-fit-table">
         <table>
           <thead><tr>${columns.map((column) => `<th>${escapeHtml(labelFor(column))}</th>`).join("")}</tr></thead>
           <tbody>${rows.map((row) => `<tr class="${escapeHtml(workshopRowClass(row))}">${columns.map((column) => `<td>${formatWorkshopCell(column, row[column])}</td>`).join("")}</tr>`).join("")}</tbody>
         </table>
       </div>`;
+  }
+
+  function workshopTabletCards(rows, columns) {
+    const detailColumns = columns.slice(0, 8);
+    return `<div class="workshop-tablet-list">
+      ${rows.map((row) => {
+        const titleColumn = row.work_assignment_id ? "work_assignment_id" : row.related_id ? "related_id" : columns[0];
+        const titleValue = formatWorkshopCell(titleColumn, row[titleColumn]) || escapeHtml("未命名记录");
+        const metaColumns = columns.filter((column) => column !== titleColumn).slice(0, 2);
+        const meta = metaColumns
+          .map((column) => stripHtml(formatWorkshopCell(column, row[column])))
+          .filter(Boolean)
+          .join(" · ");
+        return `<article class="workshop-tablet-card ${escapeHtml(workshopRowClass(row))}">
+          <div class="workshop-tablet-title">${titleValue}</div>
+          ${meta ? `<div class="workshop-tablet-meta">${escapeHtml(meta)}</div>` : ""}
+          <div class="workshop-tablet-fields">
+            ${detailColumns.map((column) => `<div class="workshop-tablet-field"><div class="workshop-tablet-label">${escapeHtml(labelFor(column))}</div><div class="workshop-tablet-value">${formatWorkshopCell(column, row[column])}</div></div>`).join("")}
+          </div>
+        </article>`;
+      }).join("")}
+    </div>`;
   }
 
   function workshopRowClass(row = {}) {
@@ -192,7 +219,10 @@ export function createWorkshopBoardPageRenderers({ modulePage, escapeHtml, forma
 
   function formatWorkshopCell(column, value) {
     if (["planned_qty", "finished_qty", "remaining_qty", "today_report_qty"].includes(column)) {
-      return escapeHtml(formatWorkshopNumber(value));
+      return workshopNoWrap(formatWorkshopNumber(value));
+    }
+    if (["planned_start_date", "planned_finish_date", "work_assignment_id", "related_id"].includes(column)) {
+      return workshopNoWrap(value);
     }
     if (column === "link_action" && value) {
       return `<a class="button" href="${escapeHtml(value)}">绑定销售订单</a>`;
@@ -203,6 +233,14 @@ export function createWorkshopBoardPageRenderers({ modulePage, escapeHtml, forma
   function formatWorkshopNumber(value) {
     const numberValue = Number(value);
     return Number.isFinite(numberValue) ? numberValue.toFixed(2) : String(value ?? "");
+  }
+
+  function stripHtml(value) {
+    return String(value ?? "").replace(/<[^>]*>/g, "").trim();
+  }
+
+  function workshopNoWrap(value) {
+    return `<span class="workshop-nowrap">${escapeHtml(value ?? "")}</span>`;
   }
 
   return {

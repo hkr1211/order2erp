@@ -1,6 +1,60 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildForeignTradeBoard, buildLocalFinanceCenter, buildLocalPmcDashboard, buildUserRoleCandidates, buildWorkshopBoard, mapFinanceRowForLocal, mapQuoteFollowupForLocal } from "../src/localAnalytics.js";
+import { buildForeignTradeBoard, buildLocalExceptionCenter as buildLocalExceptionCenterFromFacade, buildLocalFinanceCenter, buildLocalPmcDashboard, buildLocalPmcDashboard as buildLocalPmcDashboardFromFacade, buildUserRoleCandidates, buildWorkshopBoard, mapFinanceRowForLocal, mapQuoteFollowupForLocal } from "../src/localAnalytics.js";
+import { buildLocalExceptionCenter } from "../src/localAnalytics/exceptionCenter.js";
+import { buildLocalPmcDashboard as buildLocalPmcDashboardFromModule, buildPmcDashboardBattleContext as buildPmcDashboardBattleContextFromDashboard, buildPmcDashboardFollowupTasks as buildPmcDashboardFollowupTasksFromDashboard, buildPmcDashboardKpiSummary as buildPmcDashboardKpiSummaryFromDashboard } from "../src/localAnalytics/pmcDashboard.js";
+import { buildPmcDashboardBattleContext } from "../src/localAnalytics/pmcDashboardBattleMap.js";
+import { buildPmcDashboardFollowupTasks } from "../src/localAnalytics/pmcDashboardFollowup.js";
+import { buildPmcDashboardKpiSummary } from "../src/localAnalytics/pmcDashboardKpis.js";
+import { buildCrossWorkshopFlowHandoffs as buildCrossWorkshopFlowHandoffsFromFacade, buildSemiFinishedInventoryBatches as buildSemiFinishedInventoryBatchesFromFacade } from "../src/localAnalytics/crossWorkshopFlow.js";
+import { buildCrossWorkshopFlowHandoffs } from "../src/localAnalytics/crossWorkshopHandoffs.js";
+import { buildSemiFinishedInventoryBatches, findSemiFinishedBatchForDownstream } from "../src/localAnalytics/semiFinishedBatches.js";
+import { deliveryTasks as deliveryTasksFromFacade, feedbackDeadlineForRisk as feedbackDeadlineForRiskFromFacade, sortCommandRisks as sortCommandRisksFromFacade } from "../src/localAnalytics/pmcRisks.js";
+import { buildCommandInsights as buildCommandInsightsFromFacade, buildCommandMeetingActions as buildCommandMeetingActionsFromFacade, buildMorningBrief as buildMorningBriefFromFacade, buildRiskTypeSummary as buildRiskTypeSummaryFromFacade } from "../src/localAnalytics/pmcCommand.js";
+import { buildCommandInsights } from "../src/localAnalytics/pmcCommandInsights.js";
+import { buildCommandMeetingActions } from "../src/localAnalytics/pmcCommandMeeting.js";
+import { buildMorningBrief, buildRiskTypeSummary } from "../src/localAnalytics/pmcCommandSummary.js";
+import { feedbackDeadlineForRisk } from "../src/localAnalytics/pmcRiskActions.js";
+import { sortCommandRisks } from "../src/localAnalytics/pmcRiskScoring.js";
+import { deliveryTasks } from "../src/localAnalytics/pmcRiskTasks.js";
+import { WORKSHOP_SECTIONS, classifyWorkshopSection } from "../src/localAnalytics/workshopSections.js";
+
+test("shared workshop section classifier keeps rolling stamping and tungsten molybdenum consistent", () => {
+  assert.deepEqual(WORKSHOP_SECTIONS.map((section) => section.key), ["rolling", "stamping", "tungsten_molybdenum"]);
+  assert.equal(classifyWorkshopSection({ procedure_name: "冷轧", work_center_name: "420四辊轧机" }).key, "rolling");
+  assert.equal(classifyWorkshopSection({ procedure_name: "冲圆", work_center_name: "冲压工段" }).key, "stamping");
+  assert.equal(classifyWorkshopSection({ procedure_name: "无心磨", work_center_name: "磨工" }).key, "tungsten_molybdenum");
+});
+
+test("cross workshop flow facade delegates to split modules", () => {
+  assert.equal(buildSemiFinishedInventoryBatchesFromFacade, buildSemiFinishedInventoryBatches);
+  assert.equal(buildCrossWorkshopFlowHandoffsFromFacade, buildCrossWorkshopFlowHandoffs);
+  assert.equal(typeof findSemiFinishedBatchForDownstream, "function");
+});
+
+test("PMC risk facade delegates task scoring and action helpers to split modules", () => {
+  assert.equal(deliveryTasksFromFacade, deliveryTasks);
+  assert.equal(sortCommandRisksFromFacade, sortCommandRisks);
+  assert.equal(feedbackDeadlineForRiskFromFacade, feedbackDeadlineForRisk);
+});
+
+test("PMC command facade delegates summary insight and meeting helpers to split modules", () => {
+  assert.equal(buildMorningBriefFromFacade, buildMorningBrief);
+  assert.equal(buildRiskTypeSummaryFromFacade, buildRiskTypeSummary);
+  assert.equal(buildCommandInsightsFromFacade, buildCommandInsights);
+  assert.equal(buildCommandMeetingActionsFromFacade, buildCommandMeetingActions);
+});
+
+test("local analytics facade delegates PMC dashboard and exception center to split modules", () => {
+  assert.equal(buildLocalPmcDashboardFromFacade, buildLocalPmcDashboardFromModule);
+  assert.equal(buildLocalExceptionCenterFromFacade, buildLocalExceptionCenter);
+});
+
+test("PMC dashboard delegates KPI battle map and followup assembly to split modules", () => {
+  assert.equal(buildPmcDashboardKpiSummaryFromDashboard, buildPmcDashboardKpiSummary);
+  assert.equal(buildPmcDashboardBattleContextFromDashboard, buildPmcDashboardBattleContext);
+  assert.equal(buildPmcDashboardFollowupTasksFromDashboard, buildPmcDashboardFollowupTasks);
+});
 
 test("buildLocalPmcDashboard summarizes SQLite orders and material alerts", () => {
   const body = buildLocalPmcDashboard({
@@ -105,15 +159,11 @@ test("buildForeignTradeBoard summarizes USD and foreign trade orders from SQLite
   assert.equal(body.sections.owner_summary[0].owner, "田小静");
 });
 
-test("buildLocalPmcDashboard includes synced quote, procedure, and finance data", () => {
+test("buildLocalPmcDashboard includes synced procedure and finance data", () => {
   const body = buildLocalPmcDashboard({
     today: new Date("2026-05-23T08:00:00+08:00"),
     salesOrders: [],
     materialAlerts: [],
-    quoteFollowups: [
-      { quote_no: "Q-1", title: "钼板询价", customer: "客户A", project_stage: "核价", estimated_amount: 120000, quoted_amount: 0, created_date: "2026-05-10", age_days: 13, priority: "高", quote_status: "待报价", action: "优先报价" },
-      { quote_no: "Q-2", title: "钽片复购", customer: "客户B", project_stage: "已报价", estimated_amount: 50000, quoted_amount: 48000, created_date: "2026-05-21", age_days: 2, priority: "低", quote_status: "已报价待确认" }
-    ],
     procedurePlans: [
       { work_assignment_id: "W-1", order_no: "SO-1", product_name: "钼板", procedure_name: "冲压", work_center_name: "冲压工段", planned_qty: 10, finished_qty: 2, remaining_qty: 8, planned_finish_date: "2026-05-20", owner: "张三", state: "生产中" },
       { work_assignment_id: "W-2", order_no: "SO-2", product_name: "钨棒", procedure_name: "质检", work_center_name: "质检", planned_qty: 5, finished_qty: 5, remaining_qty: 0, planned_finish_date: "2026-05-22", owner: "李四", state: "已完工" }
@@ -124,15 +174,12 @@ test("buildLocalPmcDashboard includes synced quote, procedure, and finance data"
     ]
   });
 
-  assert.equal(body.summary.pending_quote_projects, 1);
   assert.equal(body.summary.procedure_plan_rows, 2);
   assert.equal(body.summary.delayed_procedures, 1);
   assert.equal(body.summary.overdue_receivables, 1);
   assert.equal(body.summary.due_soon_payables, 1);
-  assert.equal(body.sections.pending_quotes[0].quote_no, "Q-1");
   assert.equal(body.sections.delayed_procedures[0].work_center_name, "冲压工段");
   assert.equal(body.sections.overdue_receivables[0].bill_no, "R-1");
-  assert.equal(body.source_status.sqlite_quote_followups.rows, 2);
 });
 
 test("buildUserRoleCandidates summarizes owners across ERP sources", () => {
@@ -160,7 +207,7 @@ test("buildUserRoleCandidates summarizes owners across ERP sources", () => {
   assert.equal(byName.get("张三").suggested_role, "跟单员");
   assert.equal(byName.get("张三").active_orders, 1);
   assert.equal(byName.get("张三").procedure_plans, 1);
-  assert.equal(byName.get("李四").suggested_role, "销售/报价");
+  assert.equal(byName.get("李四").suggested_role, "销售");
   assert.equal(byName.get("葛梓").configured_role, "财务经理");
   assert.equal(byName.get("葛梓").configured_followup, "否");
   assert.equal(byName.get("葛梓").suggested_role, "财务");
@@ -197,6 +244,135 @@ test("buildLocalPmcDashboard promotes stamping delays into first-screen risks", 
   assert.equal(body.sections.priority_risks.some((row) => row.exception_type === "订单缺料"), true);
 });
 
+test("buildLocalPmcDashboard flags rolling upstream delays that block downstream workshops", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-24T08:00:00+08:00"),
+    salesOrders: [
+      { order_no: "PO-FLOW", customer: "客户A", product_name: "钼冲压件", delivery_date: "2026-05-30" }
+    ],
+    procedurePlans: [
+      { work_assignment_id: "R-FLOW", order_no: "PO-FLOW", product_name: "钼板箔材", procedure_name: "冷轧", work_center_name: "420四辊轧机", planned_qty: 100, finished_qty: 40, remaining_qty: 60, planned_start_date: "2026-05-22", planned_finish_date: "2026-05-25", owner: "轧制班", state: "生产中" },
+      { work_assignment_id: "S-FLOW", order_no: "PO-FLOW", product_name: "钼冲压件", procedure_name: "落料", work_center_name: "冲压工段", planned_qty: 100, finished_qty: 0, remaining_qty: 100, planned_start_date: "2026-05-24", planned_finish_date: "2026-05-27", owner: "冲压班", state: "未开始" }
+    ]
+  });
+
+  assert.equal(body.summary.upstream_flow_risks, 1);
+  assert.equal(body.sections.upstream_flow_risks[0].upstream_section, "轧制");
+  assert.equal(body.sections.upstream_flow_risks[0].downstream_section, "冲压");
+  assert.equal(body.sections.upstream_flow_risks[0].upstream_work_assignment_id, "R-FLOW");
+  assert.equal(body.sections.upstream_flow_risks[0].downstream_work_assignment_id, "S-FLOW");
+  assert.equal(body.sections.red_risks.some((row) => row.risk_type === "前道断点" && row.related_no === "PO-FLOW"), true);
+  assert.equal(body.sections.intervention_tasks.some((row) => row.risk_type === "前道断点" && row.buttons.includes("前道加急")), true);
+});
+
+test("buildLocalPmcDashboard uses semi finished inventory batches for cross workshop handoff coverage", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-28T08:00:00+08:00"),
+    procedurePlans: [
+      { work_assignment_id: "S-BATCH", order_no: "PO-BATCH", product_name: "钼箔", procedure_name: "冲圆", work_center_name: "冲压工段", planned_qty: 5, finished_qty: 0, remaining_qty: 5, planned_start_date: "2026-05-29", planned_finish_date: "2026-05-30", owner: "冲压班", state: "未开始" }
+    ],
+    inventoryDetails: [
+      { product_code: "Mo10204000058", product_name: "钼箔", product_model: "T0.05", warehouse: "16带箔材产成品库", batch_no: "57631 钼箔", stock_qty: 8, available_qty: 8, initial_inbound_time: "2026-05-27 11:00:33" }
+    ]
+  });
+
+  assert.equal(body.summary.upstream_flow_gaps, 0);
+  assert.equal(body.summary.upstream_flow_handoffs, 1);
+  assert.equal(body.sections.upstream_flow_handoffs[0].match_basis, "库存批次匹配");
+  assert.equal(body.sections.upstream_flow_handoffs[0].upstream_section, "半成品库存");
+  assert.equal(body.sections.upstream_flow_handoffs[0].upstream_work_assignment_id, "57631 钼箔");
+});
+
+test("buildLocalPmcDashboard uses manual procedure links for cross workshop flow risks", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-24T08:00:00+08:00"),
+    salesOrders: [
+      { order_no: "PO-LINK-FLOW", customer: "客户A", product_name: "钼冲压件", delivery_date: "2026-05-30" }
+    ],
+    procedurePlans: [
+      { work_assignment_id: "R-LINK", order_no: "", product_name: "钼板箔材", procedure_name: "冷轧", work_center_name: "420四辊轧机", planned_qty: 100, finished_qty: 40, remaining_qty: 60, planned_start_date: "2026-05-22", planned_finish_date: "2026-05-25", owner: "轧制班", state: "生产中" },
+      { work_assignment_id: "S-LINK", order_no: "", product_name: "钼冲压件", procedure_name: "落料", work_center_name: "冲压工段", planned_qty: 100, finished_qty: 0, remaining_qty: 100, planned_start_date: "2026-05-24", planned_finish_date: "2026-05-27", owner: "冲压班", state: "未开始" }
+    ],
+    procedureLinks: [
+      { order_no: "PO-LINK-FLOW", work_assignment_id: "R-LINK", procedure_name: "冷轧", actor: "PMC" },
+      { order_no: "PO-LINK-FLOW", work_assignment_id: "S-LINK", procedure_name: "落料", actor: "PMC" }
+    ]
+  });
+
+  assert.equal(body.summary.upstream_flow_risks, 1);
+  assert.equal(body.sections.upstream_flow_risks[0].related_no, "PO-LINK-FLOW");
+  assert.equal(body.sections.upstream_flow_risks[0].match_basis, "人工绑定");
+  assert.equal(body.sections.order_battle_map[0].order_no, "PO-LINK-FLOW");
+});
+
+test("buildLocalPmcDashboard reports cross workshop monitoring gaps", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-24T08:00:00+08:00"),
+    salesOrders: [
+      { order_no: "PO-NO-ROLLING", customer: "客户A", product_name: "钼冲压件", delivery_date: "2026-05-30" }
+    ],
+    procedurePlans: [
+      { work_assignment_id: "S-NO-ORDER", order_no: "", product_name: "未识别冲压半成品", procedure_name: "落料", work_center_name: "冲压工段", planned_qty: 100, finished_qty: 0, remaining_qty: 100, planned_start_date: "2026-05-24", planned_finish_date: "2026-05-27", owner: "冲压班", state: "未开始" },
+      { work_assignment_id: "W-NO-UPSTREAM", order_no: "PO-NO-ROLLING", product_name: "钼机加件", procedure_name: "机加工", work_center_name: "钨钼工段", planned_qty: 50, finished_qty: 0, remaining_qty: 50, planned_start_date: "2026-05-25", planned_finish_date: "2026-05-28", owner: "钨钼班", state: "未开始" }
+    ]
+  });
+
+  assert.equal(body.summary.upstream_flow_gaps, 2);
+  assert.equal(body.sections.upstream_flow_coverage[0].downstream_need_material_3d, 2);
+  assert.equal(body.sections.upstream_flow_coverage[0].flow_coverage_rate, 0);
+  assert.equal(body.sections.upstream_flow_gaps[0].reason, "后道派工缺少销售订单号");
+  assert.equal(body.sections.upstream_flow_gaps[1].reason, "已关联订单但没有可识别的轧制前道");
+});
+
+test("buildLocalPmcDashboard lists ready cross workshop handoffs", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-24T08:00:00+08:00"),
+    salesOrders: [
+      { order_no: "PO-HANDOFF", customer: "客户A", product_name: "钼冲压件", delivery_date: "2026-05-30" }
+    ],
+    procedurePlans: [
+      { work_assignment_id: "R-HANDOFF", order_no: "PO-HANDOFF", product_name: "钼板箔材", procedure_name: "冷轧", work_center_name: "420四辊轧机", planned_qty: 100, finished_qty: 100, remaining_qty: 0, planned_start_date: "2026-05-20", planned_finish_date: "2026-05-23", owner: "轧制班", state: "已完工" },
+      { work_assignment_id: "S-HANDOFF", order_no: "PO-HANDOFF", product_name: "钼冲压件", procedure_name: "落料", work_center_name: "冲压工段", planned_qty: 100, finished_qty: 0, remaining_qty: 100, planned_start_date: "2026-05-25", planned_finish_date: "2026-05-27", owner: "冲压班", state: "未开始" }
+    ]
+  });
+
+  assert.equal(body.summary.upstream_flow_gaps, 0);
+  assert.equal(body.summary.upstream_flow_handoffs, 1);
+  assert.equal(body.sections.upstream_flow_handoffs[0].handoff_status, "可转序");
+  assert.equal(body.sections.upstream_flow_handoffs[0].upstream_work_assignment_id, "R-HANDOFF");
+  assert.equal(body.sections.upstream_flow_handoffs[0].downstream_work_assignment_id, "S-HANDOFF");
+  assert.deepEqual(body.sections.upstream_flow_handoffs[0].buttons, ["确认已入库", "确认已转序", "后道已接收"]);
+});
+
+test("buildLocalPmcDashboard reports data freshness for PMC sources", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-24T08:00:00+08:00"),
+    salesOrders: [
+      { order_no: "PO-FRESH", customer: "客户A", product_name: "钼板", delivery_date: "2026-05-30", synced_at: "2026-05-24T01:00:00.000Z" }
+    ],
+    materialAlerts: [
+      { alert_type: "low_stock", product_code: "MO-1", product_name: "钼粉", available_qty: 1, synced_at: "2026-05-20T01:00:00.000Z" }
+    ],
+    procedurePlans: [
+      { work_assignment_id: "W-FRESH", order_no: "PO-FRESH", product_name: "钼板", procedure_name: "冷轧", work_center_name: "轧制", remaining_qty: 10, planned_finish_date: "2026-05-25", synced_at: "2026-05-24T02:00:00.000Z" }
+    ]
+  });
+
+  const salesSource = body.sections.data_freshness.find((row) => row.source_name === "销售订单");
+  const materialSource = body.sections.data_freshness.find((row) => row.source_name === "物料/库存告警");
+  const inventorySource = body.sections.data_freshness.find((row) => row.source_name === "库存明细批次");
+
+  assert.equal(body.summary.stale_data_sources, 3);
+  assert.equal(salesSource.row_count, 1);
+  assert.equal(salesSource.freshness_status, "今日已同步");
+  assert.equal(materialSource.freshness_status, "需关注");
+  assert.equal(inventorySource.freshness_status, "无数据");
+  assert.equal(body.summary.data_trust_status, "需复核");
+  assert.equal(body.sections.data_trust_summary[0].trust_score, 40);
+  assert.equal(body.sections.data_trust_summary[0].attention_sources.includes("物料/库存告警"), true);
+  assert.equal(body.sections.data_trust_summary[0].decision_guardrail, "关键决策需人工复核");
+});
+
 test("buildLocalPmcDashboard groups red and yellow risks with intervention actions", () => {
   const body = buildLocalPmcDashboard({
     today: new Date("2026-05-24T08:00:00+08:00"),
@@ -210,26 +386,77 @@ test("buildLocalPmcDashboard groups red and yellow risks with intervention actio
     ],
     procedurePlans: [
       { work_assignment_id: "W-RED", order_no: "PO-RED", product_name: "钼板", procedure_name: "落料", work_center_name: "冲压工", remaining_qty: 8, planned_finish_date: "2026-05-20", state: "生产中" }
-    ],
-    quoteFollowups: [
-      { quote_no: "Q-YELLOW", title: "铌件询价", customer: "客户C", project_stage: "核价", quoted_amount: 0, priority: "高", quote_status: "待报价" }
     ]
   });
 
   assert.equal(body.command_center.red_count, 3);
-  assert.equal(body.command_center.yellow_count, 3);
-  assert.equal(body.command_center.today_todos, 6);
+  assert.equal(body.command_center.yellow_count, 2);
+  assert.equal(body.command_center.today_todos, 5);
   assert.equal(body.sections.red_risks.some((row) => row.risk_type === "交期超期" && row.buttons.includes("客户沟通")), true);
   assert.equal(body.sections.yellow_risks.some((row) => row.risk_type === "交期预警" && row.buttons.includes("协调工序")), true);
+  assert.equal([...body.sections.red_risks, ...body.sections.yellow_risks].every((row) => row.risk_id && row.related_object && row.source_table && row.source_key && row.source_rule && row.suggested_action), true);
+  assert.equal([...body.sections.red_risks, ...body.sections.yellow_risks].every((row) => row.prediction_level && row.prediction_reason && row.planning_suggestion), true);
+  assert.equal(body.sections.red_risks.find((row) => row.risk_type === "产能瓶颈").related_object, "派工");
+  assert.equal(body.sections.red_risks.find((row) => row.risk_type === "物料断供").source_table, "erp_material_alerts");
+  assert.equal(body.sections.yellow_risks.find((row) => row.risk_type === "交期预警").source_table, "erp_sales_orders");
+  assert.equal(body.sections.red_risks.every((row) => Number(row.risk_score) >= 80), true);
+  assert.deepEqual(body.sections.red_risks.map((row) => row.risk_score), [...body.sections.red_risks.map((row) => row.risk_score)].sort((a, b) => b - a));
+  assert.deepEqual(body.sections.morning_brief.map((row) => row.risk_score), [...body.sections.morning_brief.map((row) => row.risk_score)].sort((a, b) => b - a));
+  assert.equal(body.sections.red_risks[0].score_reason.includes("红牌"), true);
   assert.equal(body.sections.red_risks.some((row) => row.rule_reason.includes("必须今天处理")), true);
   assert.equal(body.sections.yellow_risks.some((row) => row.rule_reason.includes("3天内可能恶化")), true);
   assert.equal(body.sections.intervention_tasks[0].primary_action, "优先确认冲压产能、模具和插单影响");
+  assert.equal(body.sections.intervention_tasks[0].responsible_owner, "PMC/冲压工段");
+  assert.equal(body.sections.intervention_tasks[0].feedback_deadline, "4小时内反馈");
+  assert.equal(body.sections.intervention_tasks[0].escalation_rule, "4小时内无反馈升级给管理者");
+  assert.equal(body.sections.intervention_tasks[0].expected_output, "明确处理方案、负责人和可承诺完成时间");
   assert.equal(body.sections.intervention_tasks.some((row) => row.buttons.includes("生成催货文本")), true);
   assert.equal(body.sections.morning_brief[0].risk_level, "红牌");
   assert.equal(body.sections.morning_brief[0].headline.includes("产能瓶颈"), true);
   assert.equal(body.sections.morning_brief[0].meeting_focus, "今天确认产能、班次和外协选择");
   assert.equal(body.sections.morning_brief[0].action_label, "加班协调");
-  assert.equal(body.sections.morning_brief.some((row) => row.buttons.includes("标记处理中")), true);
+  assert.equal(body.sections.intervention_tasks.some((row) => row.buttons.includes("标记处理中")), true);
+  assert.equal(body.sections.risk_type_summary[0].risk_type, "产能瓶颈");
+  assert.equal(body.sections.risk_type_summary[0].red_count, 1);
+  assert.equal(body.sections.risk_type_summary[0].next_action, "今天确认产能、班次和外协选择");
+  assert.equal(body.sections.risk_owner_summary.some((row) => row.owner_role === "PMC/冲压工段" && row.red_count === 1), true);
+  assert.equal(body.sections.risk_owner_summary.some((row) => row.owner_role === "PMC/采购" && row.red_count === 1), true);
+  assert.equal(body.sections.command_insights[0].insight_type, "最高风险");
+  assert.equal(body.sections.command_insights[0].related_no, body.sections.morning_brief[0].related_no);
+  assert.equal(body.sections.command_insights[0].meeting_topic, "今天确认产能、班次和外协选择");
+  assert.equal(body.sections.command_insights[0].responsible_owner, "PMC/冲压工段");
+  assert.equal(body.sections.command_insights[0].feedback_deadline, "4小时内反馈");
+  assert.equal(body.sections.command_insights[0].decision_request, "请确认是否立即执行：优先确认冲压产能、模具和插单影响");
+  assert.equal(body.sections.command_insights.some((row) => row.insight_type === "责任压力" && row.owner_role === "PMC/冲压工段"), true);
+  const ownerInsight = body.sections.command_insights.find((row) => row.insight_type === "责任压力");
+  assert.equal(ownerInsight.meeting_topic, "请PMC/冲压工段说明红牌1项、黄牌0项的处理顺序");
+  assert.equal(ownerInsight.feedback_deadline, "今天下班前更新处理结果");
+  assert.equal(body.sections.command_meeting_actions[0].action_no, "MEET-001");
+  assert.equal(body.sections.command_meeting_actions[0].related_no, body.sections.morning_brief[0].related_no);
+  assert.equal(body.sections.command_meeting_actions[0].responsible_owner, "PMC/冲压工段");
+  assert.equal(body.sections.command_meeting_actions[0].meeting_question, "今天确认产能、班次和外协选择");
+  assert.equal(body.sections.command_meeting_actions[0].expected_output, "明确处理方案、负责人和可承诺完成时间");
+  assert.equal(body.sections.command_meeting_actions[0].escalation_rule, "4小时内无反馈升级给管理者");
+  assert.equal(body.sections.command_meeting_actions.some((row) => row.meeting_question.includes("请PMC/冲压工段说明红牌1项")), true);
+});
+
+test("buildLocalPmcDashboard calculates risk ratio from the full command risk pool", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-24T08:00:00+08:00"),
+    materialAlerts: [
+      { alert_type: "low_stock", product_code: "MO-LOW", product_name: "钼粉", available_qty: 1, stock_qty: 1 }
+    ],
+    procedurePlans: [
+      { work_assignment_id: "W-DELAY", product_name: "钼板", procedure_name: "冷轧", work_center_name: "轧制", remaining_qty: 8, planned_finish_date: "2026-05-20", state: "生产中" }
+    ]
+  });
+
+  assert.equal(body.command_center.red_count, 0);
+  assert.equal(body.command_center.yellow_count, 2);
+  assert.equal(body.command_center.risk_item_count, 2);
+  assert.equal(body.command_center.monitored_item_count, 2);
+  assert.equal(body.command_center.risk_item_ratio, 100);
+  assert.equal(body.command_center.risk_order_ratio, 100);
 });
 
 test("buildLocalPmcDashboard formats shortage quantities with kg precision", () => {
@@ -261,10 +488,6 @@ test("buildLocalPmcDashboard filters a merchandiser workbench by owner", () => {
     procedurePlans: [
       { work_assignment_id: "W-ZS", order_no: "PO-ZS", product_name: "钼板", procedure_name: "落料", work_center_name: "冲压工", remaining_qty: 8, planned_finish_date: "2026-05-20", owner: "张三", state: "生产中" },
       { work_assignment_id: "W-LS", order_no: "PO-LS", product_name: "钽杯", procedure_name: "落料", work_center_name: "冲压工", remaining_qty: 8, planned_finish_date: "2026-05-20", owner: "李四", state: "生产中" }
-    ],
-    quoteFollowups: [
-      { quote_no: "Q-ZS", owner: "张三", title: "钼板询价", quoted_amount: 0, priority: "高", quote_status: "待报价" },
-      { quote_no: "Q-LS", owner: "李四", title: "钽杯询价", quoted_amount: 0, priority: "高", quote_status: "待报价" }
     ]
   });
 
@@ -273,8 +496,33 @@ test("buildLocalPmcDashboard filters a merchandiser workbench by owner", () => {
   assert.equal(body.sections.due_soon_orders[0].order_no, "PO-ZS");
   assert.equal(body.sections.shortage_orders[0].order_no, "PO-ZS");
   assert.equal(body.sections.delayed_procedures[0].work_assignment_id, "W-ZS");
-  assert.equal(body.sections.pending_quotes[0].quote_no, "Q-ZS");
   assert.equal(body.sections.owner_workbenches.some((row) => row.owner === "张三" && row.active_orders === 1), true);
+});
+
+test("buildLocalPmcDashboard keeps matched procedure risks in owner workbench", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-24T08:00:00+08:00"),
+    owner: "王少花",
+    salesOrders: [
+      { order_no: "PO-WSH", customer: "客户A", owner: "王少花", product_name: "钽杯", delivery_date: "2026-06-10", status_text: "生产中" },
+      { order_no: "PO-OTHER", customer: "客户B", owner: "其他跟单", product_name: "钼板", delivery_date: "2026-06-10", status_text: "生产中" }
+    ],
+    procedurePlans: [
+      { work_assignment_id: "W-WSH", order_no: "", product_name: "钽杯现场描述", procedure_name: "落料", work_center_name: "冲压工", remaining_qty: 10, planned_finish_date: "2026-05-20", state: "生产中" },
+      { work_assignment_id: "W-OTHER", order_no: "PO-OTHER", product_name: "钼板", procedure_name: "冷轧", work_center_name: "轧制", remaining_qty: 5, planned_finish_date: "2026-05-20", state: "生产中" }
+    ],
+    procedureLinks: [
+      { order_no: "PO-WSH", work_assignment_id: "W-WSH", procedure_name: "落料", actor: "PMC" }
+    ]
+  });
+
+  assert.equal(body.owner_filter, "王少花");
+  assert.equal(body.sections.delayed_procedures.length, 1);
+  assert.equal(body.sections.delayed_procedures[0].work_assignment_id, "W-WSH");
+  assert.equal(body.sections.delayed_procedures[0].order_no, "PO-WSH");
+  assert.equal(body.sections.delayed_procedures[0].order_match_by, "人工绑定");
+  assert.equal(body.sections.red_risks.some((row) => row.related_no === "W-WSH"), true);
+  assert.equal(body.sections.red_risks.some((row) => row.related_no === "W-OTHER"), false);
 });
 
 test("buildLocalPmcDashboard excludes finance and completed orders from followup owners", () => {
@@ -395,6 +643,75 @@ test("buildLocalPmcDashboard supports conservative assisted order-procedure matc
   assert.equal(body.sections.order_procedure_matches[0].order_no, "PO-100");
   assert.equal(body.sections.unmatched_procedure_plans.length, 1);
   assert.equal(body.sections.unmatched_procedure_plans[0].work_assignment_id, "W-B");
+});
+
+test("buildLocalPmcDashboard reports total unmatched procedure count even when list is truncated", () => {
+  const procedurePlans = Array.from({ length: 35 }, (_, index) => ({
+    work_assignment_id: `W-${index + 1}`,
+    order_no: "",
+    product_name: `未匹配产品${index + 1}`,
+    procedure_name: "机加工",
+    remaining_qty: 1,
+    planned_finish_date: "2026-05-28"
+  }));
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-24T08:00:00+08:00"),
+    salesOrders: [
+      { order_no: "PO-1", customer: "客户A", product_name: "钼带", delivery_date: "2026-05-30" }
+    ],
+    procedurePlans
+  });
+
+  assert.equal(body.summary.unmatched_procedure_plans, 35);
+  assert.equal(body.sections.order_procedure_coverage[0].unmatched_procedure_plans, 35);
+  assert.equal(body.sections.unmatched_procedure_plans.length, 30);
+});
+
+test("buildLocalPmcDashboard matches procedures by unique process report subject reference", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-24T08:00:00+08:00"),
+    salesOrders: [
+      {
+        order_no: "YJ生产销售20260500158",
+        customer: "客户A",
+        product_name: "钼杯",
+        delivery_date: "2026-07-30",
+        raw_json: JSON.stringify({ title: "57658 客户A YJ生产销售20260500158" })
+      }
+    ],
+    procedurePlans: [
+      { work_assignment_id: "44692", order_no: "", product_name: "钼杯", procedure_name: "引伸", remaining_qty: 10, planned_finish_date: "2026-05-28" }
+    ],
+    processReports: [
+      { subject: "57658 钼杯", product_name: "钼杯", procedure_name: "引伸" }
+    ]
+  });
+
+  assert.equal(body.summary.procedure_order_match_rate, 100);
+  assert.equal(body.summary.report_subject_matched_orders, 1);
+  assert.equal(body.sections.order_procedure_matches[0].order_no, "YJ生产销售20260500158");
+  assert.equal(body.sections.order_procedure_matches[0].matched_by, "工序汇报主题匹配");
+  assert.equal(body.sections.unmatched_procedure_plans.length, 0);
+});
+
+test("buildLocalPmcDashboard does not match ambiguous process report subject references", () => {
+  const body = buildLocalPmcDashboard({
+    today: new Date("2026-05-24T08:00:00+08:00"),
+    salesOrders: [
+      { order_no: "PO-A", product_name: "钼杯", delivery_date: "2026-07-30", raw_json: JSON.stringify({ title: "57658 客户A PO-A" }) },
+      { order_no: "PO-B", product_name: "钼杯", delivery_date: "2026-07-31", raw_json: JSON.stringify({ title: "57658 客户B PO-B" }) }
+    ],
+    procedurePlans: [
+      { work_assignment_id: "44692", order_no: "", product_name: "钼杯", procedure_name: "引伸", remaining_qty: 10, planned_finish_date: "2026-05-28" }
+    ],
+    processReports: [
+      { subject: "57658 钼杯", product_name: "钼杯", procedure_name: "引伸" }
+    ]
+  });
+
+  assert.equal(body.summary.procedure_order_match_rate, 0);
+  assert.equal(body.summary.report_subject_matched_orders, 0);
+  assert.equal(body.sections.unmatched_procedure_plans.length, 1);
 });
 
 test("buildLocalPmcDashboard applies manual order-procedure links", () => {

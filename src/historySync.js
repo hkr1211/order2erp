@@ -1,6 +1,6 @@
 import { normalizeTable, toBusinessView } from "./erpClient.js";
 import { mapFinanceRowForLocal, mapQuoteFollowupForLocal } from "./localAnalytics.js";
-import { upsertFinanceRecords, upsertInventoryDetails, upsertInventorySummary, upsertProcedurePlans, upsertProcessReports, upsertQuoteFollowups, upsertSalesOrders, upsertWarehouses } from "./localDb.js";
+import { existingInventoryDetailIds, existingInventorySummaryIds, existingProcessReportIds, upsertFinanceRecords, upsertInventoryDetails, upsertInventorySummary, upsertProcedurePlans, upsertProcessReports, upsertPurchaseOrders, upsertQuoteFollowups, upsertSalesOrders, upsertSuppliers, upsertWarehouses } from "./localDb.js";
 import { queryPendingQuotes } from "./pendingQuotes.js";
 import { mapProcedurePlan, mapSalesOrder } from "./syncService.js";
 
@@ -27,9 +27,9 @@ export const HISTORY_SYNC_SOURCES = [
     viewName: "process_reports",
     defaultPageSize: 5,
     maxPageSize: 5,
-    dateSupport: "日期参数暂不生效，按页翻取历史汇报",
-    suggestedRange: "近90天工序汇报明细，按页小批量补齐",
-    riskNote: "每次只拉一页5条，通过页码回溯历史，写入 SQLite upsert。"
+    dateSupport: "支持添加日期 InDate_0/InDate_1",
+    suggestedRange: "近90天工序汇报明细，按添加日期过滤后小批量补齐",
+    riskNote: "每次只拉一页5条，按添加日期过滤，写入 SQLite upsert；安全窗口会识别重复页并自动停止。"
   },
   {
     source: "warehouses",
@@ -38,6 +38,22 @@ export const HISTORY_SYNC_SOURCES = [
     dateSupport: "仓库主数据不按日期过滤",
     suggestedRange: "全量仓库清单，重点确认钽铌库、废料库、原料库、半成品库、成品库",
     riskNote: "每次只拉一页20条仓库主数据，写入 SQLite upsert。"
+  },
+  {
+    source: "purchase_orders",
+    label: "采购订单",
+    viewName: "purchase_orders",
+    dateSupport: "支持采购日期 tdate1/tdate2",
+    suggestedRange: "近90天采购订单，后续结合未到货订单做在途预警",
+    riskNote: "每次只拉一页20条采购订单，写入 SQLite upsert。"
+  },
+  {
+    source: "suppliers",
+    label: "供应商档案",
+    viewName: "suppliers",
+    dateSupport: "供应商主数据不按日期过滤",
+    suggestedRange: "全量供应商档案，先小页数补齐名称、联系人和状态",
+    riskNote: "每次只拉一页20条供应商档案，写入 SQLite upsert。"
   },
   {
     source: "inventory_summary",
@@ -174,6 +190,7 @@ export async function runHistorySyncWindow(options = {}) {
   }
   const wait = typeof options.wait === "function" ? options.wait : sleep;
   const results = [];
+  const seenFingerprints = new Map();
   let stopReason = "已达到安全窗口页数上限。";
 
   for (const page of plan.pages) {
@@ -185,6 +202,29 @@ export async function runHistorySyncWindow(options = {}) {
       pagesize: page.page_size
     });
     results.push(result);
+    if (result.row_fingerprint) {
+      const previousPage = seenFingerprints.get(result.row_fingerprint);
+      if (previousPage) {
+        result.duplicate_page = true;
+        result.warning = `本页记录与第 ${previousPage} 页完全重复，疑似 ERP 深分页重复返回。`;
+        stopReason = result.warning;
+        break;
+      }
+      seenFingerprints.set(result.row_fingerprint, result.page_index);
+    }
+    const hasNewRowMetric = result.new_rows !== undefined && result.new_rows !== null && result.new_rows !== "";
+    const supportsNoNewStop = ["process_reports", "inventory_summary", "inventory_details"].includes(plan.source);
+    if (supportsNoNewStop && hasNewRowMetric && Number(result.rows_synced) > 0 && Number(result.new_rows) === 0) {
+      result.no_new_rows = true;
+      result.warning = result.warning || "本页数据全部已存在于 SQLite，疑似继续翻页已无新增数据。";
+      stopReason = result.warning;
+      break;
+    }
+    if (isFinancePastRequestedRange(plan.source, result)) {
+      result.warning = "本页财务原始记录全部落在请求日期范围外，已越过本次同步起点。";
+      stopReason = result.warning;
+      break;
+    }
     if (!result.has_next || Number(result.rows_synced) < plan.pageSize) {
       stopReason = "最后一页返回不足页大小，窗口已停止。";
       break;
@@ -230,8 +270,10 @@ export async function runHistorySyncBatch(client, options = {}) {
     const response = await client.callModern("/webapi/v3/produceV2/processreportlist/detail", plan.erpParams);
     const table = normalizeTable(response);
     const rows = table.rows.map((row, index) => mapProcessReport(row, index, plan));
+    const existingIds = existingProcessReportIds(rows.map((row) => row.report_id));
+    const newRows = rows.filter((row) => !existingIds.has(row.report_id));
     upsertProcessReports(rows);
-    return historyBatchResult(plan, rows.length);
+    return historyBatchResult(plan, rows.length, processReportPageMeta(rows, newRows.length));
   }
   if (plan.source === "warehouses") {
     const response = await client.queryView(plan.viewName, plan.erpParams);
@@ -240,19 +282,37 @@ export async function runHistorySyncBatch(client, options = {}) {
     upsertWarehouses(rows);
     return historyBatchResult(plan, rows.length);
   }
+  if (plan.source === "purchase_orders") {
+    const response = await client.queryView(plan.viewName, plan.erpParams);
+    const table = normalizeTable(response);
+    const rows = table.rows.map((row, index) => mapPurchaseOrderForLocal(row, index, plan));
+    upsertPurchaseOrders(rows);
+    return historyBatchResult(plan, rows.length);
+  }
+  if (plan.source === "suppliers") {
+    const response = await client.queryView(plan.viewName, plan.erpParams);
+    const table = normalizeTable(response);
+    const rows = table.rows.map((row, index) => mapSupplierForLocal(row, index, plan));
+    upsertSuppliers(rows);
+    return historyBatchResult(plan, rows.length);
+  }
   if (plan.source === "inventory_summary") {
     const response = await client.queryView(plan.viewName, plan.erpParams);
     const table = normalizeTable(response);
     const rows = toBusinessView("inventory", table).rows.map((row, index) => mapInventoryForLocal(row, index, plan, "summary"));
+    const existingIds = existingInventorySummaryIds(rows.map((row) => row.inventory_id));
+    const newRows = rows.filter((row) => !existingIds.has(row.inventory_id));
     upsertInventorySummary(rows);
-    return historyBatchResult(plan, rows.length);
+    return historyBatchResult(plan, rows.length, inventoryPageMeta(rows, newRows.length));
   }
   if (plan.source === "inventory_details") {
     const response = await client.queryView(plan.viewName, plan.erpParams);
     const table = normalizeTable(response);
     const rows = toBusinessView("inventory_details", table).rows.map((row, index) => mapInventoryForLocal(row, index, plan, "detail"));
+    const existingIds = existingInventoryDetailIds(rows.map((row) => row.inventory_id));
+    const newRows = rows.filter((row) => !existingIds.has(row.inventory_id));
     upsertInventoryDetails(rows);
-    return historyBatchResult(plan, rows.length);
+    return historyBatchResult(plan, rows.length, inventoryPageMeta(rows, newRows.length));
   }
   if (plan.source === "quote_projects") {
     const pending = await queryPendingQuotes(client, plan.erpParams);
@@ -275,7 +335,7 @@ export async function runHistorySyncBatch(client, options = {}) {
     }
     const receivableRows = receivableResult.status === "fulfilled" ? normalizeTable(receivableResult.value).rows : [];
     const payableRows = payableResult.status === "fulfilled" ? normalizeTable(payableResult.value).rows : [];
-    const rows = [
+    const mappedRows = [
       ...receivableRows.map((row, index) => ({
         record_id: `receivable-${row.id || row.billno || row.order1 || `${plan.pageIndex}-${index}`}`,
         ...mapFinanceRowForLocal(row, "receivable", today),
@@ -287,13 +347,22 @@ export async function runHistorySyncBatch(client, options = {}) {
         synced_at: new Date().toISOString()
       }))
     ];
+    const rows = mappedRows.filter((row) => isDateInRange(row.bill_date, plan.range.start_date, plan.range.end_date));
     upsertFinanceRecords(rows);
-    return historyBatchResult(plan, rows.length);
+    return historyBatchResult(plan, rows.length, {
+      raw_rows: receivableRows.length + payableRows.length,
+      receivable_raw_rows: receivableRows.length,
+      payable_raw_rows: payableRows.length,
+      filtered_out_rows: mappedRows.length - rows.length,
+      local_date_filter: "bill_date",
+      has_next: receivableRows.length >= plan.pageSize || payableRows.length >= plan.pageSize
+    });
   }
   throw new Error(`Unsupported history sync source: ${plan.source}`);
 }
 
-function historyBatchResult(plan, rowsSynced) {
+function historyBatchResult(plan, rowsSynced, meta = {}) {
+  const hasNext = meta.has_next !== undefined ? Boolean(meta.has_next) : rowsSynced >= plan.pageSize;
   return {
     generated_at: new Date().toISOString(),
     source: plan.source,
@@ -304,14 +373,59 @@ function historyBatchResult(plan, rowsSynced) {
     page_size: plan.pageSize,
     start_date: plan.range.start_date,
     end_date: plan.range.end_date,
-    has_next: rowsSynced >= plan.pageSize,
-    next_page_index: rowsSynced >= plan.pageSize ? plan.pageIndex + 1 : null,
+    ...meta,
+    has_next: hasNext,
+    next_page_index: hasNext ? plan.pageIndex + 1 : null,
     notes: [
       "本次只执行一个小批次，避免长时间占用 ERP。",
       "数据写入使用 upsert，不会清空旧成功数据。",
       plan.riskNote
     ]
   };
+}
+
+function isDateInRange(value, startDate, endDate) {
+  const date = normalizeDateText(value);
+  if (!date) return true;
+  const start = normalizeDateText(startDate);
+  const end = normalizeDateText(endDate);
+  return (!start || date >= start) && (!end || date <= end);
+}
+
+function normalizeDateText(value) {
+  if (!value) return "";
+  const text = String(value).trim();
+  const match = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (!match) return "";
+  const [, year, month, day] = match;
+  return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+}
+
+function processReportPageMeta(rows, newRows = null) {
+  const keys = rows.map((row) => String(row.report_id || "")).filter(Boolean).sort();
+  return {
+    new_rows: newRows === null ? "" : newRows,
+    unique_row_count: new Set(keys).size,
+    row_key_sample: keys.slice(0, 10).join(","),
+    row_fingerprint: keys.length ? keys.join("|") : ""
+  };
+}
+
+function inventoryPageMeta(rows, newRows = null) {
+  const keys = rows.map((row) => String(row.inventory_id || "")).filter(Boolean).sort();
+  return {
+    new_rows: newRows === null ? "" : newRows,
+    unique_row_count: new Set(keys).size,
+    row_key_sample: keys.slice(0, 10).join(","),
+    row_fingerprint: keys.length ? keys.join("|") : ""
+  };
+}
+
+function isFinancePastRequestedRange(source, result) {
+  return source === "finance_records"
+    && Number(result.raw_rows) > 0
+    && Number(result.rows_synced) === 0
+    && Number(result.filtered_out_rows) >= Number(result.raw_rows);
 }
 
 function historyErpParams(source, { pageIndex, pageSize, range, searchKey, cks }) {
@@ -335,6 +449,8 @@ function historyErpParams(source, { pageIndex, pageSize, range, searchKey, cks }
     return {
       page_index: pageIndex,
       page_size: pageSize,
+      InDate_0: range.start_date,
+      InDate_1: range.end_date,
       searchKey
     };
   }
@@ -345,12 +461,37 @@ function historyErpParams(source, { pageIndex, pageSize, range, searchKey, cks }
       Sort1: searchKey
     };
   }
-  if (source === "inventory_summary" || source === "inventory_details") {
+  if (source === "purchase_orders") {
+    return {
+      pageindex: pageIndex,
+      pagesize: pageSize,
+      tdate1: range.start_date,
+      tdate2: range.end_date,
+      searchKey
+    };
+  }
+  if (source === "suppliers") {
+    return {
+      page_index: pageIndex,
+      page_size: pageSize,
+      title: searchKey
+    };
+  }
+  if (source === "inventory_summary") {
     return {
       page_index: pageIndex,
       page_size: pageSize,
       title: searchKey,
       cks
+    };
+  }
+  if (source === "inventory_details") {
+    return {
+      page_index: pageIndex,
+      page_size: pageSize,
+      title: searchKey,
+      cks,
+      Daterk: `${range.start_date} 00:00:00,${range.end_date} 23:59:59`
     };
   }
   if (source === "quote_projects") {
@@ -455,6 +596,36 @@ function mapInventoryForLocal(row, index, plan, kind) {
   };
 }
 
+function mapPurchaseOrderForLocal(row, index, plan) {
+  return {
+    purchase_id: String(firstText(row.ord, row.Ord, row.id, row.ID, row["采购ID"], row["ID"], `${plan.pageIndex}-${index}`)),
+    purchase_no: firstText(row.cgdh, row.Cgdh, row.billno, row.BillNo, row.htid, row["采购单号"], row["单号"]),
+    supplier: firstText(row.gysname, row.GysName, row.glgys, row.cateName, row.CateName, row["供应商"], row["关联供应商"]),
+    title: firstText(row.title, row.Title, row["主题"], row["采购主题"], row["采购名称"]),
+    buyer: firstText(row.cgperson, row.CgPerson, row.jbr, row.Jbr, row["采购员"], row["经办人"], row["添加人员"]),
+    amount: parseNumber(firstText(row.moneyall, row.MoneyAll, row.money1, row.Money1, row["金额"], row["采购金额"])),
+    order_date: firstText(row.tdate, row.TDate, row.date1, row.Date1, row["采购日期"], row["添加时间"]),
+    expected_arrival_date: firstText(row.date2, row.Date2, row.yjdhrq, row["预计到货日"], row["交货日期"]),
+    status: firstText(row.cgzt, row.Cgzt, row.status, row.Status, row.spzt, row["采购状态"], row["审批状态"]),
+    raw: row,
+    synced_at: new Date().toISOString()
+  };
+}
+
+function mapSupplierForLocal(row, index, plan) {
+  return {
+    supplier_id: String(firstText(row.ord, row.Ord, row.id, row.ID, row.gysid, row["供应商ID"], `${plan.pageIndex}-${index}`)),
+    name: firstText(row.title, row.Title, row.name, row.Name, row.gysname, row["供应商名称"], row["名称"]),
+    contact: firstText(row.linkman, row.LinkMan, row.person, row.Person, row["联系人"]),
+    phone: firstText(row.tel, row.Tel, row.mobile, row.Mobile, row.phone, row.Phone, row["电话"], row["手机"]),
+    status: firstText(row.status, row.Status, row.del, row.Del, row["状态"]),
+    level: firstText(row.level, row.Level, row.grade, row.Grade, row["等级"]),
+    address: firstText(row.address, row.Address, row.addr, row.Addr, row["地址"]),
+    raw: row,
+    synced_at: new Date().toISOString()
+  };
+}
+
 function stableInventoryId(row, index, plan, kind) {
   const raw = row.raw || {};
   const explicitId = raw.id || raw.ID || raw.Ord || raw.ord || raw["库存ID"] || raw["明细ID"];
@@ -480,6 +651,15 @@ function parseNumber(value) {
   }
   const number = Number(String(value).replace(/,/g, ""));
   return Number.isFinite(number) ? number : null;
+}
+
+function firstText(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return String(value).trim();
+    }
+  }
+  return "";
 }
 
 export function buildHistorySyncProgress({ sources = HISTORY_SYNC_SOURCES, latestRuns = [] } = {}) {

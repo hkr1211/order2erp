@@ -55,18 +55,15 @@ open 'http://localhost:3000/pmc'
 open 'http://localhost:3000/orders'
 open 'http://localhost:3000/order?ord=合同ord'
 open 'http://localhost:3000/materials'
-open 'http://localhost:3000/procurement'
 open 'http://localhost:3000/finance'
-open 'http://localhost:3000/quotes'
 open 'http://localhost:3000/production'
-open 'http://localhost:3000/dispatch'
-open 'http://localhost:3000/scheduling'
-open 'http://localhost:3000/exceptions'
+open 'http://localhost:3000/workshop-board'
 open 'http://localhost:3000/reports'
 open 'http://localhost:3000/reports/export.csv'
 open 'http://localhost:3000/reports/print'
 open 'http://localhost:3000/goal'
 curl 'http://localhost:3000/views'
+curl 'http://localhost:3000/api/daily_sync/status'
 curl 'http://localhost:3000/agent/tool-schema'
 curl 'http://localhost:3000/api/sales_orders?searchKey=客户名&pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/contract_detail?ord=合同ord'
@@ -75,7 +72,6 @@ curl 'http://localhost:3000/api/contract_shortages?ord=合同ord&scan_size=100'
 curl 'http://localhost:3000/api/order_shortages?pageindex=1&pagesize=10&contract_limit=5&scan_size=100'
 curl 'http://localhost:3000/api/order_delivery_risks?pageindex=1&pagesize=10&contract_limit=5&due_soon_days=7'
 curl 'http://localhost:3000/api/projects?pageindex=1&pagesize=20'
-curl 'http://localhost:3000/api/pending_quotes?pageindex=1&pagesize=20&limit=20'
 curl 'http://localhost:3000/api/inventory?searchKey=物料编码&pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/warehouses?pageindex=1&pagesize=20'
 curl 'http://localhost:3000/api/products?searchKey=钼&pageindex=1&pagesize=20'
@@ -116,7 +112,6 @@ OpenClaw 或 Hermes 可以把本中台注册成一个只读工具：
     "order_shortages",
     "order_delivery_risks",
     "projects",
-    "pending_quotes",
     "inventory",
     "inventory_details",
     "warehouses",
@@ -145,6 +140,16 @@ OpenClaw 或 Hermes 可以把本中台注册成一个只读工具：
 curl 'http://localhost:3000/agent/tool-schema'
 ```
 
+## 每日增量同步
+
+服务启动后默认会安排一个内置定时任务：每天北京时间 `01:00` 同步前一天的数据。
+
+- 历史/增量数据：销售订单、派工计划、工序汇报、应收应付、库存余额、库存明细、采购订单、供应商档案，按昨天日期或接口支持范围执行安全窗口同步。
+- 当前风险快照：物料/库存告警，每天小批量刷新一次。
+- 安全保护：尊重同步暂停开关，历史数据每个源最多 3 页、页间至少 5 秒，仍走 ERP 请求队列和熔断保护。
+- 查看状态：`curl 'http://localhost:3000/api/daily_sync/status'`
+- 如需停用：启动前设置 `DAILY_SYNC_ENABLED=0`。
+
 ## 当前业务视图
 
 - `sales_orders`：销售合同/订单查询，基于 `/webapi/v3/ov1/salesmanage/contract/billlist`
@@ -154,7 +159,6 @@ curl 'http://localhost:3000/agent/tool-schema'
 - `order_shortages`：订单缺料扫描，自动取最近销售订单并逐单分析缺料
 - `order_delivery_risks`：订单交期风险，按合同明细交期识别延期和临期交付
 - `projects`：项目/商机查询，基于 `/webapi/v3/ov1/salesmanage/chance/list`
-- `pending_quotes`：待报价项目视图，基于项目阶段和金额状态识别待报价项目
 - `inventory`：库存查询，基于新版 `/webapi/v3/store/inventory/InventorySummary`
 - `inventory_details`：库存明细，基于新版 `/webapi/v3/store/inventory/InventoryDetails`
 - `warehouses`：仓库列表，基于 `/webapi/v3/store/WareHouseStructList`
@@ -169,7 +173,7 @@ curl 'http://localhost:3000/agent/tool-schema'
 - `payables`：付款/应付查询，基于 `/webapi/v3/ov1/financemanage/moneyout/list`
 - `pmc_exceptions`：第一版先聚合未出库合同、未回款合同
 - `inventory_alerts`：库存异常视图，聚合低库存、冻结库存、长库龄库存
-- `pmc_dashboard`：PMC 综合看板，聚合库存风险、工序延期、生产数据源状态、订单缺料扫描、交期风险和待报价项目
+- `pmc_dashboard`：PMC 综合看板，聚合库存风险、工序延期、生产数据源状态、订单缺料扫描和交期风险
 - `pmc_console`：PMC 驾驶舱首页数据，面向老板/PMC/销售的一屏总览
 - `order_center`：订单管理中心数据，聚合销售订单、交期风险和缺料状态
 - `order_detail`：订单穿透详情，按合同 ord 展示基本信息、产品明细、交期风险和缺料分析
@@ -177,20 +181,16 @@ curl 'http://localhost:3000/agent/tool-schema'
 ## PMC 控制台 V1
 
 - 图形化首页：`http://localhost:3000/`，按日常业务、管理输出、系统/API 分组
-- 角色工作台：`http://localhost:3000/roles`，按老板、PMC、销售分组常用入口和处理流程
+- 角色/跟单工作台：系统页下保留，按老板、PMC、销售、跟单员分组常用入口和责任人待办
 - PMC 驾驶舱：`http://localhost:3000/pmc`
 - 数据源状态中心：`http://localhost:3000/system`
 - 订单中心入口：`http://localhost:3000/orders`
 - 订单详情入口：在订单中心点击订单号，或访问 `http://localhost:3000/order?ord=合同ord`
 - 物料控制中心：`http://localhost:3000/materials`
-- 采购跟催中心：`http://localhost:3000/procurement`
 - 应收应付中心：`http://localhost:3000/finance`
-- 待报价中心：`http://localhost:3000/quotes`
 - 生产进度中心：`http://localhost:3000/production`
-- 派工进度追踪：`http://localhost:3000/dispatch`
+- 车间电子看板：`http://localhost:3000/workshop-board`
 - 数据同步：`http://localhost:3000/sync`，手动同步 ERP 核心数据到 SQLite
-- 排产甘特视图：`http://localhost:3000/scheduling`
-- 异常管理中心：`http://localhost:3000/exceptions`
 - 报表中心：`http://localhost:3000/reports`
 - 报表导出：`http://localhost:3000/reports/export.csv`，导出 Excel 可打开的 CSV
 - Excel日报：`http://localhost:3000/reports/export.xls`，导出带格式的 Excel 日报
@@ -200,19 +200,16 @@ curl 'http://localhost:3000/agent/tool-schema'
 - 运行方式：内网免登录
 - 数据库：SQLite，默认保存到 `data/pmc.db`
 - 同步策略：服务启动时自动同步一次，之后手动同步；同步失败保留旧数据
-- 首屏指标：今日订单、本月订单、逾期订单、7 天内交期订单、缺料订单、待报价项目、低库存预警
+- 首屏指标：今日订单、本月订单、逾期订单、7 天内交期订单、缺料订单、低库存预警、生产延期、前后工段断点
 - 订单中心：订单作战清单，含状态灯、客户、负责人、交期风险、缺料状态、阻塞点和下一步动作
 - 数据源状态中心：ERP 登录接口、本地 SQLite 快照、关键业务入口可用性
 - 订单详情：合同基本信息、PO 编号尝试识别、产品明细、交期风险、缺料分析
 - 物料中心：缺料订单、低库存、冻结库存、长库龄库存统一处理清单，含优先级和处理建议
-- 采购跟催中心：入库流水、应付付款、供应商汇总、跟催优先级和处理建议；采购订单和供应商联系人待接口确认
+- 物料采购中心：默认读取本地 SQLite 物料、库存批次、采购订单、供应商档案和应付付款，生成缺料、库存、采购到货和供应商跟催优先级及处理建议
 - 应收应付中心：客户欠款排行、逾期应收、7 天内应付、供应商未付排行、未收未付合计
-- 待报价中心：项目/商机报价跟进池，自动生成优先级、负责人汇总和处理建议
-- 生产中心：ERP 生产进度、领料、BOM、工序计划，自动汇总延期工序和工作中心负荷
-- 派工进度追踪：基于 ERP 工序计划显示派工单ID、工序、计划起止、完成数量、剩余数量和延期派工
-- 排产甘特视图：按订单最近交期生成时间轴、交期压力分布和插单影响评估
-- 异常中心：交期、缺料、待报价、低库存统一待办池，自动生成优先级、责任角色和处理建议
-- 报表中心：订单、交期、缺料、报价、库存管理指标汇总，支持 CSV、Excel 日报和打印版
+- 生产中心：ERP 生产进度、领料、BOM、工序计划、派工追踪和排产压力，自动汇总延期工序和工作中心负荷
+- PMC 风险闭环：原异常中心并入 PMC 红黄牌与待响应风险，自动生成优先级、责任角色和处理建议
+- 报表中心：订单、交期、缺料、库存、生产和财务管理指标汇总，支持 CSV、Excel 日报和打印版
 - 物料齐套口径：第一版按销售订单产品库存计算，不做 BOM 展开
 - 车间报工：继续使用 ERP，本中台暂不开发报工入口
 
@@ -222,7 +219,7 @@ curl 'http://localhost:3000/agent/tool-schema'
 
 - 延期订单：`order_delivery_risks` 已接好第一版合同明细交期扫描
 - 缺料订单：`order_shortages` 已接好第一版订单级扫描；默认取最近未发货/未出库合同并逐单分析缺料
-- 待报价项目：`pending_quotes` 已接好第一版项目/商机扫描；后续可按公司真实报价流程细化阶段规则
+- 生产和库存风险：继续补全派工、工序汇报、库存批次、采购订单和供应商档案，提高 PMC 红黄牌准确度
 
 ## 库存接口验证记录
 
@@ -254,13 +251,12 @@ PMC 数据源继续补充：
 - `apiHelper` 类生产接口已确认需要在请求体传入 `session`，中台已兼容
 - `production_progress`、`material_orders` 可通过中台完成鉴权调用，当前 ERP 返回空模型或空数据
 - `production_boms`、`procedure_plans` 可通过新版接口调用，当前账号下返回 0 条记录
-- `pmc_dashboard` 已接入综合看板：低库存、冻结库存、长库龄库存、延期工序计划、数据源状态、订单缺料扫描、订单交期风险、待报价项目
+- `pmc_dashboard` 已接入综合看板：低库存、冻结库存、长库龄库存、延期工序计划、数据源状态、订单缺料扫描和订单交期风险
 - `contract_detail` 已确认可用 Token 方式访问；`ord=0` 返回空合同模板，拿到真实合同 `ord` 后可读取 `contractlist` 产品明细，用于后续缺料订单规则
 - `contract_shortages` 已完成第一版规则：按合同明细产品编号逐项查询库存汇总，输出需求量、可用量和缺口量
 - `order_shortages` 已完成第一版规则：自动扫描最近销售订单，汇总存在缺料的订单和明细行
 - `order_delivery_risks` 已完成第一版规则：自动扫描最近销售订单，按合同明细交期输出延期和临期交付明细
-- `projects` 已确认可通过旧版移动端 ASP 格式访问；当前账号可见 1 条项目
-- `pending_quotes` 已完成第一版规则：阶段含报价、询价、方案、核价、定价，或金额均为 0 且未关闭/成交的项目会进入待报价列表
+- `projects` 已确认可通过旧版移动端 ASP 格式访问；当前账号可见 1 条项目；报价跟进已从主业务架构中停用，仅保留历史接口能力。
 
 已验证入库流水可查询：
 

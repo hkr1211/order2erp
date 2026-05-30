@@ -3,4 +3,6 @@ node_modules/
 .DS_Store
 data/*.db
 data/*.db-*
+data/*.sqlite
 data/sync-paused
+docs/user-notification-list-*.md

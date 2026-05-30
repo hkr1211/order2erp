@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import { createLocalAuthStore, requireInitialPasswordResetForExistingUsers, seedDefaultAuthUser, seedDefaultLocalUserRoles } from "./localDb/auth.js";
+import { createLocalLogStore } from "./localDb/logs.js";
+import { createLocalBusinessTableStore } from "./localDb/businessTables.js";
+import { initializeLocalSchema } from "./localDb/schema.js";
+import { createStandardRisk } from "./models/riskModel.js";
+import { collectDashboardRisks } from "./models/riskSelectors.js";
 
 const DEFAULT_DB_PATH = path.resolve("data/pmc.db");
 
@@ -13,288 +18,75 @@ export function initLocalDb(dbPath = process.env.PMC_DB_PATH || DEFAULT_DB_PATH)
   }
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   db = new DatabaseSync(dbPath);
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS pmc_dashboard_snapshots (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      created_at TEXT NOT NULL,
-      summary_json TEXT NOT NULL,
-      payload_json TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS sync_runs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      source_key TEXT NOT NULL,
-      started_at TEXT NOT NULL,
-      finished_at TEXT,
-      status TEXT NOT NULL,
-      rows_synced INTEGER NOT NULL DEFAULT 0,
-      error_message TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS erp_request_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      requested_at TEXT NOT NULL,
-      method TEXT NOT NULL,
-      path TEXT NOT NULL,
-      status TEXT NOT NULL,
-      duration_ms INTEGER NOT NULL DEFAULT 0,
-      error_message TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS history_sync_runs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      source TEXT NOT NULL,
-      started_at TEXT NOT NULL,
-      finished_at TEXT,
-      status TEXT NOT NULL,
-      rows_synced INTEGER NOT NULL DEFAULT 0,
-      page_index INTEGER NOT NULL DEFAULT 1,
-      page_size INTEGER NOT NULL DEFAULT 20,
-      start_date TEXT,
-      end_date TEXT,
-      error_message TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS pmc_intervention_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      created_at TEXT NOT NULL,
-      risk_level TEXT,
-      risk_type TEXT,
-      related_no TEXT,
-      action_label TEXT NOT NULL,
-      intervention_state TEXT,
-      result_type TEXT,
-      promised_date TEXT,
-      next_owner TEXT,
-      problem TEXT,
-      note TEXT,
-      actor TEXT,
-      payload_json TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS order_procedure_links (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      order_no TEXT NOT NULL,
-      work_assignment_id TEXT NOT NULL,
-      procedure_name TEXT,
-      product_name TEXT,
-      reason TEXT,
-      actor TEXT,
-      created_at TEXT NOT NULL,
-      UNIQUE(order_no, work_assignment_id, procedure_name)
-    );
-
-    CREATE TABLE IF NOT EXISTS erp_sales_orders (
-      erp_id TEXT PRIMARY KEY,
-      order_no TEXT,
-      customer TEXT,
-      owner TEXT,
-      product_name TEXT,
-      product_code TEXT,
-      product_model TEXT,
-      quantity REAL,
-      remaining_qty REAL,
-      delivery_date TEXT,
-      signed_date TEXT,
-      amount REAL,
-      status_text TEXT,
-      raw_json TEXT NOT NULL,
-      synced_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS erp_procedure_plans (
-      erp_id TEXT PRIMARY KEY,
-      work_assignment_id TEXT,
-      order_no TEXT,
-      product_name TEXT,
-      product_code TEXT,
-      product_model TEXT,
-      procedure_name TEXT,
-      work_center_name TEXT,
-      planned_qty REAL,
-      finished_qty REAL,
-      remaining_qty REAL,
-      planned_start_date TEXT,
-      planned_finish_date TEXT,
-      owner TEXT,
-      state TEXT,
-      raw_json TEXT NOT NULL,
-      synced_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS erp_process_reports (
-      report_id TEXT PRIMARY KEY,
-      subject TEXT,
-      product_name TEXT,
-      procedure_name TEXT,
-      batch_no TEXT,
-      serial_no TEXT,
-      report_qty REAL,
-      work_hours REAL,
-      operator TEXT,
-      machine TEXT,
-      report_result TEXT,
-      scrap_reason TEXT,
-      creator TEXT,
-      added_at TEXT,
-      audit_status TEXT,
-      raw_json TEXT NOT NULL,
-      synced_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS erp_material_alerts (
-      alert_id TEXT PRIMARY KEY,
-      alert_type TEXT NOT NULL,
-      order_no TEXT,
-      customer TEXT,
-      product_code TEXT,
-      product_name TEXT,
-      warehouse TEXT,
-      demand_qty REAL,
-      available_qty REAL,
-      stock_qty REAL,
-      shortage_qty REAL,
-      priority TEXT,
-      raw_json TEXT NOT NULL,
-      synced_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS erp_warehouses (
-      warehouse_id TEXT PRIMARY KEY,
-      name TEXT,
-      full_path TEXT,
-      root_path TEXT,
-      status TEXT,
-      raw_json TEXT NOT NULL,
-      synced_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS erp_inventory_summary (
-      inventory_id TEXT PRIMARY KEY,
-      product_code TEXT,
-      product_name TEXT,
-      product_model TEXT,
-      product_category TEXT,
-      unit TEXT,
-      warehouse TEXT,
-      batch_no TEXT,
-      serial_no TEXT,
-      stock_qty REAL,
-      available_qty REAL,
-      frozen_qty REAL,
-      reserved_qty REAL,
-      in_transit_qty REAL,
-      raw_json TEXT NOT NULL,
-      synced_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS erp_inventory_details (
-      inventory_id TEXT PRIMARY KEY,
-      product_code TEXT,
-      product_name TEXT,
-      product_model TEXT,
-      product_category TEXT,
-      unit TEXT,
-      warehouse TEXT,
-      batch_no TEXT,
-      serial_no TEXT,
-      stock_qty REAL,
-      available_qty REAL,
-      frozen_qty REAL,
-      reserved_qty REAL,
-      in_transit_qty REAL,
-      production_date TEXT,
-      expiry_date TEXT,
-      package_text TEXT,
-      pieces REAL,
-      spec TEXT,
-      finished_weight REAL,
-      process TEXT,
-      location TEXT,
-      stock_age_days REAL,
-      supplier TEXT,
-      inbound_order TEXT,
-      initial_inbound_time TEXT,
-      inbound_confirmed_time TEXT,
-      remark TEXT,
-      raw_json TEXT NOT NULL,
-      synced_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS erp_quote_followups (
-      quote_no TEXT PRIMARY KEY,
-      priority TEXT,
-      quote_status TEXT,
-      customer TEXT,
-      title TEXT,
-      owner TEXT,
-      project_stage TEXT,
-      estimated_amount REAL,
-      quoted_amount REAL,
-      created_date TEXT,
-      age_days INTEGER,
-      action TEXT,
-      risk_flags TEXT,
-      raw_json TEXT NOT NULL,
-      synced_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS erp_quote_exclusions (
-      quote_no TEXT PRIMARY KEY,
-      reason TEXT,
-      actor TEXT,
-      excluded_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS erp_finance_records (
-      record_id TEXT PRIMARY KEY,
-      direction TEXT NOT NULL,
-      counterparty TEXT,
-      bill_no TEXT,
-      business_title TEXT,
-      amount REAL,
-      paid_amount REAL,
-      unpaid_amount REAL,
-      bill_date TEXT,
-      due_date TEXT,
-      payment_terms TEXT,
-      age_days INTEGER,
-      due_days INTEGER,
-      risk_status TEXT,
-      status TEXT,
-      owner TEXT,
-      raw_json TEXT NOT NULL,
-      synced_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS local_user_roles (
-      name TEXT PRIMARY KEY,
-      role TEXT NOT NULL,
-      is_followup INTEGER NOT NULL DEFAULT 1,
-      note TEXT,
-      password_hash TEXT,
-      password_reset_required INTEGER NOT NULL DEFAULT 0,
-      password_reset_at TEXT,
-      updated_at TEXT NOT NULL
-    );
-  `);
-  ensureColumn(db, "pmc_intervention_logs", "intervention_state", "TEXT");
-  ensureColumn(db, "pmc_intervention_logs", "result_type", "TEXT");
-  ensureColumn(db, "pmc_intervention_logs", "promised_date", "TEXT");
-  ensureColumn(db, "pmc_intervention_logs", "next_owner", "TEXT");
-  ensureColumn(db, "local_user_roles", "password_hash", "TEXT");
-  ensureColumn(db, "local_user_roles", "password_reset_required", "INTEGER NOT NULL DEFAULT 0");
-  ensureColumn(db, "local_user_roles", "password_reset_at", "TEXT");
+  initializeLocalSchema(db);
+  seedDefaultAuthUser(db);
+  requireInitialPasswordResetForExistingUsers(db);
   seedDefaultLocalUserRoles(db);
   return db;
 }
 
-function ensureColumn(database, tableName, columnName, columnType) {
-  const columns = database.prepare(`PRAGMA table_info(${tableName})`).all();
-  if (!columns.some((column) => column.name === columnName)) {
-    database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnType}`);
-  }
-}
+const localAuthStore = createLocalAuthStore({ getDb: initLocalDb });
+const localLogStore = createLocalLogStore({ getDb: initLocalDb });
+const localBusinessTableStore = createLocalBusinessTableStore({ getDb: initLocalDb });
+
+export const saveLocalUserRole = localAuthStore.saveLocalUserRole;
+export const listLocalUserRoles = localAuthStore.listLocalUserRoles;
+export const resetLocalUserPassword = localAuthStore.resetLocalUserPassword;
+export const saveLocalAuthUser = localAuthStore.saveLocalAuthUser;
+export const listLocalAuthUsers = localAuthStore.listLocalAuthUsers;
+export const upsertOrgUsers = localAuthStore.upsertOrgUsers;
+export const replaceOrgUsers = localAuthStore.replaceOrgUsers;
+export const listOrgUsers = localAuthStore.listOrgUsers;
+export const verifyLocalAuthUser = localAuthStore.verifyLocalAuthUser;
+export const validateLocalAuthPassword = localAuthStore.validateLocalAuthPassword;
+export const changeLocalAuthPassword = localAuthStore.changeLocalAuthPassword;
+export const createLocalAuthSession = localAuthStore.createLocalAuthSession;
+export const getLocalAuthSession = localAuthStore.getLocalAuthSession;
+export const deleteLocalAuthSession = localAuthStore.deleteLocalAuthSession;
+export const deleteLocalUserRole = localAuthStore.deleteLocalUserRole;
+
+export const startSyncRun = localLogStore.startSyncRun;
+export const finishSyncRun = localLogStore.finishSyncRun;
+export const latestSyncRuns = localLogStore.latestSyncRuns;
+export const logErpRequest = localLogStore.logErpRequest;
+export const latestErpRequestLogs = localLogStore.latestErpRequestLogs;
+export const saveAiChatLog = localLogStore.saveAiChatLog;
+export const listAiChatLogs = localLogStore.listAiChatLogs;
+export const startHistorySyncRun = localLogStore.startHistorySyncRun;
+export const finishHistorySyncRun = localLogStore.finishHistorySyncRun;
+export const latestHistorySyncRuns = localLogStore.latestHistorySyncRuns;
+
+export const excludeQuoteFollowup = localBusinessTableStore.excludeQuoteFollowup;
+export const listQuoteExclusions = localBusinessTableStore.listQuoteExclusions;
+export const replaceSalesOrders = localBusinessTableStore.replaceSalesOrders;
+export const upsertSalesOrders = localBusinessTableStore.upsertSalesOrders;
+export const replaceProcedurePlans = localBusinessTableStore.replaceProcedurePlans;
+export const upsertProcedurePlans = localBusinessTableStore.upsertProcedurePlans;
+export const upsertProcessReports = localBusinessTableStore.upsertProcessReports;
+export const existingProcessReportIds = localBusinessTableStore.existingProcessReportIds;
+export const replaceMaterialAlerts = localBusinessTableStore.replaceMaterialAlerts;
+export const upsertWarehouses = localBusinessTableStore.upsertWarehouses;
+export const upsertInventorySummary = localBusinessTableStore.upsertInventorySummary;
+export const upsertInventoryDetails = localBusinessTableStore.upsertInventoryDetails;
+export const existingInventorySummaryIds = localBusinessTableStore.existingInventorySummaryIds;
+export const existingInventoryDetailIds = localBusinessTableStore.existingInventoryDetailIds;
+export const upsertPurchaseOrders = localBusinessTableStore.upsertPurchaseOrders;
+export const upsertSuppliers = localBusinessTableStore.upsertSuppliers;
+export const replaceQuoteFollowups = localBusinessTableStore.replaceQuoteFollowups;
+export const upsertQuoteFollowups = localBusinessTableStore.upsertQuoteFollowups;
+export const replaceFinanceRecords = localBusinessTableStore.replaceFinanceRecords;
+export const upsertFinanceRecords = localBusinessTableStore.upsertFinanceRecords;
+export const listSalesOrders = localBusinessTableStore.listSalesOrders;
+export const listProcedurePlans = localBusinessTableStore.listProcedurePlans;
+export const listProcessReports = localBusinessTableStore.listProcessReports;
+export const listMaterialAlerts = localBusinessTableStore.listMaterialAlerts;
+export const listQuoteFollowups = localBusinessTableStore.listQuoteFollowups;
+export const listFinanceRecords = localBusinessTableStore.listFinanceRecords;
+export const listPurchaseOrders = localBusinessTableStore.listPurchaseOrders;
+export const listSuppliers = localBusinessTableStore.listSuppliers;
+export const listInventorySummary = localBusinessTableStore.listInventorySummary;
+export const listInventoryDetails = localBusinessTableStore.listInventoryDetails;
+export const tableStats = localBusinessTableStore.tableStats;
 
 export function savePmcSnapshot(payload) {
   const database = initLocalDb();
@@ -305,6 +97,7 @@ export function savePmcSnapshot(payload) {
       "INSERT INTO pmc_dashboard_snapshots (created_at, summary_json, payload_json) VALUES (?, ?, ?)"
     )
     .run(createdAt, JSON.stringify(summary), JSON.stringify(payload));
+  saveStandardRisks(collectDashboardRisks(payload), { generated_at: createdAt });
 }
 
 export function latestPmcSnapshot() {
@@ -319,6 +112,117 @@ export function latestPmcSnapshot() {
     created_at: row.created_at,
     summary: JSON.parse(row.summary_json),
     payload: JSON.parse(row.payload_json)
+  };
+}
+
+export function saveStandardRisks(risks = [], { generated_at = new Date().toISOString(), replace = true } = {}) {
+  const database = initLocalDb();
+  const rows = risks.map((risk) => createStandardRisk(risk));
+  const updatedAt = new Date().toISOString();
+  database.exec("BEGIN");
+  try {
+    if (replace) {
+      database.prepare("DELETE FROM standard_risks").run();
+    }
+    const statement = database.prepare(
+      `INSERT OR REPLACE INTO standard_risks
+       (risk_id, generated_at, risk_level, risk_type, related_object, related_no, source_table, source_key, source_rule, match_method,
+        responsible_owner, owner_role, customer, counterparty, problem, suggested_action, planning_suggestion, prediction_level,
+        prediction_reason, risk_score, due_date, status, raw_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    for (const row of rows) {
+      statement.run(
+        row.risk_id,
+        generated_at,
+        row.risk_level || "",
+        row.risk_type || "",
+        row.related_object || "",
+        row.related_no || "",
+        row.source_table || "",
+        row.source_key || "",
+        row.source_rule || "",
+        row.match_method || "",
+        row.responsible_owner || "",
+        row.owner_role || "",
+        row.customer || "",
+        row.counterparty || "",
+        row.problem || "",
+        row.suggested_action || row.primary_action || "",
+        row.planning_suggestion || "",
+        row.prediction_level || "",
+        row.prediction_reason || "",
+        Number.isFinite(Number(row.risk_score)) ? Number(row.risk_score) : null,
+        row.due_date || "",
+        row.status || "",
+        JSON.stringify(row),
+        updatedAt
+      );
+    }
+    database
+      .prepare("INSERT OR REPLACE INTO local_meta (key, value, updated_at) VALUES (?, ?, ?)")
+      .run("standard_risks_generated_at", generated_at, updatedAt);
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+  return { generated_at, rows_saved: rows.length };
+}
+
+export function latestStandardRisks({ limit = 5000, related_no = "", related_object = "", risk_level = "", risk_type = "", owner = "", open_only = false } = {}) {
+  const database = initLocalDb();
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 5000, 10000));
+  const filters = [];
+  const values = [];
+  if (related_no) {
+    filters.push("related_no LIKE ?");
+    values.push(`%${String(related_no).trim()}%`);
+  }
+  if (related_object) {
+    filters.push("related_object = ?");
+    values.push(String(related_object).trim());
+  }
+  if (risk_level) {
+    filters.push("risk_level = ?");
+    values.push(String(risk_level).trim());
+  }
+  if (risk_type) {
+    filters.push("risk_type = ?");
+    values.push(String(risk_type).trim());
+  }
+  if (owner) {
+    filters.push("(responsible_owner LIKE ? OR owner_role LIKE ?)");
+    const value = `%${String(owner).trim()}%`;
+    values.push(value, value);
+  }
+  const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+  const rows = database
+    .prepare(
+      `SELECT risk_id, generated_at, risk_level, risk_type, related_object, related_no, source_table, source_key, source_rule, match_method,
+              responsible_owner, owner_role, customer, counterparty, problem, suggested_action, planning_suggestion, prediction_level,
+              prediction_reason, risk_score, due_date, status, raw_json, updated_at
+       FROM standard_risks
+       ${whereClause}
+       ORDER BY CASE WHEN risk_level LIKE '%红%' THEN 1 WHEN risk_level LIKE '%黄%' THEN 2 ELSE 3 END,
+                COALESCE(risk_score, 0) DESC,
+                related_no
+       LIMIT ?`
+    )
+    .all(...values, safeLimit)
+    .map(rowFromStandardRisk);
+  const enrichedRows = enrichStandardRisksWithInterventions(rows);
+  return open_only ? enrichedRows.filter((row) => row.is_open) : enrichedRows;
+}
+
+export function standardRiskSummary() {
+  const rows = latestStandardRisks({ limit: 10000 });
+  return {
+    generated_at: rows[0]?.generated_at || initLocalDb().prepare("SELECT value FROM local_meta WHERE key = ?").get("standard_risks_generated_at")?.value || "",
+    total_risks: rows.length,
+    open_risks: rows.filter((row) => row.is_open).length,
+    red_risks: rows.filter((row) => String(row.risk_level || "").includes("红")).length,
+    yellow_risks: rows.filter((row) => String(row.risk_level || "").includes("黄")).length
   };
 }
 
@@ -474,88 +378,13 @@ export function listOrderProcedureLinks({ limit = 200 } = {}) {
     .all(safeLimit);
 }
 
-export function saveLocalUserRole(entry = {}) {
-  const database = initLocalDb();
-  const name = String(entry.name || "").trim();
-  if (!name) {
-    throw new Error("name is required");
+function parseJsonObject(value) {
+  try {
+    const parsed = JSON.parse(value || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
   }
-  const payload = {
-    name,
-    role: String(entry.role || "未分类").trim() || "未分类",
-    is_followup: entry.is_followup === false || Number(entry.is_followup) === 0 ? 0 : 1,
-    note: String(entry.note || "").trim(),
-    updated_at: entry.updated_at || new Date().toISOString()
-  };
-  database
-    .prepare(
-      `INSERT INTO local_user_roles (name, role, is_followup, note, updated_at)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(name) DO UPDATE SET
-         role = excluded.role,
-         is_followup = excluded.is_followup,
-         note = excluded.note,
-         updated_at = excluded.updated_at`
-    )
-    .run(payload.name, payload.role, payload.is_followup, payload.note, payload.updated_at);
-  return payload;
-}
-
-export function listLocalUserRoles({ limit = 200 } = {}) {
-  const safeLimit = Math.max(1, Math.min(Number(limit) || 200, 1000));
-  return initLocalDb()
-    .prepare("SELECT name, role, is_followup, note, password_hash, password_reset_required, password_reset_at, updated_at FROM local_user_roles ORDER BY is_followup ASC, role, name LIMIT ?")
-    .all(safeLimit);
-}
-
-export function resetLocalUserPassword(entry = {}) {
-  const database = initLocalDb();
-  const name = String(entry.name || "").trim();
-  if (!name) {
-    throw new Error("name is required");
-  }
-  const temporaryPassword = String(entry.temporary_password || generateTemporaryPassword()).trim();
-  if (!temporaryPassword) {
-    throw new Error("temporary_password is required");
-  }
-  const resetAt = entry.reset_at || new Date().toISOString();
-  const existing = database.prepare("SELECT name FROM local_user_roles WHERE name = ?").get(name);
-  if (!existing) {
-    saveLocalUserRole({ name, role: "未分类", is_followup: 1, note: "通过重置密码创建" });
-  }
-  const passwordHash = hashLocalPassword(temporaryPassword);
-  database
-    .prepare(
-      `UPDATE local_user_roles
-       SET password_hash = ?, password_reset_required = 1, password_reset_at = ?, updated_at = ?
-       WHERE name = ?`
-    )
-    .run(passwordHash, resetAt, resetAt, name);
-  return {
-    name,
-    temporary_password: temporaryPassword,
-    password_reset_at: resetAt,
-    password_reset_required: 1
-  };
-}
-
-export function deleteLocalUserRole(name) {
-  const userName = String(name || "").trim();
-  if (!userName) {
-    throw new Error("name is required");
-  }
-  const result = initLocalDb().prepare("DELETE FROM local_user_roles WHERE name = ?").run(userName);
-  return { name: userName, deleted: result.changes > 0 };
-}
-
-function generateTemporaryPassword() {
-  return `YJ-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
-}
-
-function hashLocalPassword(password) {
-  const salt = crypto.randomBytes(16).toString("hex");
-  const digest = crypto.createHash("sha256").update(`${salt}:${password}`).digest("hex");
-  return `sha256:${salt}:${digest}`;
 }
 
 export function pmcInterventionSummary({ today = new Date(), limit = 8 } = {}) {
@@ -621,6 +450,62 @@ function withClosureQuality(row = {}) {
   };
 }
 
+function rowFromStandardRisk(row = {}) {
+  const raw = parseJsonObject(row.raw_json);
+  return {
+    ...raw,
+    risk_id: row.risk_id,
+    generated_at: row.generated_at,
+    risk_level: row.risk_level,
+    risk_type: row.risk_type,
+    related_object: row.related_object,
+    related_no: row.related_no,
+    source_table: row.source_table,
+    source_key: row.source_key,
+    source_rule: row.source_rule,
+    match_method: row.match_method,
+    responsible_owner: row.responsible_owner,
+    owner_role: row.owner_role,
+    customer: row.customer,
+    counterparty: row.counterparty,
+    problem: row.problem,
+    suggested_action: row.suggested_action,
+    planning_suggestion: row.planning_suggestion,
+    prediction_level: row.prediction_level,
+    prediction_reason: row.prediction_reason,
+    risk_score: row.risk_score,
+    due_date: row.due_date,
+    status: row.status,
+    raw_json: row.raw_json,
+    updated_at: row.updated_at
+  };
+}
+
+function enrichStandardRisksWithInterventions(rows = []) {
+  const latestByNo = latestPmcInterventionsByRelatedNos(rows.map((row) => row.related_no));
+  return rows.map((row) => {
+    const latest = latestByNo.get(row.related_no);
+    const state = latest?.intervention_state || "待响应";
+    return {
+      ...row,
+      intervention_state: state,
+      risk_status: state,
+      latest_intervention: latest?.action_label || "",
+      latest_action_label: latest?.action_label || "",
+      latest_actor: latest?.actor || "",
+      latest_at: latest?.created_at || "",
+      result_type: latest?.result_type || "",
+      promised_date: latest?.promised_date || "",
+      next_owner: latest?.next_owner || "",
+      is_open: isFinalInterventionState(state) ? 0 : 1
+    };
+  });
+}
+
+function isFinalInterventionState(value = "") {
+  return String(value || "") === "已关闭";
+}
+
 function interventionClosureQuality(row = {}) {
   const state = row.intervention_state || "";
   const gaps = [];
@@ -628,45 +513,36 @@ function interventionClosureQuality(row = {}) {
   if (!row.promised_date) gaps.push("承诺日期");
   if (!row.next_owner) gaps.push("下一责任人");
   if (!row.note) gaps.push("处理备注");
+  if (state === "已关闭" && gaps.length) {
+    return { closure_quality: "闭环不完整", closure_gap: gaps.join("、") };
+  }
   if (state === "已关闭") {
-    return gaps.length
-      ? { closure_quality: "闭环不完整", closure_gap: gaps.join("、") }
-      : { closure_quality: "闭环完整", closure_gap: "" };
+    return { closure_quality: "闭环完整", closure_gap: "" };
   }
-  if (state === "已响应") {
-    return gaps.length
-      ? { closure_quality: "已响应待补充", closure_gap: gaps.join("、") }
-      : { closure_quality: "已响应待闭环", closure_gap: "" };
-  }
-  return gaps.length
-    ? { closure_quality: "处理中待明确", closure_gap: gaps.join("、") }
-    : { closure_quality: "处理中已明确", closure_gap: "" };
+  return { closure_quality: "处理中", closure_gap: gaps.join("、") };
 }
 
 function interventionQualitySummary(rows = []) {
-  const counts = new Map();
+  const grouped = new Map();
   for (const row of rows) {
     const key = row.closure_quality || "未分类";
-    counts.set(key, (counts.get(key) || 0) + 1);
+    const current = grouped.get(key) || { closure_quality: key, actions: 0 };
+    current.actions += 1;
+    grouped.set(key, current);
   }
-  return [...counts.entries()]
-    .map(([closure_quality, actions]) => ({ closure_quality, actions }))
-    .sort((a, b) => b.actions - a.actions || a.closure_quality.localeCompare(b.closure_quality, "zh-CN"));
+  return [...grouped.values()].sort((a, b) => b.actions - a.actions || a.closure_quality.localeCompare(b.closure_quality, "zh-CN"));
 }
 
 function interventionImprovementSuggestions(byResultType = []) {
   return byResultType
-    .filter((row) => Number(row.actions || 0) > 0)
-    .slice(0, 6)
-    .map((row) => {
-      const resultType = row.result_type || "未分类";
-      return {
-        result_type: resultType,
-        actions: row.actions,
-        review_focus: improvementReviewFocus(resultType),
-        recommendation: improvementRecommendation(resultType)
-      };
-    });
+    .filter((row) => row.actions > 0)
+    .slice(0, 8)
+    .map((row) => ({
+      result_type: row.result_type,
+      actions: row.actions,
+      review_focus: improvementReviewFocus(row.result_type),
+      recommendation: improvementRecommendation(row.result_type)
+    }));
 }
 
 function improvementReviewFocus(resultType = "") {
@@ -689,412 +565,6 @@ function improvementRecommendation(resultType = "") {
   if (resultType === "调整排程") return "调整排程频繁，建议复盘插单规则、冻结周期和订单优先级机制。";
   if (resultType === "客户沟通") return "客户沟通频繁，建议提前暴露交期风险，统一延期说明和新交期承诺口径。";
   return "建议复盘处理备注完整性，统一原因分类和责任人填写。";
-}
-
-export function excludeQuoteFollowup({ quote_no, reason = "", actor = "内网用户", excluded_at = "" } = {}) {
-  const quoteNo = String(quote_no || "").trim();
-  if (!quoteNo) {
-    throw new Error("quote_no is required");
-  }
-  const database = initLocalDb();
-  const excludedAt = excluded_at || new Date().toISOString();
-  runInTransaction(database, () => {
-    database
-      .prepare("INSERT OR REPLACE INTO erp_quote_exclusions (quote_no, reason, actor, excluded_at) VALUES (?, ?, ?, ?)")
-      .run(quoteNo, reason, actor, excludedAt);
-    database.prepare("DELETE FROM erp_quote_followups WHERE quote_no = ?").run(quoteNo);
-  });
-  return { quote_no: quoteNo, reason, actor, excluded_at: excludedAt };
-}
-
-export function listQuoteExclusions({ limit = 100 } = {}) {
-  const safeLimit = Math.max(1, Math.min(Number(limit) || 100, 1000));
-  return initLocalDb()
-    .prepare("SELECT quote_no, reason, actor, excluded_at FROM erp_quote_exclusions ORDER BY excluded_at DESC LIMIT ?")
-    .all(safeLimit);
-}
-
-export function startSyncRun(sourceKey) {
-  const database = initLocalDb();
-  const startedAt = new Date().toISOString();
-  const result = database
-    .prepare("INSERT INTO sync_runs (source_key, started_at, status) VALUES (?, ?, ?)")
-    .run(sourceKey, startedAt, "running");
-  return { id: result.lastInsertRowid, source_key: sourceKey, started_at: startedAt };
-}
-
-export function finishSyncRun(id, { status, rows_synced = 0, error_message = null }) {
-  const database = initLocalDb();
-  const finishedAt = new Date().toISOString();
-  database
-    .prepare("UPDATE sync_runs SET finished_at = ?, status = ?, rows_synced = ?, error_message = ? WHERE id = ?")
-    .run(finishedAt, status, rows_synced, error_message, id);
-  return { id, finished_at: finishedAt, status, rows_synced, error_message };
-}
-
-export function latestSyncRuns() {
-  const database = initLocalDb();
-  return database
-    .prepare(
-      `SELECT source_key, started_at, finished_at, status, rows_synced, error_message
-       FROM sync_runs
-       WHERE id IN (SELECT MAX(id) FROM sync_runs GROUP BY source_key)
-       ORDER BY source_key`
-    )
-    .all();
-}
-
-export function logErpRequest(entry) {
-  const database = initLocalDb();
-  database
-    .prepare(
-      "INSERT INTO erp_request_logs (requested_at, method, path, status, duration_ms, error_message) VALUES (?, ?, ?, ?, ?, ?)"
-    )
-    .run(
-      entry.requested_at || new Date().toISOString(),
-      entry.method || "POST",
-      entry.path || "",
-      entry.status || "unknown",
-      Number(entry.duration_ms) || 0,
-      entry.error_message || ""
-    );
-}
-
-export function latestErpRequestLogs(options = 20) {
-  const database = initLocalDb();
-  const normalized = typeof options === "object" && options !== null ? options : { limit: options };
-  const limit = Math.max(1, Math.min(Number(normalized.limit) || 20, 500));
-  const filters = [];
-  const values = [];
-  if (normalized.status) {
-    filters.push("status = ?");
-    values.push(String(normalized.status));
-  }
-  if (normalized.path) {
-    filters.push("path LIKE ?");
-    values.push(`%${String(normalized.path)}%`);
-  }
-  const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
-  return database
-    .prepare(
-      `SELECT requested_at, method, path, status, duration_ms, error_message
-       FROM erp_request_logs
-       ${whereClause}
-       ORDER BY id DESC
-       LIMIT ?`
-    )
-    .all(...values, limit);
-}
-
-export function startHistorySyncRun({ source, page_index = 1, page_size = 20, start_date = "", end_date = "" }) {
-  const database = initLocalDb();
-  const startedAt = new Date().toISOString();
-  const result = database
-    .prepare(
-      "INSERT INTO history_sync_runs (source, started_at, status, page_index, page_size, start_date, end_date) VALUES (?, ?, ?, ?, ?, ?, ?)"
-    )
-    .run(source, startedAt, "running", page_index, page_size, start_date, end_date);
-  return { id: result.lastInsertRowid, source, started_at: startedAt };
-}
-
-export function finishHistorySyncRun(id, { status, rows_synced = 0, error_message = "" }) {
-  const database = initLocalDb();
-  const finishedAt = new Date().toISOString();
-  database
-    .prepare("UPDATE history_sync_runs SET finished_at = ?, status = ?, rows_synced = ?, error_message = ? WHERE id = ?")
-    .run(finishedAt, status, rows_synced, error_message, id);
-  return { id, finished_at: finishedAt, status, rows_synced, error_message };
-}
-
-export function latestHistorySyncRuns() {
-  const database = initLocalDb();
-  return database
-    .prepare(
-      `SELECT source, started_at, finished_at, status, rows_synced, page_index, page_size, start_date, end_date, error_message
-       FROM history_sync_runs
-       WHERE id IN (SELECT MAX(id) FROM history_sync_runs GROUP BY source)
-       ORDER BY source`
-    )
-    .all();
-}
-
-export function replaceSalesOrders(rows) {
-  const database = initLocalDb();
-  runInTransaction(database, () => {
-    database.prepare("DELETE FROM erp_sales_orders").run();
-    insertSalesOrders(database, rows);
-  });
-}
-
-export function upsertSalesOrders(rows) {
-  const database = initLocalDb();
-  runInTransaction(database, () => {
-    insertSalesOrders(database, rows);
-  });
-}
-
-export function replaceProcedurePlans(rows) {
-  const database = initLocalDb();
-  runInTransaction(database, () => {
-    database.prepare("DELETE FROM erp_procedure_plans").run();
-    insertProcedurePlans(database, rows);
-  });
-}
-
-export function upsertProcedurePlans(rows) {
-  const database = initLocalDb();
-  runInTransaction(database, () => {
-    insertProcedurePlans(database, rows);
-  });
-}
-
-export function upsertProcessReports(rows) {
-  const database = initLocalDb();
-  runInTransaction(database, () => {
-    insertProcessReports(database, rows);
-  });
-}
-
-export function replaceMaterialAlerts(rows) {
-  const database = initLocalDb();
-  runInTransaction(database, () => {
-    database.prepare("DELETE FROM erp_material_alerts").run();
-    const stmt = database.prepare(`
-      INSERT INTO erp_material_alerts
-      (alert_id, alert_type, order_no, customer, product_code, product_name, warehouse, demand_qty, available_qty, stock_qty, shortage_qty, priority, raw_json, synced_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    for (const row of rows) {
-      stmt.run(row.alert_id, row.alert_type, row.order_no, row.customer, row.product_code, row.product_name, row.warehouse, row.demand_qty, row.available_qty, row.stock_qty, row.shortage_qty, row.priority, JSON.stringify(row.raw || row), row.synced_at);
-    }
-  });
-}
-
-export function upsertWarehouses(rows) {
-  const database = initLocalDb();
-  runInTransaction(database, () => {
-    insertWarehouses(database, rows);
-  });
-}
-
-export function upsertInventorySummary(rows) {
-  const database = initLocalDb();
-  runInTransaction(database, () => {
-    insertInventorySummary(database, rows);
-  });
-}
-
-export function upsertInventoryDetails(rows) {
-  const database = initLocalDb();
-  runInTransaction(database, () => {
-    insertInventoryDetails(database, rows);
-  });
-}
-
-export function replaceQuoteFollowups(rows) {
-  const database = initLocalDb();
-  runInTransaction(database, () => {
-    database.prepare("DELETE FROM erp_quote_followups").run();
-    insertQuoteFollowups(database, rows);
-  });
-}
-
-export function upsertQuoteFollowups(rows) {
-  const database = initLocalDb();
-  runInTransaction(database, () => {
-    insertQuoteFollowups(database, rows);
-  });
-}
-
-export function replaceFinanceRecords(rows) {
-  const database = initLocalDb();
-  runInTransaction(database, () => {
-    database.prepare("DELETE FROM erp_finance_records").run();
-    insertFinanceRecords(database, rows);
-  });
-}
-
-export function upsertFinanceRecords(rows) {
-  const database = initLocalDb();
-  runInTransaction(database, () => {
-    insertFinanceRecords(database, rows);
-  });
-}
-
-export function listSalesOrders({ limit = 100, offset = 0 } = {}) {
-  return initLocalDb().prepare("SELECT * FROM erp_sales_orders ORDER BY delivery_date IS NULL, delivery_date, signed_date DESC LIMIT ? OFFSET ?").all(limit, offset);
-}
-
-export function listProcedurePlans({ limit = 100 } = {}) {
-  return initLocalDb().prepare("SELECT * FROM erp_procedure_plans ORDER BY planned_finish_date IS NULL, planned_finish_date LIMIT ?").all(limit);
-}
-
-export function listProcessReports({ limit = 100 } = {}) {
-  return initLocalDb().prepare("SELECT * FROM erp_process_reports ORDER BY added_at DESC LIMIT ?").all(limit);
-}
-
-export function listMaterialAlerts({ limit = 100 } = {}) {
-  return initLocalDb().prepare("SELECT * FROM erp_material_alerts ORDER BY CASE priority WHEN '高' THEN 1 WHEN '中' THEN 2 ELSE 3 END, alert_type LIMIT ?").all(limit);
-}
-
-export function listQuoteFollowups({ limit = 100 } = {}) {
-  return initLocalDb().prepare("SELECT * FROM erp_quote_followups ORDER BY CASE priority WHEN '高' THEN 1 WHEN '中' THEN 2 ELSE 3 END, age_days DESC LIMIT ?").all(limit);
-}
-
-export function listFinanceRecords({ limit = 100 } = {}) {
-  return initLocalDb().prepare("SELECT * FROM erp_finance_records ORDER BY CASE risk_status WHEN '已逾期' THEN 1 WHEN '7天内到期' THEN 2 WHEN '未清' THEN 3 ELSE 4 END, due_days LIMIT ?").all(limit);
-}
-
-export function tableStats(tableName, timestampColumn = null) {
-  const database = initLocalDb();
-  assertSafeIdentifier(tableName);
-  const rowCount = database.prepare(`SELECT COUNT(*) AS row_count FROM ${tableName}`).get()?.row_count || 0;
-  let latestAt = "";
-  if (timestampColumn) {
-    assertSafeIdentifier(timestampColumn);
-    latestAt = database.prepare(`SELECT MAX(${timestampColumn}) AS latest_at FROM ${tableName}`).get()?.latest_at || "";
-  }
-  return {
-    table_name: tableName,
-    row_count: rowCount,
-    latest_at: latestAt
-  };
-}
-
-function assertSafeIdentifier(value) {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(value))) {
-    throw new Error(`Unsafe SQLite identifier: ${value}`);
-  }
-}
-
-function seedDefaultLocalUserRoles(database) {
-  const existing = database.prepare("SELECT name FROM local_user_roles WHERE name = ?").get("葛梓");
-  if (existing) {
-    return;
-  }
-  database
-    .prepare("INSERT INTO local_user_roles (name, role, is_followup, note, updated_at) VALUES (?, ?, ?, ?, ?)")
-    .run("葛梓", "财务经理", 0, "财务应收负责人，不进入跟单员工作台", new Date().toISOString());
-}
-
-function insertSalesOrders(database, rows) {
-  const stmt = database.prepare(`
-    INSERT OR REPLACE INTO erp_sales_orders
-    (erp_id, order_no, customer, owner, product_name, product_code, product_model, quantity, remaining_qty, delivery_date, signed_date, amount, status_text, raw_json, synced_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  for (const row of rows) {
-    stmt.run(row.erp_id, row.order_no, row.customer, row.owner, row.product_name, row.product_code, row.product_model, row.quantity, row.remaining_qty, row.delivery_date, row.signed_date, row.amount, row.status_text, JSON.stringify(row.raw || row), row.synced_at);
-  }
-}
-
-function insertProcedurePlans(database, rows) {
-  const stmt = database.prepare(`
-    INSERT OR REPLACE INTO erp_procedure_plans
-    (erp_id, work_assignment_id, order_no, product_name, product_code, product_model, procedure_name, work_center_name, planned_qty, finished_qty, remaining_qty, planned_start_date, planned_finish_date, owner, state, raw_json, synced_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  for (const row of rows) {
-    stmt.run(row.erp_id, row.work_assignment_id, row.order_no, row.product_name, row.product_code, row.product_model, row.procedure_name, row.work_center_name, row.planned_qty, row.finished_qty, row.remaining_qty, row.planned_start_date, row.planned_finish_date, row.owner, row.state, JSON.stringify(row.raw || row), row.synced_at);
-  }
-}
-
-function insertProcessReports(database, rows) {
-  const stmt = database.prepare(`
-    INSERT OR REPLACE INTO erp_process_reports
-    (report_id, subject, product_name, procedure_name, batch_no, serial_no, report_qty, work_hours, operator, machine, report_result, scrap_reason, creator, added_at, audit_status, raw_json, synced_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  for (const row of rows) {
-    stmt.run(row.report_id, row.subject, row.product_name, row.procedure_name, row.batch_no, row.serial_no, row.report_qty, row.work_hours, row.operator, row.machine, row.report_result, row.scrap_reason, row.creator, row.added_at, row.audit_status, JSON.stringify(row.raw || row), row.synced_at);
-  }
-}
-
-function insertWarehouses(database, rows) {
-  const stmt = database.prepare(`
-    INSERT OR REPLACE INTO erp_warehouses
-    (warehouse_id, name, full_path, root_path, status, raw_json, synced_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `);
-  for (const row of rows) {
-    stmt.run(row.warehouse_id, row.name, row.full_path, row.root_path, row.status, JSON.stringify(row.raw || row), row.synced_at);
-  }
-}
-
-function insertInventorySummary(database, rows) {
-  const stmt = database.prepare(`
-    INSERT OR REPLACE INTO erp_inventory_summary
-    (inventory_id, product_code, product_name, product_model, product_category, unit, warehouse, batch_no, serial_no, stock_qty, available_qty, frozen_qty, reserved_qty, in_transit_qty, raw_json, synced_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  for (const row of rows) {
-    stmt.run(row.inventory_id, row.product_code, row.product_name, row.product_model, row.product_category, row.unit, row.warehouse, row.batch_no, row.serial_no, row.stock_qty, row.available_qty, row.frozen_qty, row.reserved_qty, row.in_transit_qty, JSON.stringify(row.raw || row), row.synced_at);
-  }
-}
-
-function insertInventoryDetails(database, rows) {
-  const stmt = database.prepare(`
-    INSERT OR REPLACE INTO erp_inventory_details
-    (inventory_id, product_code, product_name, product_model, product_category, unit, warehouse, batch_no, serial_no, stock_qty, available_qty, frozen_qty, reserved_qty, in_transit_qty, production_date, expiry_date, package_text, pieces, spec, finished_weight, process, location, stock_age_days, supplier, inbound_order, initial_inbound_time, inbound_confirmed_time, remark, raw_json, synced_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  for (const row of rows) {
-    stmt.run(row.inventory_id, row.product_code, row.product_name, row.product_model, row.product_category, row.unit, row.warehouse, row.batch_no, row.serial_no, row.stock_qty, row.available_qty, row.frozen_qty, row.reserved_qty, row.in_transit_qty, row.production_date, row.expiry_date, row.package_text, row.pieces, row.spec, row.finished_weight, row.process, row.location, row.stock_age_days, row.supplier, row.inbound_order, row.initial_inbound_time, row.inbound_confirmed_time, row.remark, JSON.stringify(row.raw || row), row.synced_at);
-  }
-}
-
-function insertQuoteFollowups(database, rows) {
-  const excludedQuoteNos = quoteExclusionSet(database);
-  const stmt = database.prepare(`
-    INSERT OR REPLACE INTO erp_quote_followups
-    (quote_no, priority, quote_status, customer, title, owner, project_stage, estimated_amount, quoted_amount, created_date, age_days, action, risk_flags, raw_json, synced_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  for (const row of rows) {
-    if (excludedQuoteNos.has(String(row.quote_no || "").trim())) {
-      continue;
-    }
-    stmt.run(row.quote_no, row.priority || "", row.quote_status || "", row.customer || "", row.title || "", row.owner || "", row.project_stage || "", row.estimated_amount ?? null, row.quoted_amount ?? null, row.created_date || "", row.age_days ?? null, row.action || "", stringifyScalar(row.risk_flags), JSON.stringify(row.raw || row), row.synced_at || new Date().toISOString());
-  }
-}
-
-function quoteExclusionSet(database) {
-  return new Set(
-    database
-      .prepare("SELECT quote_no FROM erp_quote_exclusions")
-      .all()
-      .map((row) => String(row.quote_no || "").trim())
-      .filter(Boolean)
-  );
-}
-
-function insertFinanceRecords(database, rows) {
-  const stmt = database.prepare(`
-    INSERT OR REPLACE INTO erp_finance_records
-    (record_id, direction, counterparty, bill_no, business_title, amount, paid_amount, unpaid_amount, bill_date, due_date, payment_terms, age_days, due_days, risk_status, status, owner, raw_json, synced_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  for (const row of rows) {
-    stmt.run(row.record_id, row.direction, row.counterparty, row.bill_no, row.business_title, row.amount, row.paid_amount, row.unpaid_amount, row.bill_date, row.due_date, row.payment_terms, row.age_days, row.due_days, row.risk_status, row.status, row.owner, JSON.stringify(row.raw || row), row.synced_at);
-  }
-}
-
-function runInTransaction(database, action) {
-  database.exec("BEGIN");
-  try {
-    action();
-    database.exec("COMMIT");
-  } catch (error) {
-    database.exec("ROLLBACK");
-    throw error;
-  }
-}
-
-function stringifyScalar(value) {
-  if (value === undefined || value === null) {
-    return "";
-  }
-  return typeof value === "object" ? JSON.stringify(value) : String(value);
 }
 
 function startOfLocalDay(date) {
